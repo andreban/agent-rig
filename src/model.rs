@@ -1,4 +1,7 @@
+use std::pin::Pin;
+
 use async_trait::async_trait;
+use futures_util::stream::Stream;
 
 use crate::error::Error;
 use crate::tool::ToolDefinition;
@@ -145,6 +148,33 @@ pub struct ModelResponse {
     pub text: Option<String>,
     /// Tool calls the model wants the runner to execute. Empty on a text turn.
     pub tool_calls: Vec<ToolCall>,
+    /// Reasoning/thinking text produced by the model before its final answer.
+    ///
+    /// Only populated by provider adapters that support extended thinking
+    /// (currently [`GeminiModel`] when `include_thoughts` is enabled via
+    /// [`ThinkingConfig`]). All other adapters leave this as `None`.
+    ///
+    /// [`GeminiModel`]: crate::models::gemini::GeminiModel
+    /// [`ThinkingConfig`]: google_genai::prelude::ThinkingConfig
+    pub thinking: Option<String>,
+}
+
+/// A chunk yielded by [`LlmModel::generate_stream`] during a single model turn.
+///
+/// Provider adapters emit these values; the runner wraps them into [`AgentEvent`]
+/// and adds tool-call lifecycle events on top.
+///
+/// [`AgentEvent`]: crate::AgentEvent
+#[derive(Debug, Clone)]
+pub enum ModelStreamChunk {
+    /// A reasoning/thinking token from a model that supports extended thinking
+    /// (e.g. Gemini 2.5 with extended thinking enabled).
+    Thinking(String),
+    /// An incremental chunk of the model's text output.
+    TextDelta(String),
+    /// A complete tool call. Tool calls are not streamed mid-call; the full
+    /// call is emitted as a single chunk once the model has finished specifying it.
+    ToolCall(ToolCall),
 }
 
 /// Trait implemented by all LLM provider backends.
@@ -168,7 +198,7 @@ pub struct ModelResponse {
 ///         let echo = request.messages.last().and_then(|m| {
 ///             if let MessageContent::Text(t) = &m.content { Some(t.clone()) } else { None }
 ///         });
-///         Ok(ModelResponse { text: echo, tool_calls: vec![] })
+///         Ok(ModelResponse { text: echo, tool_calls: vec![], thinking: None })
 ///     }
 /// }
 /// ```
@@ -176,6 +206,38 @@ pub struct ModelResponse {
 pub trait LlmModel: Send + Sync {
     /// Generate a response for the given [`ModelRequest`].
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error>;
+
+    /// Stream a response for the given [`ModelRequest`] as a sequence of
+    /// [`ModelStreamChunk`] values.
+    ///
+    /// The default implementation calls [`generate`] and emits the result as
+    /// one or more chunks, so existing adapters work without modification.
+    /// Override this method to provide true token-by-token streaming.
+    ///
+    /// Tool calls are never streamed mid-call; each complete [`ToolCall`] is
+    /// emitted as a single [`ModelStreamChunk::ToolCall`] chunk. [`Thinking`]
+    /// and [`TextDelta`] chunks may be emitted across many events.
+    ///
+    /// [`generate`]: LlmModel::generate
+    /// [`Thinking`]: ModelStreamChunk::Thinking
+    /// [`TextDelta`]: ModelStreamChunk::TextDelta
+    fn generate_stream(
+        &self,
+        request: ModelRequest,
+    ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
+        Box::pin(async_stream::stream! {
+            let response = self.generate(request).await?;
+            if let Some(thinking) = response.thinking {
+                yield Ok(ModelStreamChunk::Thinking(thinking));
+            }
+            for call in response.tool_calls {
+                yield Ok(ModelStreamChunk::ToolCall(call));
+            }
+            if let Some(text) = response.text {
+                yield Ok(ModelStreamChunk::TextDelta(text));
+            }
+        })
+    }
 }
 
 #[cfg(test)]

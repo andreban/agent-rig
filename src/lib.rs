@@ -37,4 +37,4 @@ mod runner;
 
 pub use agent::{Agent, AgentBuilder};
 pub use agent_tool::AgentTool;
-pub use runner::{AgentResult, AgentRunner};
+pub use runner::{AgentEvent, AgentResult, AgentRunner};

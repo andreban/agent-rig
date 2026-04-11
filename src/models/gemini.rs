@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use google_genai::prelude::{
-    Content, FunctionDeclaration, FunctionResponse, GeminiClient, GenerateContentRequest,
-    GenerationConfig, Part, PartData, Role, Tools,
+    Candidate, Content, FunctionDeclaration, FunctionResponse, GeminiClient,
+    GenerateContentRequest, GenerationConfig, Part, PartData, Role, ThinkingConfig, Tools,
 };
 use serde_json::Value;
 
@@ -100,6 +100,31 @@ impl GeminiModelBuilder {
     /// Sets stop sequences that halt generation when produced.
     pub fn stop_sequences(mut self, stop_sequences: Vec<String>) -> Self {
         self.generation_config = self.generation_config.stop_sequences(stop_sequences);
+        self
+    }
+
+    /// Configures the model's thinking (chain-of-thought) behaviour.
+    ///
+    /// Set `include_thoughts: true` to receive thinking tokens in the response.
+    /// Use [`ThinkingLevel`](google_genai::prelude::ThinkingLevel) or a token
+    /// budget to control how much reasoning the model performs.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use rust_agent_kit::models::gemini::GeminiModel;
+    /// use google_genai::prelude::{ThinkingConfig, ThinkingLevel};
+    ///
+    /// let model = GeminiModel::builder("API_KEY", "gemini-2.5-flash-preview-04-17")
+    ///     .thinking_config(ThinkingConfig {
+    ///         include_thoughts: true,
+    ///         thinking_level: Some(ThinkingLevel::High),
+    ///         ..Default::default()
+    ///     })
+    ///     .build();
+    /// ```
+    pub fn thinking_config(mut self, thinking_config: ThinkingConfig) -> Self {
+        self.generation_config = self.generation_config.thinking_config(thinking_config);
         self
     }
 
@@ -323,17 +348,132 @@ impl LlmModel for GeminiModel {
             })
             .unwrap_or_default();
 
+        // Separate thought parts (thought == Some(true)) from regular text parts.
+        // Thinking can appear on any turn, including tool-calling turns.
+        let (thinking, text) = extract_text_and_thinking(candidate);
+
         if !tool_calls.is_empty() {
             return Ok(ModelResponse {
                 text: None,
                 tool_calls,
+                thinking,
             });
         }
 
-        let text = candidate.get_text();
         Ok(ModelResponse {
             text,
             tool_calls: vec![],
+            thinking,
         })
+    }
+}
+
+/// Splits a candidate's parts into thinking text and regular text.
+///
+/// Parts where `thought == Some(true)` are concatenated into the thinking
+/// string; all other `Text` parts form the regular response text.
+fn extract_text_and_thinking(candidate: &Candidate) -> (Option<String>, Option<String>) {
+    let parts = match candidate.content.as_ref().and_then(|c| c.parts.as_ref()) {
+        Some(p) => p,
+        None => return (None, None),
+    };
+
+    let mut thinking_buf = String::new();
+    let mut text_buf = String::new();
+
+    for part in parts {
+        if let PartData::Text(t) = &part.data {
+            if part.thought == Some(true) {
+                thinking_buf.push_str(t);
+            } else {
+                text_buf.push_str(t);
+            }
+        }
+    }
+
+    let thinking = if thinking_buf.is_empty() { None } else { Some(thinking_buf) };
+    let text = if text_buf.is_empty() { None } else { Some(text_buf) };
+    (thinking, text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use google_genai::prelude::{Candidate, Content, Part, PartData, Role};
+
+    fn make_candidate(parts: Vec<Part>) -> Candidate {
+        Candidate {
+            content: Some(Content { role: Some(Role::Model), parts: Some(parts) }),
+            finish_reason: None,
+            citation_metadata: None,
+            safety_ratings: None,
+            index: 0,
+        }
+    }
+
+    fn text_part(text: &str) -> Part {
+        Part {
+            data: PartData::Text(text.to_string()),
+            thought: None,
+            thought_signature: None,
+            part_metadata: None,
+            media_resolution: None,
+        }
+    }
+
+    fn thought_part(text: &str) -> Part {
+        Part {
+            data: PartData::Text(text.to_string()),
+            thought: Some(true),
+            thought_signature: None,
+            part_metadata: None,
+            media_resolution: None,
+        }
+    }
+
+    #[test]
+    fn extract_separates_thought_and_text_parts() {
+        let candidate = make_candidate(vec![
+            thought_part("hmm..."),
+            text_part("The answer is 42."),
+        ]);
+        let (thinking, text) = extract_text_and_thinking(&candidate);
+        assert_eq!(thinking.as_deref(), Some("hmm..."));
+        assert_eq!(text.as_deref(), Some("The answer is 42."));
+    }
+
+    #[test]
+    fn extract_concatenates_multiple_parts() {
+        let candidate = make_candidate(vec![
+            thought_part("step 1 "),
+            thought_part("step 2"),
+            text_part("part a "),
+            text_part("part b"),
+        ]);
+        let (thinking, text) = extract_text_and_thinking(&candidate);
+        assert_eq!(thinking.as_deref(), Some("step 1 step 2"));
+        assert_eq!(text.as_deref(), Some("part a part b"));
+    }
+
+    #[test]
+    fn extract_returns_none_when_no_thinking() {
+        let candidate = make_candidate(vec![text_part("hello")]);
+        let (thinking, text) = extract_text_and_thinking(&candidate);
+        assert!(thinking.is_none());
+        assert_eq!(text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn extract_returns_none_for_empty_content() {
+        let candidate = Candidate {
+            content: None,
+            finish_reason: None,
+            citation_metadata: None,
+            safety_ratings: None,
+            index: 0,
+        };
+        let (thinking, text) = extract_text_and_thinking(&candidate);
+        assert!(thinking.is_none());
+        assert!(text.is_none());
     }
 }
