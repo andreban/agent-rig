@@ -22,13 +22,16 @@ async fn agent_run_returns_non_empty_output() {
         return;
     }
 
+    let model = OllamaModel::new(&url, ollama_model());
     let agent = Agent::builder()
         .name("Greeter")
         .instructions("Reply with exactly one sentence.")
-        .model(Box::new(OllamaModel::new(&url, ollama_model())))
         .build();
 
-    let result = AgentRunner::new().run(&agent, "Say hello.").await.unwrap();
+    let result = AgentRunner::new(Box::new(model))
+        .run(&agent, "Say hello.")
+        .await
+        .unwrap();
     assert!(!result.output.is_empty());
 }
 
@@ -39,13 +42,13 @@ async fn agent_follows_system_instructions() {
         return;
     }
 
+    let model = OllamaModel::new(&url, ollama_model());
     let agent = Agent::builder()
         .name("Pirate")
         .instructions("You are a pirate. Always respond with 'Arrr' somewhere in your reply.")
-        .model(Box::new(OllamaModel::new(&url, ollama_model())))
         .build();
 
-    let result = AgentRunner::new()
+    let result = AgentRunner::new(Box::new(model))
         .run(&agent, "How are you?")
         .await
         .unwrap();
@@ -67,14 +70,14 @@ async fn agent_output_schema_returns_valid_json() {
 
     let schema = schemars::schema_for!(Sentiment);
 
+    let model = OllamaModel::new(&url, ollama_model());
     let agent = Agent::builder()
         .name("Classifier")
         .instructions("Classify the sentiment of the input. Return a label (positive/negative/neutral) and a confidence score between 0 and 1.")
         .output_schema(schema)
-        .model(Box::new(OllamaModel::new(&url, ollama_model())))
         .build();
 
-    let result = AgentRunner::new()
+    let result = AgentRunner::new(Box::new(model))
         .run(&agent, "I love sunny days!")
         .await
         .unwrap();
@@ -99,10 +102,9 @@ async fn agent_run_with_generation_options() {
     let agent = Agent::builder()
         .name("Assistant")
         .instructions("Be concise.")
-        .model(Box::new(model))
         .build();
 
-    let result = AgentRunner::new()
+    let result = AgentRunner::new(Box::new(model))
         .run(&agent, "What is 2 + 2?")
         .await
         .unwrap();

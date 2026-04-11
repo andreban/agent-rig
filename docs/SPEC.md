@@ -5,18 +5,23 @@
 ```
 ┌──────────────┐     runs      ┌──────────────┐
 │  AgentRunner │──────────────▶│    Agent     │
-└──────────────┘               └──────┬───────┘
-                                      │ holds
-                               ┌──────▼───────┐
-                               │  LlmModel    │  (trait object)
-                               └──────┬───────┘
-                         implements   │
-              ┌──────────────┬────────┘
-              ▼              ▼
-       GeminiModel     OllamaModel    (more providers …)
+│              │               └──────────────┘
+│  holds       │               (pure blueprint)
+│              │
+└──────┬───────┘
+       │ holds
+┌──────▼───────┐
+│  LlmModel    │  (trait object)
+└──────┬───────┘
+       │ implements
+┌──────┴──────────────┐
+▼                     ▼
+GeminiModel     OllamaModel    (more providers …)
 ```
 
 The library is a single crate (`rust-agent-kit`). All provider types live in `src/models/`. Agent logic lives in `src/agent.rs` and `src/runner.rs`. The `LlmModel` trait in `src/model.rs` is the extension point.
+
+`Agent` is a pure data blueprint (name, instructions, optional output schema) with no model reference. `AgentRunner` owns the `Box<dyn LlmModel>` and is the execution engine. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
 
 ## Core Types
 
@@ -55,26 +60,28 @@ pub struct ModelResponse {
 pub struct Agent {
     name: String,
     instructions: String,
-    model: Box<dyn LlmModel>,
     output_schema: Option<serde_json::Value>,
 }
 ```
 
-Constructed via `Agent::builder()`. Holds the model, the system instructions used on every run, and an optional JSON Schema for structured output. Does not hold conversation state — the runner owns the request being built.
+Constructed via `Agent::builder()`. A pure data blueprint: holds the system instructions used on every run and an optional JSON Schema for structured output. Carries no model or runtime state, making it trivially serializable.
 
 `output_schema` is set via `AgentBuilder::output_schema(schema)`. The runner copies it into every `ModelRequest`, and each provider adapter applies it using provider-specific mechanisms.
 
 ### `AgentRunner` (`src/runner.rs`)
 
 ```rust
-pub struct AgentRunner;
+pub struct AgentRunner {
+    model: Box<dyn LlmModel>,
+}
 
 impl AgentRunner {
+    pub fn new(model: Box<dyn LlmModel>) -> Self;
     pub async fn run(&self, agent: &Agent, input: &str) -> Result<AgentResult, Error>;
 }
 ```
 
-Translates a user input string into a `ModelRequest` — including the agent's `output_schema` if set — calls `agent.model.generate`, and returns `AgentResult { output: String }`. Will be extended to handle the function-calling loop (see Roadmap).
+Owns the LLM model and acts as the execution engine. Translates a user input string into a `ModelRequest` — including the agent's `output_schema` if set — calls `self.model.generate`, and returns `AgentResult { output: String }`. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models. Will be extended to handle the function-calling loop (see Roadmap).
 
 ### `Error` (`src/error.rs`)
 

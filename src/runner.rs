@@ -1,7 +1,7 @@
 use crate::{
     agent::Agent,
     error::Error,
-    model::{Message, ModelRequest},
+    model::{LlmModel, Message, ModelRequest},
 };
 
 /// The result of a completed agent run.
@@ -11,9 +11,10 @@ pub struct AgentResult {
     pub output: String,
 }
 
-/// Executes [`Agent`]s, translating a run into [`LlmModel::generate`] calls.
+/// Executes [`Agent`]s against an LLM model.
 ///
-/// [`LlmModel::generate`]: crate::model::LlmModel::generate
+/// `AgentRunner` owns the model and acts as the execution engine. The same
+/// runner can be used to run multiple agents, or the same agent multiple times.
 ///
 /// # Examples
 ///
@@ -23,23 +24,29 @@ pub struct AgentResult {
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let model = GeminiModel::builder("API_KEY", "gemini-2.5-pro-preview-03-25")
+///     .temperature(0.8)
+///     .build();
+///
 /// let agent = Agent::builder()
 ///     .name("Assistant")
 ///     .instructions("You are a helpful assistant.")
-///     .model(Box::new(GeminiModel::new("API_KEY", "gemini-2.5-pro-preview-03-25")))
 ///     .build();
 ///
-/// let result = AgentRunner::new().run(&agent, "Hello!").await?;
+/// let runner = AgentRunner::new(Box::new(model));
+/// let result = runner.run(&agent, "Hello!").await?;
 /// println!("{}", result.output);
 /// # Ok(())
 /// # }
 /// ```
-pub struct AgentRunner;
+pub struct AgentRunner {
+    model: Box<dyn LlmModel>,
+}
 
 impl AgentRunner {
-    /// Creates a new `AgentRunner`.
-    pub fn new() -> Self {
-        AgentRunner
+    /// Creates a new `AgentRunner` powered by the given model.
+    pub fn new(model: Box<dyn LlmModel>) -> Self {
+        AgentRunner { model }
     }
 
     /// Runs the given agent with the provided user input and returns the result.
@@ -50,7 +57,7 @@ impl AgentRunner {
             output_schema: agent.output_schema().cloned(),
         };
 
-        let response = agent.model.generate(request).await?;
+        let response = self.model.generate(request).await?;
 
         Ok(AgentResult {
             output: response.text,
@@ -58,19 +65,10 @@ impl AgentRunner {
     }
 }
 
-impl Default for AgentRunner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        error::Error,
-        model::{LlmModel, ModelRequest, ModelResponse},
-    };
+    use crate::model::{ModelRequest, ModelResponse};
     use async_trait::async_trait;
 
     struct EchoModel;
@@ -87,15 +85,18 @@ mod tests {
         }
     }
 
+    fn echo_runner() -> AgentRunner {
+        AgentRunner::new(Box::new(EchoModel))
+    }
+
     #[tokio::test]
     async fn run_returns_model_output() {
         let agent = Agent::builder()
             .name("Test")
             .instructions("Be helpful.")
-            .model(Box::new(EchoModel))
             .build();
 
-        let result = AgentRunner::new().run(&agent, "hello").await.unwrap();
+        let result = echo_runner().run(&agent, "hello").await.unwrap();
         assert_eq!(result.output, "hello");
     }
 
@@ -108,12 +109,12 @@ mod tests {
         #[async_trait]
         impl LlmModel for CaptureModel {
             async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
-                *self.captured.lock().unwrap() = Some(request);
+                *self.captured.lock().unwrap() = Some(request.clone());
                 Ok(ModelResponse { text: String::new() })
             }
         }
 
-        let model = std::sync::Arc::new(CaptureModel {
+        let capture = std::sync::Arc::new(CaptureModel {
             captured: std::sync::Mutex::new(None),
         });
 
@@ -126,16 +127,15 @@ mod tests {
             }
         }
 
-        let captured = model.clone();
+        let runner = AgentRunner::new(Box::new(ArcModel(capture.clone())));
         let agent = Agent::builder()
             .name("Test")
             .instructions("System prompt.")
-            .model(Box::new(ArcModel(model)))
             .build();
 
-        AgentRunner::new().run(&agent, "input").await.unwrap();
+        runner.run(&agent, "input").await.unwrap();
 
-        let req = captured.captured.lock().unwrap().clone().unwrap();
+        let req = capture.captured.lock().unwrap().clone().unwrap();
         assert_eq!(req.system.as_deref(), Some("System prompt."));
     }
 }

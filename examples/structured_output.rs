@@ -53,11 +53,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .name("Research Planner")
         .instructions(INSTRUCTIONS)
         .output_schema(schema)
-        .model(Box::new(model))
         .build();
 
     let input = "learn about AI agents";
-    let result = AgentRunner::new().run(&agent, input).await?;
+    let result = AgentRunner::new(Box::new(model)).run(&agent, input).await?;
 
     // The model is constrained to return valid JSON matching ResearchPlan.
     let plan: ResearchPlan = serde_json::from_str(&result.output)?;

@@ -10,13 +10,17 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let model = GeminiModel::builder("API_KEY", "gemini-2.5-pro-preview-03-25")
+//!     .temperature(0.8)
+//!     .build();
+//!
 //! let agent = Agent::builder()
 //!     .name("Assistant")
 //!     .instructions("You are a helpful assistant.")
-//!     .model(Box::new(GeminiModel::new("API_KEY", "gemini-2.5-pro-preview-03-25")))
 //!     .build();
 //!
-//! let result = AgentRunner::new().run(&agent, "Hello!").await?;
+//! let runner = AgentRunner::new(Box::new(model));
+//! let result = runner.run(&agent, "Hello!").await?;
 //! println!("{}", result.output);
 //! # Ok(())
 //! # }
