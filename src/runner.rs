@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use crate::{
     agent::Agent,
     error::Error,
     model::{LlmModel, Message, ModelRequest},
+    tool::ToolRegistry,
 };
 use serde::de::DeserializeOwned;
 
@@ -14,8 +17,9 @@ pub struct AgentResult {
 
 /// Executes [`Agent`]s against an LLM model.
 ///
-/// `AgentRunner` owns the model and acts as the execution engine. The same
-/// runner can be used to run multiple agents, or the same agent multiple times.
+/// `AgentRunner` owns the model and holds a reference to a [`ToolRegistry`].
+/// The same runner can execute multiple agents; a [`ToolRegistry`] can be
+/// shared across multiple runners via [`Arc`].
 ///
 /// # Examples
 ///
@@ -42,32 +46,99 @@ pub struct AgentResult {
 /// ```
 pub struct AgentRunner {
     model: Box<dyn LlmModel>,
+    registry: Arc<ToolRegistry>,
 }
 
 impl AgentRunner {
-    /// Creates a new `AgentRunner` powered by the given model.
+    /// Creates a new `AgentRunner` powered by the given model with an empty
+    /// tool registry. Suitable for agents that use no tools.
     pub fn new(model: Box<dyn LlmModel>) -> Self {
-        AgentRunner { model }
+        AgentRunner {
+            model,
+            registry: ToolRegistry::empty(),
+        }
+    }
+
+    /// Creates a new `AgentRunner` powered by the given model and sharing the
+    /// given [`ToolRegistry`].
+    ///
+    /// Multiple runners can share the same registry by passing [`Arc::clone`]
+    /// of the same instance.
+    pub fn with_registry(model: Box<dyn LlmModel>, registry: Arc<ToolRegistry>) -> Self {
+        AgentRunner { model, registry }
     }
 
     /// Runs the given agent with the provided user input and returns the result.
     ///
+    /// If the agent declares tools, the runner validates that every tool name
+    /// is present in its registry before making any network call, then executes
+    /// the agentic loop: model call → tool execution → model call, repeating
+    /// until the model produces a final text response.
+    ///
     /// The output is returned as a raw string. Use [`run_typed`] when the agent
     /// produces structured JSON that should be deserialized into a concrete type.
     ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Agent`] if a tool name declared by the agent has no
+    /// registered implementation, or if the model loop ends without a text
+    /// response.
+    ///
     /// [`run_typed`]: AgentRunner::run_typed
     pub async fn run(&self, agent: &Agent, input: &str) -> Result<AgentResult, Error> {
-        let request = ModelRequest {
-            messages: vec![Message::user(input)],
-            system: Some(agent.instructions().to_string()),
-            output_schema: agent.output_schema().cloned(),
-        };
+        // Validate that every declared tool name is registered.
+        for name in agent.tool_names() {
+            if !self.registry.contains(name) {
+                return Err(Error::Agent(format!(
+                    "tool '{name}' is declared by the agent but not registered in the registry"
+                )));
+            }
+        }
 
-        let response = self.model.generate(request).await?;
+        // Resolve tool definitions from the registry.
+        let tools: Vec<_> = agent
+            .tool_names()
+            .iter()
+            .map(|name| self.registry.get(name).unwrap().definition())
+            .collect();
 
-        Ok(AgentResult {
-            output: response.text,
-        })
+        let mut messages = vec![Message::user(input)];
+
+        loop {
+            let request = ModelRequest {
+                messages: messages.clone(),
+                system: Some(agent.instructions().to_string()),
+                output_schema: agent.output_schema().cloned(),
+                tools: tools.clone(),
+            };
+
+            let response = self.model.generate(request).await?;
+
+            if response.tool_calls.is_empty() {
+                // Final text response — the loop is complete.
+                let text = response.text.ok_or_else(|| {
+                    Error::Agent("model returned neither text nor tool calls".to_string())
+                })?;
+                return Ok(AgentResult { output: text });
+            }
+
+            // Append all tool calls as a single assistant turn.
+            messages.push(Message::tool_calls(response.tool_calls.clone()));
+
+            // Execute each tool and append one result message per call.
+            for call in &response.tool_calls {
+                let tool = self.registry.get(&call.name).ok_or_else(|| {
+                    Error::Agent(format!("model called unregistered tool '{}'", call.name))
+                })?;
+                let result = tool.call(call.args.clone()).await?;
+                messages.push(Message::tool_result(
+                    call.id.clone(),
+                    call.name.clone(),
+                    result,
+                    call.provider_metadata.clone(),
+                ));
+            }
+        }
     }
 
     /// Runs the given agent and deserializes the output into `T`.
@@ -134,12 +205,14 @@ mod tests {
     #[async_trait]
     impl LlmModel for EchoModel {
         async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
-            let echo = request
-                .messages
-                .last()
-                .map(|m| m.content.clone())
-                .unwrap_or_default();
-            Ok(ModelResponse { text: echo })
+            let echo = request.messages.last().and_then(|m| {
+                if let crate::model::MessageContent::Text(t) = &m.content {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            });
+            Ok(ModelResponse { text: echo, tool_calls: vec![] })
         }
     }
 
@@ -169,7 +242,7 @@ mod tests {
     #[async_trait]
     impl LlmModel for JsonModel {
         async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, Error> {
-            Ok(ModelResponse { text: self.0.clone() })
+            Ok(ModelResponse { text: Some(self.0.clone()), tool_calls: vec![] })
         }
     }
 
@@ -198,6 +271,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_errors_when_tool_not_in_registry() {
+        let agent = Agent::builder()
+            .name("Test")
+            .instructions("Use tools.")
+            .tool("missing_tool")
+            .build();
+
+        let result = AgentRunner::new(Box::new(EchoModel)).run(&agent, "go").await;
+        assert!(matches!(result, Err(Error::Agent(_))));
+    }
+
+    #[tokio::test]
+    async fn run_executes_tool_loop_and_returns_text() {
+        use crate::model::{MessageContent, ToolCall as ModelToolCall};
+        use crate::tool::{Tool, ToolDefinition, ToolRegistry};
+        use serde_json::json;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // Model: first call returns a tool call, second returns text.
+        static CALL_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        struct ToolLoopModel;
+
+        #[async_trait]
+        impl LlmModel for ToolLoopModel {
+            async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
+                let n = CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Ok(ModelResponse {
+                        text: None,
+                        tool_calls: vec![ModelToolCall {
+                            id: "call-1".to_string(),
+                            name: "add".to_string(),
+                            args: json!({"a": 1, "b": 2}),
+                            provider_metadata: None,
+                        }],
+                    })
+                } else {
+                    // The last message should be the tool result.
+                    let last = request.messages.last().unwrap();
+                    let answer = if let MessageContent::ToolResult { result, .. } = &last.content {
+                        result["sum"].as_i64().unwrap_or(0).to_string()
+                    } else {
+                        "no result".to_string()
+                    };
+                    Ok(ModelResponse { text: Some(answer), tool_calls: vec![] })
+                }
+            }
+        }
+
+        struct AddTool;
+
+        #[async_trait]
+        impl Tool for AddTool {
+            fn definition(&self) -> ToolDefinition {
+                ToolDefinition {
+                    name: "add".to_string(),
+                    description: "Adds two numbers.".to_string(),
+                    parameters: json!({"type": "object"}),
+                }
+            }
+            async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, Error> {
+                let a = args["a"].as_i64().unwrap_or(0);
+                let b = args["b"].as_i64().unwrap_or(0);
+                Ok(json!({"sum": a + b}))
+            }
+        }
+
+        CALL_COUNT.store(0, Ordering::SeqCst);
+        let registry = Arc::new(ToolRegistry::new().register(Box::new(AddTool)));
+        let runner = AgentRunner::with_registry(Box::new(ToolLoopModel), registry);
+        let agent = Agent::builder()
+            .name("Test")
+            .instructions("Use tools.")
+            .tool("add")
+            .build();
+
+        let result = runner.run(&agent, "add 1 and 2").await.unwrap();
+        assert_eq!(result.output, "3");
+    }
+
+    #[tokio::test]
     async fn run_passes_system_instructions() {
         struct CaptureModel {
             captured: std::sync::Mutex<Option<ModelRequest>>,
@@ -207,7 +362,7 @@ mod tests {
         impl LlmModel for CaptureModel {
             async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
                 *self.captured.lock().unwrap() = Some(request.clone());
-                Ok(ModelResponse { text: String::new() })
+                Ok(ModelResponse { text: Some(String::new()), tool_calls: vec![] })
             }
         }
 

@@ -29,6 +29,7 @@
 pub mod error;
 pub mod model;
 pub mod models;
+pub mod tool;
 
 mod agent;
 mod runner;

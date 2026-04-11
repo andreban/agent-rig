@@ -43,50 +43,94 @@ pub struct ModelRequest {
     pub messages: Vec<Message>,                    // conversation history
     pub system: Option<String>,                    // system prompt
     pub output_schema: Option<serde_json::Value>,  // JSON Schema for structured output
+    pub tools: Vec<ToolDefinition>,                // tool definitions for this turn
+}
+
+pub struct ToolCall {
+    pub id: String,                    // provider-supplied call ID (echoed in response)
+    pub name: String,
+    pub args: serde_json::Value,
 }
 
 pub struct ModelResponse {
-    pub text: String,
+    pub text: Option<String>,          // None when the model issued tool calls
+    pub tool_calls: Vec<ToolCall>,     // empty on a final text response
 }
 ```
 
-`Message` carries a `Role` (`User` | `Assistant`) and a `content: String`. This is the canonical representation that provider adapters translate to and from their SDK types.
+`Message` carries a `Role` (`User` | `Assistant`) and a `content: MessageContent`. `MessageContent` is an enum with three variants:
+- `Text(String)` — a plain text turn
+- `ToolCalls(Vec<ToolCall>)` — all tool calls from one model turn (one assistant message)
+- `ToolResult { id, name, result }` — the result of one tool execution (one user message)
 
 `output_schema`, when set, instructs the provider adapter to constrain the response to the supplied JSON Schema. Providers that do not support structured output ignore the field silently.
+
+`text` and `tool_calls` on `ModelResponse` are mutually exclusive per turn.
 
 ### `Agent` (`src/agent.rs`)
 
 ```rust
+#[derive(Serialize, Deserialize)]
 pub struct Agent {
     name: String,
     instructions: String,
     output_schema: Option<serde_json::Value>,
+    tool_names: Vec<String>,
 }
 ```
 
-Constructed via `Agent::builder()`. A pure data blueprint: holds the system instructions used on every run and an optional JSON Schema for structured output. Carries no model or runtime state, making it trivially serializable.
+Constructed via `Agent::builder()`. A pure data blueprint: holds the system instructions used on every run, an optional JSON Schema for structured output, and the names of tools the agent is permitted to use. Carries no model or runtime state. Derives `Serialize`/`Deserialize` so agent configurations can be saved to and loaded from files (JSON, YAML, etc.). Tool definitions (description, parameters schema) are not serialized with the agent — they are owned by each `Tool` implementation in the `AgentRunner` registry and resolved at runtime.
 
 `output_schema` is set via `AgentBuilder::output_schema(schema)`. The runner copies it into every `ModelRequest`, and each provider adapter applies it using provider-specific mechanisms.
+
+### `ToolDefinition` / `Tool` / `ToolRegistry` (`src/tool.rs`)
+
+```rust
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,   // JSON Schema
+}
+
+#[async_trait]
+pub trait Tool: Send + Sync {
+    fn definition(&self) -> ToolDefinition;
+    async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, Error>;
+}
+
+pub struct ToolRegistry { ... }
+
+impl ToolRegistry {
+    pub fn new() -> Self;
+    pub fn register(self, tool: Box<dyn Tool>) -> Self;   // builder-style
+}
+```
+
+`ToolDefinition` is the runtime-only contract between agent and model. It is never stored in `Agent` — it lives in the `ToolRegistry` alongside its `Tool` implementation and is resolved at run time.
+
+`ToolRegistry` is independent of any runner; share it across multiple runners via `Arc<ToolRegistry>`.
 
 ### `AgentRunner` (`src/runner.rs`)
 
 ```rust
 pub struct AgentRunner {
     model: Box<dyn LlmModel>,
+    registry: Arc<ToolRegistry>,
 }
 
 impl AgentRunner {
-    pub fn new(model: Box<dyn LlmModel>) -> Self;
+    pub fn new(model: Box<dyn LlmModel>) -> Self;   // empty registry
+    pub fn with_registry(model: Box<dyn LlmModel>, registry: Arc<ToolRegistry>) -> Self;
     pub async fn run(&self, agent: &Agent, input: &str) -> Result<AgentResult, Error>;
     pub async fn run_typed<T: DeserializeOwned>(&self, agent: &Agent, input: &str) -> Result<T, Error>;
 }
 ```
 
-Owns the LLM model and acts as the execution engine. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
+Owns the LLM model and a shared reference to a `ToolRegistry`. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
 
-`run` translates a user input string into a `ModelRequest` — including the agent's `output_schema` if set — calls `self.model.generate`, and returns `AgentResult { output: String }`.
+`run` validates that every tool name in `agent.tool_names()` is registered, then executes the agentic loop: resolve definitions → `model.generate` → execute tool calls → append results → repeat until the model returns a text response. Returns `AgentResult { output: String }`.
 
-`run_typed<T>` is a thin typed wrapper over `run`. It calls `run` unchanged (respecting any `output_schema` set on the agent) and deserializes the response text into `T` via `serde_json`. Deserialization failure returns `Error::Agent`. Will be extended to handle the function-calling loop (see Roadmap).
+`run_typed<T>` is a thin typed wrapper over `run` that deserializes the final text output into `T` via `serde_json`. Deserialization failure returns `Error::Agent`.
 
 ### `Error` (`src/error.rs`)
 
@@ -122,7 +166,8 @@ pub enum Error {
 src/
   lib.rs          — crate root, public re-exports
   error.rs        — Error enum
-  model.rs        — LlmModel trait, Message, ModelRequest, ModelResponse, Role
+  model.rs        — LlmModel trait, Message, MessageContent, ModelRequest, ModelResponse, ToolCall, Role
+  tool.rs         — ToolDefinition, Tool trait, ToolRegistry
   agent.rs        — Agent, AgentBuilder
   runner.rs       — AgentRunner, AgentResult
   models/
@@ -146,7 +191,6 @@ tests/
 
 The following capabilities are planned but not yet implemented:
 
-1. **Tool / function calling.** Extend `ModelRequest` to carry `FunctionDeclaration` definitions and `ModelResponse` to return `FunctionCall` parts. `AgentRunner` will loop: detect function calls → execute registered tools → push `FunctionResponse` → repeat until a text response is produced.
-2. **Multi-turn conversations.** Allow callers to pass existing conversation history into `AgentRunner::run` for stateful dialogue.
-3. **Streaming responses.** Expose a streaming variant of `AgentRunner::run` that yields tokens incrementally.
-4. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.
+1. **Multi-turn conversations.** Allow callers to pass existing conversation history into `AgentRunner::run` for stateful dialogue.
+2. **Streaming responses.** Expose a streaming variant of `AgentRunner::run` that yields tokens incrementally.
+3. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.

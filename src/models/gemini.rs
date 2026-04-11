@@ -1,12 +1,14 @@
 use async_trait::async_trait;
 use google_genai::prelude::{
-    Content, GeminiClient, GenerateContentRequest, GenerationConfig, Role,
+    Content, FunctionDeclaration, FunctionResponse, GeminiClient, GenerateContentRequest,
+    GenerationConfig, Part, PartData, Role, Tools,
 };
 use serde_json::Value;
 
 use crate::{
     error::Error,
-    model::{LlmModel, ModelRequest, ModelResponse, Role as AgentRole},
+    model::{LlmModel, MessageContent, ModelRequest, ModelResponse, Role as AgentRole, ToolCall},
+    tool::ToolDefinition,
 };
 
 /// LLM provider backed by Google Gemini.
@@ -161,6 +163,18 @@ fn resolve_refs(value: &mut Value, definitions: &Value) {
     }
 }
 
+/// Translates a [`ToolDefinition`] into a Gemini [`FunctionDeclaration`].
+fn to_function_declaration(def: &ToolDefinition) -> FunctionDeclaration {
+    FunctionDeclaration {
+        name: def.name.clone(),
+        description: def.description.clone(),
+        parameters: None,
+        parameters_json_schema: Some(def.parameters.clone()),
+        response: None,
+        response_json_schema: None,
+    }
+}
+
 #[async_trait]
 impl LlmModel for GeminiModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
@@ -172,10 +186,61 @@ impl LlmModel for GeminiModel {
                     AgentRole::User => Role::User,
                     AgentRole::Assistant => Role::Model,
                 };
-                Content::builder()
-                    .role(role)
-                    .add_text_part(msg.content.clone())
-                    .build()
+                match &msg.content {
+                    MessageContent::Text(text) => Content::builder()
+                        .role(role)
+                        .add_text_part(text.clone())
+                        .build(),
+                    MessageContent::ToolCalls(calls) => Content {
+                        role: Some(Role::Model),
+                        parts: Some(
+                            calls
+                                .iter()
+                                .map(|call| {
+                                    let thought_signature = call
+                                        .provider_metadata
+                                        .as_ref()
+                                        .and_then(|m| m["thought_signature"].as_str())
+                                        .map(|s| s.to_string());
+                                    Part {
+                                        data: PartData::FunctionCall {
+                                            id: Some(call.id.clone()),
+                                            name: call.name.clone(),
+                                            args: Some(call.args.clone()),
+                                        },
+                                        thought: None,
+                                        thought_signature,
+                                        part_metadata: None,
+                                        media_resolution: None,
+                                    }
+                                })
+                                .collect(),
+                        ),
+                    },
+                    MessageContent::ToolResult { id, name, result, provider_metadata } => {
+                        let thought_signature = provider_metadata
+                            .as_ref()
+                            .and_then(|m| m["thought_signature"].as_str())
+                            .map(|s| s.to_string());
+                        Content {
+                            role: Some(Role::User),
+                            parts: Some(vec![Part {
+                                data: PartData::FunctionResponse(FunctionResponse {
+                                    id: Some(id.clone()),
+                                    name: name.clone(),
+                                    response: result.clone(),
+                                    parts: None,
+                                    will_continue: None,
+                                    scheduling: None,
+                                }),
+                                thought: None,
+                                thought_signature,
+                                part_metadata: None,
+                                media_resolution: None,
+                            }]),
+                        }
+                    }
+                }
             })
             .collect();
 
@@ -184,6 +249,17 @@ impl LlmModel for GeminiModel {
         if let Some(system) = &request.system {
             let system_content = Content::builder().add_text_part(system.clone()).build();
             builder = builder.system_instruction(system_content);
+        }
+
+        // Attach tool declarations when the request includes tools.
+        if !request.tools.is_empty() {
+            let declarations: Vec<FunctionDeclaration> =
+                request.tools.iter().map(to_function_declaration).collect();
+            let tools = Tools {
+                function_declarations: Some(declarations),
+                ..Default::default()
+            };
+            builder = builder.tools(vec![tools]);
         }
 
         // Request-level schema takes precedence over any model-level config.
@@ -211,12 +287,53 @@ impl LlmModel for GeminiModel {
             .await
             .map_err(|e| Error::Provider(e.to_string()))?;
 
-        let text = response
+        let candidate = response
             .candidates
             .first()
-            .and_then(|c| c.get_text())
+            .ok_or_else(|| Error::Provider("empty candidates in Gemini response".to_string()))?;
+
+        // Collect any function call parts from the response.
+        let tool_calls: Vec<ToolCall> = candidate
+            .content
+            .as_ref()
+            .and_then(|c| c.parts.as_ref())
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| {
+                        if let PartData::FunctionCall { id, name, args } = &part.data {
+                            // Stash the thought_signature so it can be echoed
+                            // back on both the replayed FunctionCall and the
+                            // FunctionResponse parts in subsequent turns.
+                            let provider_metadata =
+                                part.thought_signature.as_ref().map(|ts| {
+                                    serde_json::json!({ "thought_signature": ts })
+                                });
+                            Some(ToolCall {
+                                id: id.clone().unwrap_or_default(),
+                                name: name.clone(),
+                                args: args.clone().unwrap_or(serde_json::Value::Null),
+                                provider_metadata,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
 
-        Ok(ModelResponse { text })
+        if !tool_calls.is_empty() {
+            return Ok(ModelResponse {
+                text: None,
+                tool_calls,
+            });
+        }
+
+        let text = candidate.get_text();
+        Ok(ModelResponse {
+            text,
+            tool_calls: vec![],
+        })
     }
 }

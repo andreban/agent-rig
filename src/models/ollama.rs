@@ -2,13 +2,17 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use ollama_rs::{
     OllamaClient,
-    types::chat::{ChatRequest, Message as OllamaMessage, Role as OllamaRole},
+    types::chat::{
+        ChatRequest, Function, Message as OllamaMessage, Role as OllamaRole, Tool as OllamaTool,
+        ToolCall as OllamaToolCall, ToolCallFunction, ToolType,
+    },
     types::common::{Options, Stop},
 };
 
 use crate::{
     error::Error,
-    model::{LlmModel, ModelRequest, ModelResponse, Role},
+    model::{LlmModel, MessageContent, ModelRequest, ModelResponse, Role, ToolCall},
+    tool::ToolDefinition,
 };
 
 /// LLM provider backed by an [Ollama](https://ollama.com/) server.
@@ -125,6 +129,18 @@ impl OllamaModelBuilder {
     }
 }
 
+/// Translates a [`ToolDefinition`] into an Ollama [`OllamaTool`].
+fn to_ollama_tool(def: &ToolDefinition) -> OllamaTool {
+    OllamaTool {
+        tool_type: ToolType::Function,
+        function: Function {
+            name: def.name.clone(),
+            description: def.description.clone(),
+            parameters: def.parameters.clone(),
+        },
+    }
+}
+
 #[async_trait]
 impl LlmModel for OllamaModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
@@ -135,13 +151,34 @@ impl LlmModel for OllamaModel {
         }
 
         for msg in &request.messages {
-            let ollama_msg = match msg.role {
-                Role::User => OllamaMessage::user(msg.content.clone()),
-                Role::Assistant => OllamaMessage {
-                    content: msg.content.clone(),
-                    role: OllamaRole::Assistant,
-                    tool_calls: vec![],
+            let ollama_msg = match &msg.content {
+                MessageContent::Text(text) => match msg.role {
+                    Role::User => OllamaMessage::user(text.clone()),
+                    Role::Assistant => OllamaMessage {
+                        content: text.clone(),
+                        role: OllamaRole::Assistant,
+                        tool_calls: vec![],
+                    },
                 },
+                MessageContent::ToolCalls(calls) => OllamaMessage {
+                    content: String::new(),
+                    role: OllamaRole::Assistant,
+                    tool_calls: calls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, call)| OllamaToolCall {
+                            function: ToolCallFunction {
+                                name: call.name.clone(),
+                                arguments: call.args.clone(),
+                                index: i,
+                            },
+                        })
+                        .collect::<Vec<_>>(),
+                },
+                MessageContent::ToolResult { result, .. } => {
+                    OllamaMessage::tool_response(result)
+                        .map_err(|e| Error::Provider(e.to_string()))?
+                }
             };
             messages.push(ollama_msg);
         }
@@ -152,6 +189,13 @@ impl LlmModel for OllamaModel {
             builder = builder.options(options);
         }
 
+        // Attach tools when the request includes them.
+        if !request.tools.is_empty() {
+            let ollama_tools: Vec<OllamaTool> =
+                request.tools.iter().map(to_ollama_tool).collect();
+            builder = builder.tools(ollama_tools).stream(false);
+        }
+
         if let Some(schema) = request.output_schema {
             builder = builder.format(schema);
         }
@@ -160,15 +204,45 @@ impl LlmModel for OllamaModel {
 
         let mut stream = self.client.chat(chat_request);
         let mut output = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
 
         while let Some(chunk) = stream.next().await {
             let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
+
+            if !response.message.tool_calls.is_empty() {
+                tool_calls = response
+                    .message
+                    .tool_calls
+                    .iter()
+                    .map(|tc| ToolCall {
+                        // Ollama has no call ID; use the function name as a
+                        // stable identifier (sufficient since we don't need to
+                        // echo an ID back to Ollama).
+                        id: tc.function.name.clone(),
+                        name: tc.function.name.clone(),
+                        args: tc.function.arguments.clone(),
+                        provider_metadata: None,
+                    })
+                    .collect();
+            }
+
             output.push_str(&response.message.content);
+
             if response.done {
                 break;
             }
         }
 
-        Ok(ModelResponse { text: output })
+        if !tool_calls.is_empty() {
+            return Ok(ModelResponse {
+                text: None,
+                tool_calls,
+            });
+        }
+
+        Ok(ModelResponse {
+            text: Some(output),
+            tool_calls: vec![],
+        })
     }
 }
