@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use google_genai::prelude::{
     Content, GeminiClient, GenerateContentRequest, GenerationConfig, Role,
 };
+use serde_json::Value;
 
 use crate::{
     error::Error,
@@ -100,44 +101,6 @@ impl GeminiModelBuilder {
         self
     }
 
-    /// Sets the MIME type of the response (e.g. `"application/json"`).
-    ///
-    /// Use together with [`response_schema`](Self::response_schema) to request
-    /// structured JSON output from the model.
-    pub fn response_mime_type(mut self, mime_type: impl Into<String>) -> Self {
-        self.generation_config = self.generation_config.response_mime_type(mime_type.into());
-        self
-    }
-
-    /// Sets a JSON Schema that the model's response must conform to.
-    ///
-    /// Pass the schema as a [`serde_json::Value`]. When combined with
-    /// [`response_mime_type("application/json")`](Self::response_mime_type),
-    /// the model returns a JSON object that matches the provided schema.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use rust_agent_kit::models::gemini::GeminiModel;
-    /// use schemars::JsonSchema;
-    /// use serde::Deserialize;
-    ///
-    /// #[derive(Deserialize, JsonSchema)]
-    /// struct Answer {
-    ///     value: String,
-    /// }
-    ///
-    /// let schema = serde_json::to_value(schemars::schema_for!(Answer)).unwrap();
-    /// let model = GeminiModel::builder("API_KEY", "gemini-2.5-pro-preview-03-25")
-    ///     .response_mime_type("application/json")
-    ///     .response_schema(schema)
-    ///     .build();
-    /// ```
-    pub fn response_schema(mut self, schema: serde_json::Value) -> Self {
-        self.generation_config = self.generation_config.response_schema(schema);
-        self
-    }
-
     /// Builds the [`GeminiModel`].
     pub fn build(self) -> GeminiModel {
         GeminiModel {
@@ -145,6 +108,56 @@ impl GeminiModelBuilder {
             model: self.model,
             generation_config: Some(self.generation_config.build()),
         }
+    }
+}
+
+/// Normalises a schemars-generated JSON Schema into a Gemini-compatible schema.
+///
+/// The Gemini API accepts a subset of JSON Schema and rejects meta-fields like
+/// `$schema`, `title`, and `definitions`. This function strips those fields and
+/// inlines every `$ref` so the result is self-contained.
+fn normalise_for_gemini(mut root: Value) -> Value {
+    // schemars may use either `definitions` (draft-07) or `$defs` (2019-09+).
+    let definitions = root
+        .as_object_mut()
+        .and_then(|o| o.remove("definitions").or_else(|| o.remove("$defs")))
+        .unwrap_or(Value::Null);
+
+    resolve_refs(&mut root, &definitions);
+    root
+}
+
+fn resolve_refs(value: &mut Value, definitions: &Value) {
+    match value {
+        Value::Object(obj) => {
+            // Inline $ref before doing anything else with this node.
+            if let Some(ref_val) = obj.get("$ref").cloned() {
+                if let Some(ref_str) = ref_val.as_str() {
+                    let def_name = ref_str
+                        .strip_prefix("#/definitions/")
+                        .or_else(|| ref_str.strip_prefix("#/$defs/"));
+                    if let Some(def_name) = def_name {
+                        if let Some(def) = definitions.get(def_name) {
+                            let mut resolved = def.clone();
+                            resolve_refs(&mut resolved, definitions);
+                            *value = resolved;
+                            return;
+                        }
+                    }
+                }
+            }
+            // Strip meta-fields the Gemini API does not recognise.
+            obj.remove("$schema");
+            for v in obj.values_mut() {
+                resolve_refs(v, definitions);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                resolve_refs(v, definitions);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -173,8 +186,21 @@ impl LlmModel for GeminiModel {
             builder = builder.system_instruction(system_content);
         }
 
-        if let Some(config) = &self.generation_config {
-            builder = builder.generation_config(config.clone());
+        // Request-level schema takes precedence over any model-level config.
+        let effective_config = if let Some(schema) = request.output_schema {
+            let normalised = normalise_for_gemini(schema);
+            Some(
+                GenerationConfig::builder()
+                    .response_mime_type("application/json")
+                    .response_schema(normalised)
+                    .build(),
+            )
+        } else {
+            self.generation_config.clone()
+        };
+
+        if let Some(config) = effective_config {
+            builder = builder.generation_config(config);
         }
 
         let gemini_request = builder.build();

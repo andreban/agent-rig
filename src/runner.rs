@@ -47,6 +47,7 @@ impl AgentRunner {
         let request = ModelRequest {
             messages: vec![Message::user(input)],
             system: Some(agent.instructions().to_string()),
+            output_schema: agent.output_schema().cloned(),
         };
 
         let response = agent.model.generate(request).await?;

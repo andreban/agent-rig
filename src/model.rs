@@ -61,6 +61,12 @@ pub struct ModelRequest {
     pub messages: Vec<Message>,
     /// Optional system-level instructions that guide the model's behaviour.
     pub system: Option<String>,
+    /// Optional JSON Schema the model's response must conform to.
+    ///
+    /// When set, the provider adapter applies structured-output constraints
+    /// using provider-specific mechanisms. Providers that do not support
+    /// structured output ignore this field.
+    pub output_schema: Option<serde_json::Value>,
 }
 
 /// A response from an LLM model.

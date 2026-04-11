@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use crate::model::LlmModel;
 
 /// An agent comprising a name, system instructions, and an LLM model.
@@ -18,6 +20,7 @@ pub struct Agent {
     pub(crate) name: String,
     pub(crate) instructions: String,
     pub(crate) model: Box<dyn LlmModel>,
+    pub(crate) output_schema: Option<serde_json::Value>,
 }
 
 impl Agent {
@@ -35,6 +38,11 @@ impl Agent {
     pub fn instructions(&self) -> &str {
         &self.instructions
     }
+
+    /// The JSON Schema the agent's output must conform to, if any.
+    pub fn output_schema(&self) -> Option<&serde_json::Value> {
+        self.output_schema.as_ref()
+    }
 }
 
 /// Builder for [`Agent`].
@@ -43,6 +51,7 @@ pub struct AgentBuilder {
     name: Option<String>,
     instructions: Option<String>,
     model: Option<Box<dyn LlmModel>>,
+    output_schema: Option<serde_json::Value>,
 }
 
 impl AgentBuilder {
@@ -64,6 +73,16 @@ impl AgentBuilder {
         self
     }
 
+    /// Constrains the agent's output to the given JSON Schema.
+    ///
+    /// When set, the runner forwards the schema to the model provider so that
+    /// responses conform to the schema. Providers that do not support structured
+    /// output ignore this field.
+    pub fn output_schema<S: Into<Value>>(mut self, schema: S) -> Self {
+        self.output_schema = Some(schema.into());
+        self
+    }
+
     /// Builds the [`Agent`].
     ///
     /// # Panics
@@ -72,8 +91,11 @@ impl AgentBuilder {
     pub fn build(self) -> Agent {
         Agent {
             name: self.name.expect("Agent::builder requires a name"),
-            instructions: self.instructions.expect("Agent::builder requires instructions"),
+            instructions: self
+                .instructions
+                .expect("Agent::builder requires instructions"),
             model: self.model.expect("Agent::builder requires a model"),
+            output_schema: self.output_schema,
         }
     }
 }
@@ -92,7 +114,9 @@ mod tests {
     #[async_trait]
     impl LlmModel for StubModel {
         async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, Error> {
-            Ok(ModelResponse { text: String::new() })
+            Ok(ModelResponse {
+                text: String::new(),
+            })
         }
     }
 

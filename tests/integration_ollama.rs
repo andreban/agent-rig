@@ -1,4 +1,6 @@
 use rust_agent_kit::{Agent, AgentRunner, models::ollama::OllamaModel};
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 fn ollama_url() -> String {
     let _ = dotenvy::dotenv();
@@ -48,6 +50,38 @@ async fn agent_follows_system_instructions() {
         .await
         .unwrap();
     assert!(result.output.to_lowercase().contains("arrr"));
+}
+
+#[tokio::test]
+async fn agent_output_schema_returns_valid_json() {
+    let url = ollama_url();
+    if !ollama_available(&url).await {
+        return;
+    }
+
+    #[derive(Deserialize, JsonSchema)]
+    struct Sentiment {
+        label: String,
+        score: f32,
+    }
+
+    let schema = schemars::schema_for!(Sentiment);
+
+    let agent = Agent::builder()
+        .name("Classifier")
+        .instructions("Classify the sentiment of the input. Return a label (positive/negative/neutral) and a confidence score between 0 and 1.")
+        .output_schema(schema)
+        .model(Box::new(OllamaModel::new(&url, ollama_model())))
+        .build();
+
+    let result = AgentRunner::new()
+        .run(&agent, "I love sunny days!")
+        .await
+        .unwrap();
+
+    let parsed: Sentiment = serde_json::from_str(&result.output).unwrap();
+    assert!(!parsed.label.is_empty());
+    assert!((0.0..=1.0).contains(&parsed.score));
 }
 
 #[tokio::test]

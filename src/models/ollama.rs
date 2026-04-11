@@ -152,6 +152,10 @@ impl LlmModel for OllamaModel {
             builder = builder.options(options);
         }
 
+        if let Some(schema) = request.output_schema {
+            builder = builder.format(schema);
+        }
+
         let chat_request = builder.build();
 
         let mut stream = self.client.chat(chat_request);

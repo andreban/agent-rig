@@ -35,8 +35,9 @@ All provider adapters implement this trait. The runner holds a `Box<dyn LlmModel
 
 ```rust
 pub struct ModelRequest {
-    pub messages: Vec<Message>,   // conversation history
-    pub system: Option<String>,   // system prompt
+    pub messages: Vec<Message>,                    // conversation history
+    pub system: Option<String>,                    // system prompt
+    pub output_schema: Option<serde_json::Value>,  // JSON Schema for structured output
 }
 
 pub struct ModelResponse {
@@ -46,6 +47,8 @@ pub struct ModelResponse {
 
 `Message` carries a `Role` (`User` | `Assistant`) and a `content: String`. This is the canonical representation that provider adapters translate to and from their SDK types.
 
+`output_schema`, when set, instructs the provider adapter to constrain the response to the supplied JSON Schema. Providers that do not support structured output ignore the field silently.
+
 ### `Agent` (`src/agent.rs`)
 
 ```rust
@@ -53,10 +56,13 @@ pub struct Agent {
     name: String,
     instructions: String,
     model: Box<dyn LlmModel>,
+    output_schema: Option<serde_json::Value>,
 }
 ```
 
-Constructed via `Agent::builder()`. Holds the model and the system instructions used on every run. Does not hold conversation state — the runner owns the request being built.
+Constructed via `Agent::builder()`. Holds the model, the system instructions used on every run, and an optional JSON Schema for structured output. Does not hold conversation state — the runner owns the request being built.
+
+`output_schema` is set via `AgentBuilder::output_schema(schema)`. The runner copies it into every `ModelRequest`, and each provider adapter applies it using provider-specific mechanisms.
 
 ### `AgentRunner` (`src/runner.rs`)
 
@@ -68,7 +74,7 @@ impl AgentRunner {
 }
 ```
 
-Translates a user input string into a `ModelRequest`, calls `agent.model.generate`, and returns `AgentResult { output: String }`. Will be extended to handle the function-calling loop (see Roadmap).
+Translates a user input string into a `ModelRequest` — including the agent's `output_schema` if set — calls `agent.model.generate`, and returns `AgentResult { output: String }`. Will be extended to handle the function-calling loop (see Roadmap).
 
 ### `Error` (`src/error.rs`)
 
@@ -87,6 +93,7 @@ pub enum Error {
 - Translates `ModelRequest` → `GenerateContentRequest`, mapping `Role::User → Role::User` and `Role::Assistant → Role::Model`.
 - System instructions become `system_instruction` on the Gemini request.
 - Optional `GenerationConfig` (temperature, max_output_tokens, top_p, top_k, stop_sequences) configurable via `GeminiModel::builder(…)`.
+- Structured output: when `ModelRequest::output_schema` is set, a `GenerationConfig` with `response_mime_type("application/json")` and the normalised schema is applied, overriding any model-level config. Schema normalisation (stripping `$schema`/`$defs`, inlining `$ref`) is performed internally.
 - Response text extracted from `candidates[0].get_text()`.
 
 ### `OllamaModel` (`src/models/ollama.rs`)
@@ -95,6 +102,7 @@ pub enum Error {
 - System prompt becomes a synthetic `OllamaMessage::system(…)` prepended to the message list.
 - Uses the streaming chat API (`client.chat` returns a stream); chunks are concatenated until `done == true`.
 - Optional `Options` (temperature, seed, top_k, top_p, num_ctx, num_predict, stop) configurable via `OllamaModel::builder(…)`.
+- Structured output: when `ModelRequest::output_schema` is set, the schema is passed to the Ollama `format` field (requires Ollama ≥ 0.5 and a model that supports structured output).
 
 ## Module Layout
 
@@ -130,4 +138,3 @@ The following capabilities are planned but not yet implemented:
 2. **Multi-turn conversations.** Allow callers to pass existing conversation history into `AgentRunner::run` for stateful dialogue.
 3. **Streaming responses.** Expose a streaming variant of `AgentRunner::run` that yields tokens incrementally.
 4. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.
-5. **Structured output.** Allow agents to request JSON schema-validated responses from models that support it.
