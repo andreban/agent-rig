@@ -258,7 +258,6 @@ tests/
 
 The following capabilities are planned but not yet implemented:
 
-1. **Agent as a tool (`AgentTool`).** Wrap an `AgentRunner` + `Agent` pair as a `Tool` so a parent agent can delegate to a child agent. See the `AgentTool` section above for the full design.
-2. **Multi-turn conversations.** Allow callers to pass existing conversation history into `AgentRunner::run` for stateful dialogue.
-3. **Streaming responses.** Expose a streaming variant of `AgentRunner::run` that yields tokens incrementally.
-4. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.
+1. **Multi-turn conversations.** Allow callers to pass existing conversation history into `AgentRunner::run` for stateful dialogue.
+2. **Streaming responses.** Expose a streaming variant of `AgentRunner::run` that yields tokens incrementally.
+3. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.
