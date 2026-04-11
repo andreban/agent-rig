@@ -288,14 +288,23 @@ impl LlmModel for GeminiModel {
         }
 
         // Request-level schema takes precedence over any model-level config.
+        // When a schema is present we build a fresh config with the schema
+        // fields, but carry over thinking_config from the model-level config so
+        // that models with extended thinking still emit reasoning tokens in
+        // structured-output mode.
         let effective_config = if let Some(schema) = request.output_schema {
             let normalised = normalise_for_gemini(schema);
-            Some(
-                GenerationConfig::builder()
-                    .response_mime_type("application/json")
-                    .response_schema(normalised)
-                    .build(),
-            )
+            let mut builder = GenerationConfig::builder()
+                .response_mime_type("application/json")
+                .response_schema(normalised);
+            if let Some(tc) = self
+                .generation_config
+                .as_ref()
+                .and_then(|c| c.thinking_config.clone())
+            {
+                builder = builder.thinking_config(tc);
+            }
+            Some(builder.build())
         } else {
             self.generation_config.clone()
         };
