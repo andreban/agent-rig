@@ -78,10 +78,15 @@ pub struct AgentRunner {
 impl AgentRunner {
     pub fn new(model: Box<dyn LlmModel>) -> Self;
     pub async fn run(&self, agent: &Agent, input: &str) -> Result<AgentResult, Error>;
+    pub async fn run_typed<T: DeserializeOwned>(&self, agent: &Agent, input: &str) -> Result<T, Error>;
 }
 ```
 
-Owns the LLM model and acts as the execution engine. Translates a user input string into a `ModelRequest` — including the agent's `output_schema` if set — calls `self.model.generate`, and returns `AgentResult { output: String }`. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models. Will be extended to handle the function-calling loop (see Roadmap).
+Owns the LLM model and acts as the execution engine. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
+
+`run` translates a user input string into a `ModelRequest` — including the agent's `output_schema` if set — calls `self.model.generate`, and returns `AgentResult { output: String }`.
+
+`run_typed<T>` is a thin typed wrapper over `run`. It calls `run` unchanged (respecting any `output_schema` set on the agent) and deserializes the response text into `T` via `serde_json`. Deserialization failure returns `Error::Agent`. Will be extended to handle the function-calling loop (see Roadmap).
 
 ### `Error` (`src/error.rs`)
 

@@ -1,10 +1,9 @@
-//! Demonstrates structured output using a JSON schema derived from a Rust type.
+//! Demonstrates typed structured output using `AgentRunner::run_typed`.
 //!
-//! The agent extracts a research plan as a strongly-typed `ResearchPlan` struct.
-//! `schemars` generates the JSON schema from the type; the schema is set on the
-//! agent via `output_schema` so the model is constrained to produce JSON that
-//! matches it.  The response text is then deserialized back into `ResearchPlan`
-//! using `serde_json`.
+//! `schemars` generates the JSON Schema from `ResearchPlan` and it is set on the
+//! agent so the model is constrained to produce matching JSON. `run_typed` then
+//! deserializes the response directly into `ResearchPlan` — no `serde_json::from_str`
+//! at the call site.
 //!
 //! Run with:
 //! ```text
@@ -43,8 +42,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let _ = dotenvy::dotenv();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
-    let schema = schemars::schema_for!(ResearchPlan);
-
     let model = GeminiModel::builder(api_key, MODEL)
         .temperature(0.4)
         .build();
@@ -52,14 +49,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let agent = Agent::builder()
         .name("Research Planner")
         .instructions(INSTRUCTIONS)
-        .output_schema(schema)
+        .output_schema(schemars::schema_for!(ResearchPlan))
         .build();
 
-    let input = "learn about AI agents";
-    let result = AgentRunner::new(Box::new(model)).run(&agent, input).await?;
-
-    // The model is constrained to return valid JSON matching ResearchPlan.
-    let plan: ResearchPlan = serde_json::from_str(&result.output)?;
+    let plan: ResearchPlan = AgentRunner::new(Box::new(model))
+        .run_typed(&agent, "learn about AI agents")
+        .await?;
 
     println!("Title: {}", plan.title);
     println!("Tasks:");
