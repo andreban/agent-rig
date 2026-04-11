@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
+use serde::de::DeserializeOwned;
 use tracing::{debug, instrument};
 
 use crate::{
@@ -9,7 +10,6 @@ use crate::{
     model::{LlmModel, Message, ModelRequest, ModelStreamChunk, ToolCall},
     tool::ToolRegistry,
 };
-use serde::de::DeserializeOwned;
 
 /// The result of a completed agent run.
 #[derive(Debug, Clone)]
@@ -51,6 +51,10 @@ pub enum AgentEvent {
 /// The same runner can execute multiple agents; a [`ToolRegistry`] can be
 /// shared across multiple runners via [`Arc`].
 ///
+/// For single-turn use, call [`run`], [`run_typed`], or [`run_stream`] directly.
+/// For multi-turn conversations, use [`run_builder`] to obtain a [`RunBuilder`]
+/// and supply the prior conversation history via [`RunBuilder::history`].
+///
 /// # Examples
 ///
 /// ```no_run
@@ -74,6 +78,11 @@ pub enum AgentEvent {
 /// # Ok(())
 /// # }
 /// ```
+///
+/// [`run`]: AgentRunner::run
+/// [`run_typed`]: AgentRunner::run_typed
+/// [`run_stream`]: AgentRunner::run_stream
+/// [`run_builder`]: AgentRunner::run_builder
 pub struct AgentRunner {
     model: Box<dyn LlmModel>,
     registry: Arc<ToolRegistry>,
@@ -98,6 +107,62 @@ impl AgentRunner {
         AgentRunner { model, registry }
     }
 
+    /// Returns a [`RunBuilder`] for the given agent, enabling optional
+    /// conversation history to be provided before execution.
+    ///
+    /// Use this when you need multi-turn dialogue: supply prior turns via
+    /// [`RunBuilder::history`], then call one of the execution methods
+    /// ([`run`], [`run_typed`], [`run_stream`]) on the builder.
+    ///
+    /// For single-turn use, calling [`AgentRunner::run`] directly is simpler.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use rust_agent_kit::{Agent, AgentRunner};
+    /// use rust_agent_kit::model::Message;
+    /// use rust_agent_kit::models::gemini::GeminiModel;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = GeminiModel::builder("API_KEY", "gemini-2.5-pro-preview-03-25").build();
+    /// let agent = Agent::builder()
+    ///     .name("Assistant")
+    ///     .instructions("You are a helpful assistant.")
+    ///     .build();
+    /// let runner = AgentRunner::new(Box::new(model));
+    ///
+    /// // First turn.
+    /// let first = runner.run(&agent, "My name is Alice.").await?;
+    ///
+    /// // Build history for the second turn.
+    /// let history = vec![
+    ///     Message::user("My name is Alice."),
+    ///     Message::assistant(&first.output),
+    /// ];
+    ///
+    /// let second = runner
+    ///     .run_builder(&agent)
+    ///     .history(history)
+    ///     .run("What is my name?")
+    ///     .await?;
+    ///
+    /// println!("{}", second.output); // "Alice"
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`run`]: RunBuilder::run
+    /// [`run_typed`]: RunBuilder::run_typed
+    /// [`run_stream`]: RunBuilder::run_stream
+    pub fn run_builder<'a>(&'a self, agent: &'a Agent) -> RunBuilder<'a> {
+        RunBuilder {
+            runner: self,
+            agent,
+            history: Vec::new(),
+        }
+    }
+
     /// Streams observable events produced during an agent run.
     ///
     /// Drives the same agentic loop as [`run`] — validate tools, call the
@@ -112,105 +177,23 @@ impl AgentRunner {
     /// The stream ends when the model produces a final text response (no more
     /// tool calls). Errors are yielded as `Err` items and terminate the stream.
     ///
+    /// For multi-turn conversations, use [`run_builder`] and call
+    /// [`RunBuilder::run_stream`] instead.
+    ///
     /// # Errors
     ///
     /// Yields [`Error::Agent`] if a tool name is unregistered, the model calls
     /// an unregistered tool, or the model returns neither text nor tool calls.
     ///
     /// [`run`]: AgentRunner::run
+    /// [`run_builder`]: AgentRunner::run_builder
+    /// [`RunBuilder::run_stream`]: RunBuilder::run_stream
     pub fn run_stream<'a>(
         &'a self,
         agent: &'a Agent,
         input: &'a str,
     ) -> impl Stream<Item = Result<AgentEvent, Error>> + Send + 'a {
-        async_stream::try_stream! {
-            debug!(agent = agent.name(), "starting run");
-
-            // Validate that every declared tool name is registered.
-            for name in agent.tool_names() {
-                if !self.registry.contains(name) {
-                    Err(Error::Agent(format!(
-                        "tool '{name}' is declared by the agent but not registered in the registry"
-                    )))?;
-                }
-            }
-
-            // Resolve tool definitions from the registry.
-            let tools: Vec<_> = agent
-                .tool_names()
-                .iter()
-                .map(|name| self.registry.get(name).unwrap().definition())
-                .collect();
-
-            let mut messages = vec![Message::user(input)];
-            let mut turn = 0u32;
-
-            loop {
-                turn += 1;
-                debug!(turn, "calling model");
-
-                let request = ModelRequest {
-                    messages: messages.clone(),
-                    system: Some(agent.instructions().to_string()),
-                    output_schema: agent.output_schema().cloned(),
-                    tools: tools.clone(),
-                };
-
-                let mut model_stream = std::pin::pin!(self.model.generate_stream(request));
-                let mut turn_tool_calls: Vec<ToolCall> = Vec::new();
-                let mut has_text = false;
-
-                while let Some(chunk) = model_stream.next().await {
-                    match chunk? {
-                        ModelStreamChunk::Thinking(t) => yield AgentEvent::Thinking(t),
-                        ModelStreamChunk::TextDelta(t) => {
-                            has_text = true;
-                            yield AgentEvent::TextDelta(t);
-                        }
-                        ModelStreamChunk::ToolCall(call) => turn_tool_calls.push(call),
-                    }
-                }
-
-                if turn_tool_calls.is_empty() {
-                    if !has_text {
-                        Err(Error::Agent(
-                            "model returned neither text nor tool calls".to_string(),
-                        ))?;
-                    }
-                    debug!("run complete");
-                    break;
-                }
-
-                debug!(count = turn_tool_calls.len(), "model requested tool calls");
-
-                // Append all tool calls as a single assistant turn.
-                messages.push(Message::tool_calls(turn_tool_calls.clone()));
-
-                // Execute each tool and append one result message per call.
-                for call in &turn_tool_calls {
-                    debug!(tool = call.name, "executing tool");
-                    yield AgentEvent::ToolCallStarted {
-                        name: call.name.clone(),
-                        args: call.args.clone(),
-                    };
-                    let tool = self.registry.get(&call.name).ok_or_else(|| {
-                        Error::Agent(format!("model called unregistered tool '{}'", call.name))
-                    })?;
-                    let result = tool.call(call.args.clone()).await?;
-                    debug!(tool = call.name, "tool call complete");
-                    yield AgentEvent::ToolCallCompleted {
-                        name: call.name.clone(),
-                        result: result.clone(),
-                    };
-                    messages.push(Message::tool_result(
-                        call.id.clone(),
-                        call.name.clone(),
-                        result,
-                        call.provider_metadata.clone(),
-                    ));
-                }
-            }
-        }
+        self.run_builder(agent).run_stream_owned(input.to_string())
     }
 
     /// Runs the given agent with the provided user input and returns the result.
@@ -223,6 +206,8 @@ impl AgentRunner {
     /// The output is returned as a raw string. Use [`run_typed`] when the agent
     /// produces structured JSON that should be deserialized into a concrete type.
     ///
+    /// For multi-turn conversations, use [`run_builder`].
+    ///
     /// # Errors
     ///
     /// Returns [`Error::Agent`] if a tool name declared by the agent has no
@@ -230,17 +215,10 @@ impl AgentRunner {
     /// response.
     ///
     /// [`run_typed`]: AgentRunner::run_typed
+    /// [`run_builder`]: AgentRunner::run_builder
     #[instrument(skip(self, input), fields(agent = agent.name()))]
     pub async fn run(&self, agent: &Agent, input: &str) -> Result<AgentResult, Error> {
-        let mut output = String::new();
-        let stream = self.run_stream(agent, input);
-        futures_util::pin_mut!(stream);
-        while let Some(event) = stream.next().await {
-            if let AgentEvent::TextDelta(chunk) = event? {
-                output.push_str(&chunk);
-            }
-        }
-        Ok(AgentResult { output })
+        self.run_builder(agent).run(input).await
     }
 
     /// Runs the given agent and deserializes the output into `T`.
@@ -248,6 +226,8 @@ impl AgentRunner {
     /// This is a typed convenience wrapper around [`run`]. Set `output_schema`
     /// on the agent via [`AgentBuilder::output_schema`] to constrain the model
     /// to produce JSON that matches `T`; this method handles the deserialization.
+    ///
+    /// For multi-turn conversations, use [`run_builder`].
     ///
     /// # Errors
     ///
@@ -284,14 +264,212 @@ impl AgentRunner {
     /// ```
     ///
     /// [`run`]: AgentRunner::run
+    /// [`run_builder`]: AgentRunner::run_builder
     /// [`AgentBuilder::output_schema`]: crate::AgentBuilder::output_schema
     pub async fn run_typed<T>(&self, agent: &Agent, input: &str) -> Result<T, Error>
     where
         T: DeserializeOwned,
     {
-        let result = self.run(agent, input).await?;
+        self.run_builder(agent).run_typed(input).await
+    }
+}
+
+/// A builder for a single agent execution, produced by [`AgentRunner::run_builder`].
+///
+/// Optionally supply prior conversation turns with [`history`] before calling
+/// one of the execution methods: [`run`], [`run_typed`], or [`run_stream`].
+///
+/// The builder is consumed by the execution method, so each invocation needs a
+/// fresh builder (call [`AgentRunner::run_builder`] again for the next turn).
+///
+/// [`history`]: RunBuilder::history
+/// [`run`]: RunBuilder::run
+/// [`run_typed`]: RunBuilder::run_typed
+/// [`run_stream`]: RunBuilder::run_stream
+pub struct RunBuilder<'a> {
+    runner: &'a AgentRunner,
+    agent: &'a Agent,
+    history: Vec<Message>,
+}
+
+impl<'a> RunBuilder<'a> {
+    /// Sets the prior conversation history for this run.
+    ///
+    /// The messages are prepended to the conversation before the new user
+    /// input supplied to the execution method. The caller is responsible for
+    /// maintaining and extending the history across turns.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use rust_agent_kit::model::Message;
+    /// # use rust_agent_kit::{Agent, AgentRunner};
+    /// # use rust_agent_kit::models::gemini::GeminiModel;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let model = GeminiModel::builder("KEY", "gemini-2.5-flash").build();
+    /// # let agent = Agent::builder().name("A").instructions("i").build();
+    /// # let runner = AgentRunner::new(Box::new(model));
+    /// let history = vec![
+    ///     Message::user("My name is Alice."),
+    ///     Message::assistant("Got it, Alice!"),
+    /// ];
+    /// let result = runner.run_builder(&agent).history(history).run("What is my name?").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn history(mut self, history: Vec<Message>) -> Self {
+        self.history = history;
+        self
+    }
+
+    /// Streams observable events produced during the agent run.
+    ///
+    /// Drives the agentic loop using the prior [`history`] (if set) plus the
+    /// new `input` turn, yielding [`AgentEvent`] values as the run progresses.
+    ///
+    /// [`history`]: RunBuilder::history
+    pub fn run_stream(self, input: &str) -> impl Stream<Item = Result<AgentEvent, Error>> + Send + 'a {
+        self.run_stream_owned(input.to_string())
+    }
+
+    /// Runs the agent and returns the final text output.
+    ///
+    /// Appends `input` as a new user turn to the prior [`history`] (if set),
+    /// then drives the agentic loop until the model produces a final text
+    /// response.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Agent`] if a tool name declared by the agent has no
+    /// registered implementation, or if the model loop ends without a text
+    /// response.
+    ///
+    /// [`history`]: RunBuilder::history
+    pub async fn run(self, input: &str) -> Result<AgentResult, Error> {
+        let mut output = String::new();
+        let stream = self.run_stream(input);
+        futures_util::pin_mut!(stream);
+        while let Some(event) = stream.next().await {
+            if let AgentEvent::TextDelta(chunk) = event? {
+                output.push_str(&chunk);
+            }
+        }
+        Ok(AgentResult { output })
+    }
+
+    /// Runs the agent and deserializes the output into `T`.
+    ///
+    /// A typed convenience wrapper around [`run`]. Deserialization failure
+    /// returns [`Error::Agent`].
+    ///
+    /// [`run`]: RunBuilder::run
+    pub async fn run_typed<T>(self, input: &str) -> Result<T, Error>
+    where
+        T: DeserializeOwned,
+    {
+        let result = self.run(input).await?;
         serde_json::from_str::<T>(&result.output)
             .map_err(|e| Error::Agent(format!("failed to deserialize structured output: {e}")))
+    }
+
+    /// Internal: takes ownership of the input string so the returned stream
+    /// can be `'a` without borrowing `input` from the caller's stack frame.
+    fn run_stream_owned(
+        self,
+        input: String,
+    ) -> impl Stream<Item = Result<AgentEvent, Error>> + Send + 'a {
+        let RunBuilder { runner, agent, mut history } = self;
+        history.push(Message::user(input));
+
+        async_stream::try_stream! {
+            debug!(agent = agent.name(), "starting run");
+
+            // Validate that every declared tool name is registered.
+            for name in agent.tool_names() {
+                if !runner.registry.contains(name) {
+                    Err(Error::Agent(format!(
+                        "tool '{name}' is declared by the agent but not registered in the registry"
+                    )))?;
+                }
+            }
+
+            // Resolve tool definitions from the registry.
+            let tools: Vec<_> = agent
+                .tool_names()
+                .iter()
+                .map(|name| runner.registry.get(name).unwrap().definition())
+                .collect();
+
+            let mut messages = history;
+            let mut turn = 0u32;
+
+            loop {
+                turn += 1;
+                debug!(turn, "calling model");
+
+                let request = ModelRequest {
+                    messages: messages.clone(),
+                    system: Some(agent.instructions().to_string()),
+                    output_schema: agent.output_schema().cloned(),
+                    tools: tools.clone(),
+                };
+
+                let mut model_stream = std::pin::pin!(runner.model.generate_stream(request));
+                let mut turn_tool_calls: Vec<ToolCall> = Vec::new();
+                let mut has_text = false;
+
+                while let Some(chunk) = model_stream.next().await {
+                    match chunk? {
+                        ModelStreamChunk::Thinking(t) => yield AgentEvent::Thinking(t),
+                        ModelStreamChunk::TextDelta(t) => {
+                            has_text = true;
+                            yield AgentEvent::TextDelta(t);
+                        }
+                        ModelStreamChunk::ToolCall(call) => turn_tool_calls.push(call),
+                    }
+                }
+
+                if turn_tool_calls.is_empty() {
+                    if !has_text {
+                        Err(Error::Agent(
+                            "model returned neither text nor tool calls".to_string(),
+                        ))?;
+                    }
+                    debug!("run complete");
+                    break;
+                }
+
+                debug!(count = turn_tool_calls.len(), "model requested tool calls");
+
+                // Append all tool calls as a single assistant turn.
+                messages.push(Message::tool_calls(turn_tool_calls.clone()));
+
+                // Execute each tool and append one result message per call.
+                for call in &turn_tool_calls {
+                    debug!(tool = call.name, "executing tool");
+                    yield AgentEvent::ToolCallStarted {
+                        name: call.name.clone(),
+                        args: call.args.clone(),
+                    };
+                    let tool = runner.registry.get(&call.name).ok_or_else(|| {
+                        Error::Agent(format!("model called unregistered tool '{}'", call.name))
+                    })?;
+                    let result = tool.call(call.args.clone()).await?;
+                    debug!(tool = call.name, "tool call complete");
+                    yield AgentEvent::ToolCallCompleted {
+                        name: call.name.clone(),
+                        result: result.clone(),
+                    };
+                    messages.push(Message::tool_result(
+                        call.id.clone(),
+                        call.name.clone(),
+                        result,
+                        call.provider_metadata.clone(),
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -547,8 +725,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_stream_yields_thinking_events() {
-        use std::pin::Pin;
         use futures_util::stream::Stream;
+        use std::pin::Pin;
 
         struct ThinkingModel;
 
@@ -634,5 +812,87 @@ mod tests {
 
         let req = capture.captured.lock().unwrap().clone().unwrap();
         assert_eq!(req.system.as_deref(), Some("System prompt."));
+    }
+
+    // --- RunBuilder / multi-turn tests ---
+
+    /// A model that returns the full message list length as its response,
+    /// letting tests inspect what history was passed in.
+    struct MessageCountModel;
+
+    #[async_trait]
+    impl LlmModel for MessageCountModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
+            Ok(ModelResponse {
+                text: Some(request.messages.len().to_string()),
+                tool_calls: vec![],
+                thinking: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn run_builder_without_history_passes_single_message() {
+        let runner = AgentRunner::new(Box::new(MessageCountModel));
+        let agent = Agent::builder().name("T").instructions("i").build();
+
+        // No history → only the new user turn should be in the request.
+        let result = runner.run_builder(&agent).run("hello").await.unwrap();
+        assert_eq!(result.output, "1");
+    }
+
+    #[tokio::test]
+    async fn run_builder_history_is_prepended_to_messages() {
+        let runner = AgentRunner::new(Box::new(MessageCountModel));
+        let agent = Agent::builder().name("T").instructions("i").build();
+
+        let history = vec![
+            Message::user("first turn"),
+            Message::assistant("first reply"),
+        ];
+
+        // 2 history messages + 1 new user turn = 3 total.
+        let result = runner
+            .run_builder(&agent)
+            .history(history)
+            .run("second turn")
+            .await
+            .unwrap();
+        assert_eq!(result.output, "3");
+    }
+
+    #[tokio::test]
+    async fn run_builder_run_stream_with_history() {
+        let runner = AgentRunner::new(Box::new(MessageCountModel));
+        let agent = Agent::builder().name("T").instructions("i").build();
+
+        let history = vec![Message::user("q1"), Message::assistant("a1")];
+
+        let stream = runner.run_builder(&agent).history(history).run_stream("q2");
+        futures_util::pin_mut!(stream);
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            if let AgentEvent::TextDelta(chunk) = event.unwrap() {
+                text.push_str(&chunk);
+            }
+        }
+        // 2 history + 1 new = 3.
+        assert_eq!(text, "3");
+    }
+
+    #[tokio::test]
+    async fn run_builder_run_typed_with_history() {
+        let runner = AgentRunner::new(Box::new(JsonModel(r#"{"x":5,"y":6}"#.to_string())));
+        let agent = Agent::builder().name("T").instructions("i").build();
+
+        let history = vec![Message::user("prev"), Message::assistant("ack")];
+
+        let point: Point = runner
+            .run_builder(&agent)
+            .history(history)
+            .run_typed("give me a point")
+            .await
+            .unwrap();
+        assert_eq!(point, Point { x: 5, y: 6 });
     }
 }
