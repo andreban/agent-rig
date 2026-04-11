@@ -132,6 +132,72 @@ Owns the LLM model and a shared reference to a `ToolRegistry`. The same runner c
 
 `run_typed<T>` is a thin typed wrapper over `run` that deserializes the final text output into `T` via `serde_json`. Deserialization failure returns `Error::Agent`.
 
+### `AgentTool` (`src/agent_tool.rs`)
+
+`AgentTool` wraps an `AgentRunner` + `Agent` pair into a value that implements `Tool`, so any agent can delegate to a child agent as if it were a regular tool.
+
+```rust
+pub struct AgentTool {
+    definition: ToolDefinition,   // name, description, parameters exposed to the parent model
+    agent: Agent,
+    runner: AgentRunner,
+}
+
+impl AgentTool {
+    /// Creates an `AgentTool` from a pre-built `ToolDefinition`, an `Agent`, and an `AgentRunner`.
+    pub fn new(definition: ToolDefinition, agent: Agent, runner: AgentRunner) -> Self;
+}
+
+#[async_trait]
+impl Tool for AgentTool {
+    fn definition(&self) -> ToolDefinition { /* returns self.definition.clone() */ }
+    async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, Error>;
+}
+```
+
+**How `call` works:**
+
+1. Serializes `args` to a JSON string (via `serde_json::to_string`) and passes it as the input to `self.runner.run(&self.agent, &input)`.
+2. The sub-agent processes the input through its own agentic loop (which may invoke its own tools).
+3. Returns `json!({ "output": result.output })` so the parent model receives a structured result it can read.
+
+**Design rationale:**
+
+- `AgentTool` **owns** its `AgentRunner` (not a shared reference). Each distinct sub-agent tool maintains its own model binding. Multiple concurrent `call` invocations are safe because `AgentRunner::run` takes `&self`.
+- The caller supplies the `ToolDefinition` explicitly: the `name` is what the parent model uses to invoke the sub-agent, the `description` guides the parent model's routing decision, and `parameters` describes what args the parent model should pass (e.g., `{ "query": "string" }`).
+- `AgentTool` lives in its own module (`src/agent_tool.rs`) to avoid a circular dependency: `tool.rs` must not import `runner.rs`, and `runner.rs` must not import `agent_tool.rs`.
+
+**Usage pattern:**
+
+```rust
+// Child agent + its own model
+let child_model = GeminiModel::builder(api_key, "gemini-3.1-flash-lite-preview").build();
+let child_agent = Agent::builder()
+    .name("Summariser")
+    .instructions("Summarise the text provided in the 'text' field of the JSON input.")
+    .build();
+let child_runner = AgentRunner::new(Box::new(child_model));
+
+// Wrap as a tool for the parent
+let summarise_tool = AgentTool::new(
+    ToolDefinition {
+        name: "summarise".to_string(),
+        description: "Summarises a long piece of text.".to_string(),
+        parameters: json!({
+            "type": "object",
+            "properties": { "text": { "type": "string" } },
+            "required": ["text"]
+        }),
+    },
+    child_agent,
+    child_runner,
+);
+
+// Register with the parent runner
+let registry = Arc::new(ToolRegistry::new().register(Box::new(summarise_tool)));
+let parent_runner = AgentRunner::with_registry(Box::new(parent_model), registry);
+```
+
 ### `Error` (`src/error.rs`)
 
 ```rust
@@ -164,18 +230,19 @@ pub enum Error {
 
 ```
 src/
-  lib.rs          — crate root, public re-exports
-  error.rs        — Error enum
-  model.rs        — LlmModel trait, Message, MessageContent, ModelRequest, ModelResponse, ToolCall, Role
-  tool.rs         — ToolDefinition, Tool trait, ToolRegistry
-  agent.rs        — Agent, AgentBuilder
-  runner.rs       — AgentRunner, AgentResult
+  lib.rs           — crate root, public re-exports
+  error.rs         — Error enum
+  model.rs         — LlmModel trait, Message, MessageContent, ModelRequest, ModelResponse, ToolCall, Role
+  tool.rs          — ToolDefinition, Tool trait, ToolRegistry
+  agent.rs         — Agent, AgentBuilder
+  runner.rs        — AgentRunner, AgentResult
+  agent_tool.rs    — AgentTool (wraps AgentRunner + Agent as a Tool)
   models/
-    mod.rs        — pub mod gemini; pub mod ollama;
-    gemini.rs     — GeminiModel, GeminiModelBuilder
-    ollama.rs     — OllamaModel, OllamaModelBuilder
+    mod.rs         — pub mod gemini; pub mod ollama;
+    gemini.rs      — GeminiModel, GeminiModelBuilder
+    ollama.rs      — OllamaModel, OllamaModelBuilder
 examples/
-  simple_agent.rs — runnable Gemini example
+  simple_agent.rs  — runnable Gemini example
 tests/
   integration_gemini.rs   — live Gemini integration tests
   integration_ollama.rs   — live Ollama integration tests
@@ -191,6 +258,7 @@ tests/
 
 The following capabilities are planned but not yet implemented:
 
-1. **Multi-turn conversations.** Allow callers to pass existing conversation history into `AgentRunner::run` for stateful dialogue.
-2. **Streaming responses.** Expose a streaming variant of `AgentRunner::run` that yields tokens incrementally.
-3. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.
+1. **Agent as a tool (`AgentTool`).** Wrap an `AgentRunner` + `Agent` pair as a `Tool` so a parent agent can delegate to a child agent. See the `AgentTool` section above for the full design.
+2. **Multi-turn conversations.** Allow callers to pass existing conversation history into `AgentRunner::run` for stateful dialogue.
+3. **Streaming responses.** Expose a streaming variant of `AgentRunner::run` that yields tokens incrementally.
+4. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.

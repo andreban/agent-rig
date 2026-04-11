@@ -26,6 +26,7 @@
 //! # }
 //! ```
 
+pub mod agent_tool;
 pub mod error;
 pub mod model;
 pub mod models;
@@ -35,4 +36,5 @@ mod agent;
 mod runner;
 
 pub use agent::{Agent, AgentBuilder};
+pub use agent_tool::AgentTool;
 pub use runner::{AgentResult, AgentRunner};

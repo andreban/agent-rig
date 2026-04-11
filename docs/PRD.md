@@ -13,6 +13,7 @@ Building agentic applications in Rust today requires tight coupling to a specifi
 - **Unified agent API.** Define an agent once (name, instructions, model) and run it against any supported provider.
 - **Easy provider swap.** Changing the LLM requires swapping one `Box<dyn LlmModel>` — nothing else changes.
 - **Agentic loop support.** The runner handles the request/response loop, including future function-calling (tool use) cycles.
+- **Agent composition.** An agent can be used as a tool by another agent, enabling hierarchical multi-agent pipelines where a parent agent delegates sub-tasks to specialized child agents.
 - **Serializable agents.** `Agent` (including its tool definitions) must be serializable to and deserializable from formats like JSON or YAML, so agent configurations can be stored in files and loaded at runtime.
 - **Low boilerplate.** Builder patterns for all major types keep call-site code concise and readable.
 - **Testability.** The `LlmModel` trait can be implemented by test doubles, so agent logic can be unit-tested without network calls.
