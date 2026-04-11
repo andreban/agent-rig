@@ -45,9 +45,10 @@ struct ResearchPlan {
 /// `$schema`, `title`, and `definitions`.  This function strips those fields and
 /// inlines every `$ref` reference so the result is self-contained.
 fn to_gemini_schema(mut root: Value) -> Value {
+    // schemars may use either `definitions` (draft-07) or `$defs` (2019-09+).
     let definitions = root
         .as_object_mut()
-        .and_then(|o| o.remove("definitions"))
+        .and_then(|o| o.remove("definitions").or_else(|| o.remove("$defs")))
         .unwrap_or(Value::Null);
 
     resolve_refs(&mut root, &definitions);
@@ -60,7 +61,11 @@ fn resolve_refs(value: &mut Value, definitions: &Value) {
             // Inline $ref before doing anything else with this node.
             if let Some(ref_val) = obj.get("$ref").cloned() {
                 if let Some(ref_str) = ref_val.as_str() {
-                    if let Some(def_name) = ref_str.strip_prefix("#/definitions/") {
+                    // Support both #/definitions/<name> and #/$defs/<name>.
+                    let def_name = ref_str
+                        .strip_prefix("#/definitions/")
+                        .or_else(|| ref_str.strip_prefix("#/$defs/"));
+                    if let Some(def_name) = def_name {
                         if let Some(def) = definitions.get(def_name) {
                             let mut resolved = def.clone();
                             resolve_refs(&mut resolved, definitions);
