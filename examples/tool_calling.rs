@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tracing_subscriber::EnvFilter;
 use rust_agent_kit::{
     Agent, AgentRunner,
     error::Error,
@@ -104,6 +105,7 @@ impl Tool for CelsiusToFahrenheitTool {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
+    tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).init();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
     let registry = Arc::new(

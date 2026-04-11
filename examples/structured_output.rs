@@ -14,8 +14,9 @@ use rust_agent_kit::{Agent, AgentRunner, models::gemini::GeminiModel};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use tracing_subscriber::EnvFilter;
 
-const MODEL: &str = "gemini-2.5-flash";
+const MODEL: &str = "gemini-3.1-flash-lite-preview";
 
 const INSTRUCTIONS: &str = "\
 You are a research planning assistant. \
@@ -40,6 +41,7 @@ struct ResearchPlan {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let _ = dotenvy::dotenv();
+    tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).init();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
     let model = GeminiModel::builder(api_key, MODEL)

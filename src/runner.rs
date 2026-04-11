@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tracing::{debug, instrument};
+
 use crate::{
     agent::Agent,
     error::Error,
@@ -85,7 +87,10 @@ impl AgentRunner {
     /// response.
     ///
     /// [`run_typed`]: AgentRunner::run_typed
+    #[instrument(skip(self, input), fields(agent = agent.name()))]
     pub async fn run(&self, agent: &Agent, input: &str) -> Result<AgentResult, Error> {
+        debug!("starting run");
+
         // Validate that every declared tool name is registered.
         for name in agent.tool_names() {
             if !self.registry.contains(name) {
@@ -103,8 +108,12 @@ impl AgentRunner {
             .collect();
 
         let mut messages = vec![Message::user(input)];
+        let mut turn = 0u32;
 
         loop {
+            turn += 1;
+            debug!(turn, "calling model");
+
             let request = ModelRequest {
                 messages: messages.clone(),
                 system: Some(agent.instructions().to_string()),
@@ -119,18 +128,23 @@ impl AgentRunner {
                 let text = response.text.ok_or_else(|| {
                     Error::Agent("model returned neither text nor tool calls".to_string())
                 })?;
+                debug!("run complete");
                 return Ok(AgentResult { output: text });
             }
+
+            debug!(count = response.tool_calls.len(), "model requested tool calls");
 
             // Append all tool calls as a single assistant turn.
             messages.push(Message::tool_calls(response.tool_calls.clone()));
 
             // Execute each tool and append one result message per call.
             for call in &response.tool_calls {
+                debug!(tool = call.name, "executing tool");
                 let tool = self.registry.get(&call.name).ok_or_else(|| {
                     Error::Agent(format!("model called unregistered tool '{}'", call.name))
                 })?;
                 let result = tool.call(call.args.clone()).await?;
+                debug!(tool = call.name, "tool call complete");
                 messages.push(Message::tool_result(
                     call.id.clone(),
                     call.name.clone(),
