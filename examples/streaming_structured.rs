@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = GeminiModel::builder(api_key, MODEL)
         .thinking_config(ThinkingConfig {
             include_thoughts: true,
-            thinking_level: Some(ThinkingLevel::Low),
+            thinking_level: Some(ThinkingLevel::High),
             ..Default::default()
         })
         .build();
@@ -182,7 +182,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report: WeatherReport = serde_json::from_str(&output)?;
     println!("--- Typed WeatherReport ---");
     for city in &report.cities {
-        println!("  {}: {:.1}°C / {:.1}°F", city.city, city.celsius, city.fahrenheit);
+        println!(
+            "  {}: {:.1}°C / {:.1}°F",
+            city.city, city.celsius, city.fahrenheit
+        );
     }
     println!("Summary: {}", report.summary);
 
