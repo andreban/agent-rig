@@ -1,5 +1,7 @@
+use std::pin::Pin;
+
 use async_trait::async_trait;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use ollama_rs::{
     OllamaClient,
     types::chat::{
@@ -11,7 +13,7 @@ use ollama_rs::{
 
 use crate::{
     error::Error,
-    model::{LlmModel, MessageContent, ModelRequest, ModelResponse, Role, ToolCall},
+    model::{LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role, ToolCall},
     tool::ToolDefinition,
 };
 
@@ -141,67 +143,88 @@ fn to_ollama_tool(def: &ToolDefinition) -> OllamaTool {
     }
 }
 
+/// Converts an Ollama tool call into the crate's [`ToolCall`] type.
+///
+/// Ollama has no call ID; the function name is used as a stable identifier
+/// (sufficient since we don't need to echo an ID back to Ollama).
+fn to_tool_call(tc: &OllamaToolCall) -> ToolCall {
+    ToolCall {
+        id: tc.function.name.clone(),
+        name: tc.function.name.clone(),
+        args: tc.function.arguments.clone(),
+        provider_metadata: None,
+    }
+}
+
+/// Builds an Ollama [`ChatRequest`] from a [`ModelRequest`].
+fn build_chat_request(
+    model: &str,
+    options: Option<Options>,
+    request: ModelRequest,
+) -> Result<ChatRequest, Error> {
+    let mut messages: Vec<OllamaMessage> = Vec::new();
+
+    if let Some(system) = request.system {
+        messages.push(OllamaMessage::system(system));
+    }
+
+    for msg in request.messages {
+        let ollama_msg = match msg.content {
+            MessageContent::Text(text) => match msg.role {
+                Role::User => OllamaMessage::user(text),
+                Role::Assistant => OllamaMessage {
+                    content: text,
+                    role: OllamaRole::Assistant,
+                    tool_calls: vec![],
+                },
+            },
+            MessageContent::ToolCalls(calls) => OllamaMessage {
+                content: String::new(),
+                role: OllamaRole::Assistant,
+                tool_calls: calls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, call)| OllamaToolCall {
+                        function: ToolCallFunction {
+                            name: call.name.clone(),
+                            arguments: call.args.clone(),
+                            index: i,
+                        },
+                    })
+                    .collect(),
+            },
+            MessageContent::ToolResult { result, .. } => {
+                OllamaMessage::tool_response(&result)
+                    .map_err(|e| Error::Provider(e.to_string()))?
+            }
+        };
+        messages.push(ollama_msg);
+    }
+
+    let mut builder = ChatRequest::builder(model).messages(messages);
+
+    if let Some(opts) = options {
+        builder = builder.options(opts);
+    }
+
+    if !request.tools.is_empty() {
+        let ollama_tools: Vec<OllamaTool> =
+            request.tools.iter().map(to_ollama_tool).collect();
+        // Ollama requires streaming to be disabled when using tools.
+        builder = builder.tools(ollama_tools).stream(false);
+    }
+
+    if let Some(schema) = request.output_schema {
+        builder = builder.format(schema);
+    }
+
+    Ok(builder.build())
+}
+
 #[async_trait]
 impl LlmModel for OllamaModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
-        let mut messages: Vec<OllamaMessage> = Vec::new();
-
-        if let Some(system) = &request.system {
-            messages.push(OllamaMessage::system(system.clone()));
-        }
-
-        for msg in &request.messages {
-            let ollama_msg = match &msg.content {
-                MessageContent::Text(text) => match msg.role {
-                    Role::User => OllamaMessage::user(text.clone()),
-                    Role::Assistant => OllamaMessage {
-                        content: text.clone(),
-                        role: OllamaRole::Assistant,
-                        tool_calls: vec![],
-                    },
-                },
-                MessageContent::ToolCalls(calls) => OllamaMessage {
-                    content: String::new(),
-                    role: OllamaRole::Assistant,
-                    tool_calls: calls
-                        .iter()
-                        .enumerate()
-                        .map(|(i, call)| OllamaToolCall {
-                            function: ToolCallFunction {
-                                name: call.name.clone(),
-                                arguments: call.args.clone(),
-                                index: i,
-                            },
-                        })
-                        .collect::<Vec<_>>(),
-                },
-                MessageContent::ToolResult { result, .. } => {
-                    OllamaMessage::tool_response(result)
-                        .map_err(|e| Error::Provider(e.to_string()))?
-                }
-            };
-            messages.push(ollama_msg);
-        }
-
-        let mut builder = ChatRequest::builder(&self.model).messages(messages);
-
-        if let Some(options) = self.options.clone() {
-            builder = builder.options(options);
-        }
-
-        // Attach tools when the request includes them.
-        if !request.tools.is_empty() {
-            let ollama_tools: Vec<OllamaTool> =
-                request.tools.iter().map(to_ollama_tool).collect();
-            builder = builder.tools(ollama_tools).stream(false);
-        }
-
-        if let Some(schema) = request.output_schema {
-            builder = builder.format(schema);
-        }
-
-        let chat_request = builder.build();
-
+        let chat_request = build_chat_request(&self.model, self.options.clone(), request)?;
         let mut stream = self.client.chat(chat_request);
         let mut output = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
@@ -210,20 +233,7 @@ impl LlmModel for OllamaModel {
             let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
 
             if !response.message.tool_calls.is_empty() {
-                tool_calls = response
-                    .message
-                    .tool_calls
-                    .iter()
-                    .map(|tc| ToolCall {
-                        // Ollama has no call ID; use the function name as a
-                        // stable identifier (sufficient since we don't need to
-                        // echo an ID back to Ollama).
-                        id: tc.function.name.clone(),
-                        name: tc.function.name.clone(),
-                        args: tc.function.arguments.clone(),
-                        provider_metadata: None,
-                    })
-                    .collect();
+                tool_calls = response.message.tool_calls.iter().map(to_tool_call).collect();
             }
 
             output.push_str(&response.message.content);
@@ -234,15 +244,44 @@ impl LlmModel for OllamaModel {
         }
 
         if !tool_calls.is_empty() {
-            return Ok(ModelResponse {
-                text: None,
-                tool_calls,
-            });
+            return Ok(ModelResponse { text: None, tool_calls, thinking: None });
         }
 
-        Ok(ModelResponse {
-            text: Some(output),
-            tool_calls: vec![],
+        Ok(ModelResponse { text: Some(output), tool_calls: vec![], thinking: None })
+    }
+
+    /// Streams the Ollama response as [`ModelStreamChunk`] values.
+    ///
+    /// When the request has no tools, text chunks are emitted as
+    /// [`ModelStreamChunk::TextDelta`] as they arrive from the server.
+    /// When the request includes tools, Ollama requires non-streaming mode;
+    /// tool calls are collected from the single response and emitted as
+    /// [`ModelStreamChunk::ToolCall`] chunks.
+    fn generate_stream(
+        &self,
+        request: ModelRequest,
+    ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
+        Box::pin(async_stream::stream! {
+            let chat_request = build_chat_request(&self.model, self.options.clone(), request)?;
+            let mut stream = self.client.chat(chat_request);
+
+            while let Some(chunk) = stream.next().await {
+                let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
+
+                // Tool calls come as a batch in non-streaming mode.
+                for tc in &response.message.tool_calls {
+                    yield Ok(ModelStreamChunk::ToolCall(to_tool_call(tc)));
+                }
+
+                // Emit text content as a delta (empty strings are skipped).
+                if !response.message.content.is_empty() {
+                    yield Ok(ModelStreamChunk::TextDelta(response.message.content.clone()));
+                }
+
+                if response.done {
+                    break;
+                }
+            }
         })
     }
 }

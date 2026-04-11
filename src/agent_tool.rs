@@ -122,7 +122,7 @@ mod tests {
                     None
                 }
             });
-            Ok(ModelResponse { text: echo, tool_calls: vec![] })
+            Ok(ModelResponse { text: echo, tool_calls: vec![], thinking: None })
         }
     }
 

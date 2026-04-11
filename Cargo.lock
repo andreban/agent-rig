@@ -1267,6 +1267,7 @@ dependencies = [
 name = "rust-agent-kit"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "dotenvy",
  "futures-util",
