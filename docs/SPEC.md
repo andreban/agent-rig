@@ -158,6 +158,8 @@ pub struct AgentRunner {
 impl AgentRunner {
     pub fn new(model: Box<dyn LlmModel>) -> Self;   // empty registry
     pub fn with_registry(model: Box<dyn LlmModel>, registry: Arc<ToolRegistry>) -> Self;
+    pub fn run_builder<'a>(&'a self, agent: &'a Agent) -> RunBuilder<'a>;
+    // Single-turn convenience methods (delegate to run_builder):
     pub fn run_stream<'a>(&'a self, agent: &'a Agent, input: &'a str)
         -> impl Stream<Item = Result<AgentEvent, Error>> + Send + 'a;
     pub async fn run(&self, agent: &Agent, input: &str) -> Result<AgentResult, Error>;
@@ -167,11 +169,50 @@ impl AgentRunner {
 
 Owns the LLM model and a shared reference to a `ToolRegistry`. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
 
-`run_stream` drives the agentic loop using `model.generate_stream` per turn, yielding [`AgentEvent`] values as the run progresses. It validates tool names, then loops: stream model output → collect tool calls and forward `Thinking`/`TextDelta` events → emit `ToolCallStarted`/`ToolCallCompleted` around each execution → repeat until the model produces a text-only turn.
+`run_builder` is the primary entry point and returns a [`RunBuilder`] that carries optional conversation history. It is the correct path for multi-turn (stateful) dialogue. The single-turn convenience methods (`run`, `run_typed`, `run_stream`) delegate to it with an empty history.
+
+### `RunBuilder` (`src/runner.rs`)
+
+```rust
+pub struct RunBuilder<'a> { /* runner, agent, history */ }
+
+impl<'a> RunBuilder<'a> {
+    pub fn history(self, history: Vec<Message>) -> Self;
+    pub fn run_stream(self, input: &str) -> impl Stream<Item = Result<AgentEvent, Error>> + Send + 'a;
+    pub async fn run(self, input: &str) -> Result<AgentResult, Error>;
+    pub async fn run_typed<T: DeserializeOwned>(self, input: &str) -> Result<T, Error>;
+}
+```
+
+Produced by `AgentRunner::run_builder`. Optionally accepts prior conversation turns via `history` before execution. The builder is consumed by the execution method; callers obtain a fresh builder for each turn.
+
+The agentic loop lives in `RunBuilder`: it validates tool names, prepends `history` to the new user turn, then loops — stream model output → collect tool calls, forward `Thinking`/`TextDelta` events → emit `ToolCallStarted`/`ToolCallCompleted` around each execution → repeat until the model produces a text-only turn.
 
 `run` is a convenience collector over `run_stream` that concatenates all `TextDelta` events into `AgentResult { output: String }`.
 
 `run_typed<T>` is a thin typed wrapper over `run` that deserializes the final text output into `T` via `serde_json`. Deserialization failure returns `Error::Agent`.
+
+**Multi-turn usage pattern:**
+
+```rust
+// First turn (no history).
+let first = runner.run(&agent, "My name is Alice.").await?;
+
+// Build history; caller is responsible for maintaining it across turns.
+let history = vec![
+    Message::user("My name is Alice."),
+    Message::assistant(&first.output),
+];
+
+// Second turn with history.
+let second = runner
+    .run_builder(&agent)
+    .history(history)
+    .run("What is my name?")
+    .await?;
+```
+
+The runner remains stateless; the caller owns and extends the history.
 
 ### `AgentTool` (`src/agent_tool.rs`)
 
@@ -301,6 +342,6 @@ tests/
 
 The following capabilities are planned but not yet implemented:
 
-1. **Multi-turn conversations.** Allow callers to pass existing conversation history into `AgentRunner::run` for stateful dialogue.
+1. ~~**Multi-turn conversations.**~~ Implemented via `AgentRunner::run_builder` + `RunBuilder::history`.
 2. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.
 3. **True token-by-token Gemini streaming.** `GeminiModel` currently uses the default `generate_stream` (wraps `generate`), so text arrives as a single `TextDelta` after the full response is received. A native implementation using `generate_content_stream` would emit tokens incrementally as they are generated. Thinking tokens and tool calls are already correctly separated and emitted.
