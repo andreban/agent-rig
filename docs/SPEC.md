@@ -186,7 +186,7 @@ impl<'a> RunBuilder<'a> {
 
 Produced by `AgentRunner::run_builder`. Optionally accepts prior conversation turns via `history` before execution. The builder is consumed by the execution method; callers obtain a fresh builder for each turn.
 
-The agentic loop lives in `RunBuilder`: it validates tool names, prepends `history` to the new user turn, then loops — stream model output → collect tool calls, forward `Thinking`/`TextDelta` events → emit `ToolCallStarted`/`ToolCallCompleted` around each execution → repeat until the model produces a text-only turn.
+The agentic loop lives in `RunBuilder`: it validates tool names, prepends `history` to the new user turn, then loops — stream model output → collect tool calls, forward `Thinking`/`TextDelta` events → emit all `ToolCallStarted` events → execute all tool calls **concurrently** (via `futures_util::future::join_all`) → emit all `ToolCallCompleted` events in the original call order → repeat until the model produces a text-only turn.
 
 `run` is a convenience collector over `run_stream` that concatenates all `TextDelta` events into `AgentResult { output: String }`.
 
