@@ -57,7 +57,7 @@ pub enum AgentEvent {
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```no_run,ignore
 /// use rust_agent_kit::{Agent, AgentRunner};
 /// use rust_agent_kit::models::gemini::GeminiModel;
 ///
@@ -118,7 +118,7 @@ impl AgentRunner {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```no_run,ignore
     /// use rust_agent_kit::{Agent, AgentRunner};
     /// use rust_agent_kit::model::Message;
     /// use rust_agent_kit::models::gemini::GeminiModel;
@@ -236,7 +236,7 @@ impl AgentRunner {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```no_run,ignore
     /// use rust_agent_kit::{Agent, AgentRunner};
     /// use rust_agent_kit::models::gemini::GeminiModel;
     /// use schemars::JsonSchema;
@@ -301,7 +301,7 @@ impl<'a> RunBuilder<'a> {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```no_run,ignore
     /// use rust_agent_kit::model::Message;
     /// # use rust_agent_kit::{Agent, AgentRunner};
     /// # use rust_agent_kit::models::gemini::GeminiModel;

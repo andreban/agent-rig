@@ -4,7 +4,8 @@
 //!
 //! ## Quick Start
 //!
-//! ```no_run
+//! ```no_run,ignore
+//! // Requires the `gemini` feature: `cargo add rust-agent-kit --features gemini`
 //! use rust_agent_kit::{Agent, AgentRunner};
 //! use rust_agent_kit::models::gemini::GeminiModel;
 //!

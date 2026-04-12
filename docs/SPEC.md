@@ -309,6 +309,30 @@ pub enum Error {
 - Structured output: when `ModelRequest::output_schema` is set, the schema is passed to the Ollama `format` field (requires Ollama ≥ 0.5 and a model that supports structured output).
 - Implements `generate_stream` natively: emits `TextDelta` chunks as they arrive (no-tools path); emits `ToolCall` chunks from the single-shot response when tools are present (Ollama requires `stream(false)` for tool calls).
 
+## Cargo Features
+
+Provider adapters are opt-in via Cargo features. The core types (`LlmModel`, `Agent`, `AgentRunner`, `Tool`, `Error`, etc.) are always available regardless of which features are enabled.
+
+| Feature    | Enables                          |
+|------------|----------------------------------|
+| `gemini`   | `GeminiModel` (`google-genai`)   |
+| `ollama`   | `OllamaModel` (`ollama-rs`)      |
+| `full`     | All providers (`gemini`, `ollama`) |
+
+The `default` feature set is empty — no provider is compiled unless explicitly requested.
+
+**Usage in `Cargo.toml`:**
+
+```toml
+# Only Gemini
+rust-agent-kit = { version = "...", features = ["gemini"] }
+
+# All providers
+rust-agent-kit = { version = "...", features = ["full"] }
+```
+
+New provider adapters must follow the same pattern: add an `optional` dependency and a feature flag; gate the module and its re-exports with `#[cfg(feature = "...")]`.
+
 ## Module Layout
 
 ```
@@ -322,9 +346,9 @@ src/
   runner.rs        — AgentRunner, AgentResult, AgentEvent
   agent_tool.rs    — AgentTool (wraps AgentRunner + Agent as a Tool)
   models/
-    mod.rs         — pub mod gemini; pub mod ollama;
-    gemini.rs      — GeminiModel, GeminiModelBuilder
-    ollama.rs      — OllamaModel, OllamaModelBuilder
+    mod.rs         — feature-gated: #[cfg(feature="gemini")] pub mod gemini; etc.
+    gemini.rs      — GeminiModel, GeminiModelBuilder  (feature: gemini)
+    ollama.rs      — OllamaModel, OllamaModelBuilder  (feature: ollama)
 examples/
   simple_agent.rs  — runnable Gemini example
 tests/

@@ -3,9 +3,15 @@ name = "rust-agent-kit"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+gemini = ["dep:google-genai"]
+ollama = ["dep:ollama-rs"]
+full = ["gemini", "ollama"]
+
 [dependencies]
-ollama-rs = { git = "https://github.com/andreban/ollama-rs" }
-google-genai = { git = "https://git.bandarra.me/andreban/google-genai.git" }
+ollama-rs = { git = "https://github.com/andreban/ollama-rs", optional = true }
+google-genai = { git = "https://git.bandarra.me/andreban/google-genai.git", optional = true }
 async-trait = "0.1"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -20,3 +26,39 @@ tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 reqwest = { version = "0.13", features = ["json"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[[test]]
+name = "integration_gemini"
+required-features = ["gemini"]
+
+[[test]]
+name = "integration_ollama"
+required-features = ["ollama"]
+
+[[example]]
+name = "simple_agent"
+required-features = ["gemini"]
+
+[[example]]
+name = "agent_as_tool"
+required-features = ["gemini"]
+
+[[example]]
+name = "structured_output"
+required-features = ["gemini"]
+
+[[example]]
+name = "tool_calling"
+required-features = ["gemini"]
+
+[[example]]
+name = "streaming_agent"
+required-features = ["gemini"]
+
+[[example]]
+name = "streaming_structured"
+required-features = ["gemini"]
+
+[[example]]
+name = "multi_turn"
+required-features = ["gemini"]

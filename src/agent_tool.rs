@@ -28,7 +28,7 @@ use crate::{
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```no_run,ignore
 /// use std::sync::Arc;
 /// use rust_agent_kit::{Agent, AgentRunner};
 /// use rust_agent_kit::agent_tool::AgentTool;
