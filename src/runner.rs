@@ -445,18 +445,31 @@ impl<'a> RunBuilder<'a> {
                 // Append all tool calls as a single assistant turn.
                 messages.push(Message::tool_calls(turn_tool_calls.clone()));
 
-                // Execute each tool and append one result message per call.
+                // Emit ToolCallStarted for every call before any execute.
                 for call in &turn_tool_calls {
                     debug!(tool = call.name, "executing tool");
                     yield AgentEvent::ToolCallStarted {
                         name: call.name.clone(),
                         args: call.args.clone(),
                     };
+                }
+
+                // Validate all tools exist and build their call futures.
+                let mut tool_futures = Vec::new();
+                for call in &turn_tool_calls {
                     let tool = runner.registry.get(&call.name).ok_or_else(|| {
                         Error::Agent(format!("model called unregistered tool '{}'", call.name))
                     })?;
-                    let result = tool.call(call.args.clone()).await?;
+                    tool_futures.push(tool.call(call.args.clone()));
+                }
+
+                // Execute all tool calls concurrently.
+                let results = futures_util::future::join_all(tool_futures).await;
+
+                // Emit ToolCallCompleted and append result messages in order.
+                for (call, result) in turn_tool_calls.iter().zip(results) {
                     debug!(tool = call.name, "tool call complete");
+                    let result = result?;
                     yield AgentEvent::ToolCallCompleted {
                         name: call.name.clone(),
                         result: result.clone(),
@@ -721,6 +734,88 @@ mod tests {
         assert!(matches!(&events[0], AgentEvent::ToolCallStarted { name, .. } if name == "add"));
         assert!(matches!(&events[1], AgentEvent::ToolCallCompleted { name, .. } if name == "add"));
         assert!(matches!(&events[2], AgentEvent::TextDelta(t) if t == "7"));
+    }
+
+    #[tokio::test]
+    async fn run_stream_executes_multiple_tool_calls_in_parallel() {
+        use crate::model::{ToolCall as ModelToolCall};
+        use crate::tool::{Tool, ToolDefinition, ToolRegistry};
+        use serde_json::json;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static PARALLEL_CALL_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        // Model: first call returns two tool calls, second returns text.
+        struct TwoToolModel;
+
+        #[async_trait]
+        impl LlmModel for TwoToolModel {
+            async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, Error> {
+                let n = PARALLEL_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Ok(ModelResponse {
+                        text: None,
+                        tool_calls: vec![
+                            ModelToolCall {
+                                id: "c1".to_string(),
+                                name: "double".to_string(),
+                                args: json!({"x": 3}),
+                                provider_metadata: None,
+                            },
+                            ModelToolCall {
+                                id: "c2".to_string(),
+                                name: "double".to_string(),
+                                args: json!({"x": 7}),
+                                provider_metadata: None,
+                            },
+                        ],
+                        thinking: None,
+                    })
+                } else {
+                    Ok(ModelResponse {
+                        text: Some("done".to_string()),
+                        tool_calls: vec![],
+                        thinking: None,
+                    })
+                }
+            }
+        }
+
+        struct DoubleTool;
+
+        #[async_trait]
+        impl Tool for DoubleTool {
+            fn definition(&self) -> ToolDefinition {
+                ToolDefinition {
+                    name: "double".to_string(),
+                    description: "Doubles a number.".to_string(),
+                    parameters: json!({"type": "object"}),
+                }
+            }
+            async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, Error> {
+                let x = args["x"].as_i64().unwrap_or(0);
+                Ok(json!({"result": x * 2}))
+            }
+        }
+
+        PARALLEL_CALL_COUNT.store(0, Ordering::SeqCst);
+        let registry = Arc::new(ToolRegistry::new().register(Box::new(DoubleTool)));
+        let runner = AgentRunner::with_registry(Box::new(TwoToolModel), registry);
+        let agent = Agent::builder()
+            .name("T")
+            .instructions("i")
+            .tool("double")
+            .build();
+
+        let events = collect_stream(&runner, &agent, "go").await;
+
+        // Expected: Started(c1), Started(c2), Completed(c1), Completed(c2), TextDelta
+        assert_eq!(events.len(), 5);
+        assert!(matches!(&events[0], AgentEvent::ToolCallStarted { name, args } if name == "double" && args["x"] == 3));
+        assert!(matches!(&events[1], AgentEvent::ToolCallStarted { name, args } if name == "double" && args["x"] == 7));
+        assert!(matches!(&events[2], AgentEvent::ToolCallCompleted { name, result } if name == "double" && result["result"] == 6));
+        assert!(matches!(&events[3], AgentEvent::ToolCallCompleted { name, result } if name == "double" && result["result"] == 14));
+        assert!(matches!(&events[4], AgentEvent::TextDelta(t) if t == "done"));
     }
 
     #[tokio::test]
