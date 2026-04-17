@@ -11,7 +11,7 @@ full = ["gemini", "ollama"]
 
 [dependencies]
 ollama-rs = { git = "https://github.com/andreban/ollama-rs", optional = true }
-google-genai = { git = "https://git.bandarra.me/andreban/google-genai.git", optional = true }
+google-genai = { git = "https://github.com/andreban/google-genai", optional = true }
 async-trait = "0.1"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
