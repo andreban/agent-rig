@@ -1,6 +1,9 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use futures_util::StreamExt;
-use google_genai::prelude::{ThinkingConfig, ThinkingLevel};
-use rust_agent_kit::{Agent, AgentEvent, AgentRunner, model::Message, models::gemini::GeminiModel};
+use geologia::prelude::{ThinkingConfig, ThinkingLevel};
+use agent_rig::{Agent, AgentEvent, AgentRunner, model::Message, models::gemini::GeminiModel};
 use std::{
     error::Error,
     io::{self, BufRead, Write},
@@ -44,7 +47,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let stdin = io::stdin();
     let mut history: Vec<Message> = Vec::new();
 
-    println!("Multi-turn chat (Ctrl-C or Ctrl-D to quit)\n");
+    println!("Multi-turn chat (Ctrl-C or Ctrl-D to quit)
+");
     print!("You: ");
     io::stdout().flush()?;
 
@@ -67,7 +71,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         while let Some(event) = stream.next().await {
             match event? {
                 AgentEvent::Thinking(token) => {
-                    print!("\x1b[2m{token}\x1b[0m"); // dim text
+                    print!("[2m{token}[0m"); // dim text
                     io::stdout().flush()?;
                 }
                 AgentEvent::TextDelta(chunk) => {
@@ -78,7 +82,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 _ => {}
             }
         }
-        println!("\n");
+        println!("
+");
 
         // Extend history with this turn so the next call has full context.
         history.push(Message::user(&input));

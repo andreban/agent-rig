@@ -1,4 +1,7 @@
-//! Demonstrates parallel tool execution in `rust-agent-kit`.
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
+//! Demonstrates parallel tool execution in `agent-rig`.
 //!
 //! When a model returns multiple tool calls in a single response, the runner
 //! executes them all concurrently rather than one at a time. This example
@@ -24,7 +27,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use rust_agent_kit::{
+use agent_rig::{
     Agent, AgentEvent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
@@ -113,7 +116,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
     println!("Question: {question}");
-    println!("(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)\n");
+    println!("(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)
+");
 
     let start = Instant::now();
     let stream = runner.run_stream(&agent, question);
@@ -135,7 +139,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!();
-    println!("\nTotal elapsed: {:.0?}", start.elapsed());
+    println!("
+Total elapsed: {:.0?}", start.elapsed());
     println!(
         "  3 × 500 ms in parallel ≈ 500 ms  (sequential would be ≈ 1 500 ms)"
     );

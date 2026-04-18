@@ -1,4 +1,4 @@
-# Technical Specification — rust-agent-kit
+# Technical Specification — agent-rig
 
 ## Architecture
 
@@ -19,7 +19,7 @@
 GeminiModel     OllamaModel    (more providers …)
 ```
 
-The library is a single crate (`rust-agent-kit`). All provider types live in `src/models/`. Agent logic lives in `src/agent.rs` and `src/runner.rs`. The `LlmModel` trait in `src/model.rs` is the extension point.
+The library is a single crate (`agent-rig`). All provider types live in `src/models/`. Agent logic lives in `src/agent.rs` and `src/runner.rs`. The `LlmModel` trait in `src/model.rs` is the extension point.
 
 `Agent` is a pure data blueprint (name, instructions, optional output schema) with no model reference. `AgentRunner` owns the `Box<dyn LlmModel>` and is the execution engine. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
 
@@ -293,7 +293,7 @@ pub enum Error {
 
 ### `GeminiModel` (`src/models/gemini.rs`)
 
-- Wraps the `google-genai` crate (`GeminiClient`).
+- Wraps the `geologia` crate (`GeminiClient`).
 - Translates `ModelRequest` → `GenerateContentRequest`, mapping `Role::User → Role::User` and `Role::Assistant → Role::Model`.
 - System instructions become `system_instruction` on the Gemini request.
 - Optional `GenerationConfig` (temperature, max_output_tokens, top_p, top_k, stop_sequences, thinking_config) configurable via `GeminiModel::builder(…)`.
@@ -315,7 +315,7 @@ Provider adapters are opt-in via Cargo features. The core types (`LlmModel`, `Ag
 
 | Feature    | Enables                          |
 |------------|----------------------------------|
-| `gemini`   | `GeminiModel` (`google-genai`)   |
+| `gemini`   | `GeminiModel` (`geologia`)   |
 | `ollama`   | `OllamaModel` (`ollama-rs`)      |
 | `full`     | All providers (`gemini`, `ollama`) |
 
@@ -325,10 +325,10 @@ The `default` feature set is empty — no provider is compiled unless explicitly
 
 ```toml
 # Only Gemini
-rust-agent-kit = { version = "...", features = ["gemini"] }
+agent-rig = { version = "...", features = ["gemini"] }
 
 # All providers
-rust-agent-kit = { version = "...", features = ["full"] }
+agent-rig = { version = "...", features = ["full"] }
 ```
 
 New provider adapters must follow the same pattern: add an `optional` dependency and a feature flag; gate the module and its re-exports with `#[cfg(feature = "...")]`.

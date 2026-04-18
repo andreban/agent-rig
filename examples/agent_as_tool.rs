@@ -1,6 +1,9 @@
-use rust_agent_kit::{Agent, AgentRunner, AgentTool};
-use rust_agent_kit::models::gemini::GeminiModel;
-use rust_agent_kit::tool::{ToolDefinition, ToolRegistry};
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
+use agent_rig::{Agent, AgentRunner, AgentTool};
+use agent_rig::models::gemini::GeminiModel;
+use agent_rig::tool::{ToolDefinition, ToolRegistry};
 use serde_json::json;
 use std::error::Error;
 use std::sync::Arc;

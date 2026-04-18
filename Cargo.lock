@@ -9,6 +9,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-rig"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "dotenvy",
+ "futures-util",
+ "geologia",
+ "ollama-rs",
+ "reqwest",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -438,6 +458,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "geologia"
+version = "0.1.0"
+source = "git+https://github.com/andreban/geologia#08ad998601db705bda409a445a83251c462597d3"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -462,21 +497,6 @@ dependencies = [
  "r-efi",
  "wasip2",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "google-genai"
-version = "0.1.0"
-source = "git+https://git.bandarra.me/andreban/google-genai.git#5e0fc06327bea7f3b228fabb8a41e07818e6b2da"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
- "serde_with",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -1261,26 +1281,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "rust-agent-kit"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "async-trait",
- "dotenvy",
- "futures-util",
- "google-genai",
- "ollama-rs",
- "reqwest",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

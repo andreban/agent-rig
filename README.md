@@ -1,4 +1,4 @@
-# rust-agent-kit
+# agent-rig
 
 A provider-agnostic toolkit for building AI agents in Rust.
 
@@ -25,24 +25,24 @@ Define your agent once and run it against any supported LLM backend — swap pro
 
 ## Installation
 
-Add `rust-agent-kit` to your `Cargo.toml`. Provider adapters are opt-in features.
+Add `agent-rig` to your `Cargo.toml`. Provider adapters are opt-in features.
 
 ```toml
 # Gemini only
-rust-agent-kit = { git = "...", features = ["gemini"] }
+agent-rig = { git = "...", features = ["gemini"] }
 
 # Ollama only
-rust-agent-kit = { git = "...", features = ["ollama"] }
+agent-rig = { git = "...", features = ["ollama"] }
 
 # All providers
-rust-agent-kit = { git = "...", features = ["full"] }
+agent-rig = { git = "...", features = ["full"] }
 ```
 
 ## Quick Start
 
 ```rust
-use rust_agent_kit::{Agent, AgentRunner};
-use rust_agent_kit::models::gemini::GeminiModel;
+use agent_rig::{Agent, AgentRunner};
+use agent_rig::models::gemini::GeminiModel;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -84,7 +84,7 @@ println!("{}", result.output); // "Paris"
 `run_builder` + `history` enables stateful dialogue. The runner is stateless; you own and extend the history.
 
 ```rust
-use rust_agent_kit::model::Message;
+use agent_rig::model::Message;
 
 // First turn
 let first = runner.run(&agent, "My name is Alice.").await?;
@@ -111,8 +111,8 @@ Implement the `Tool` trait to give the agent callable functions. The runner hand
 
 ```rust
 use async_trait::async_trait;
-use rust_agent_kit::tool::{Tool, ToolDefinition, ToolRegistry};
-use rust_agent_kit::error::Error;
+use agent_rig::tool::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::error::Error;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -184,7 +184,7 @@ println!("{}", plan.title);
 
 ```rust
 use futures_util::StreamExt;
-use rust_agent_kit::AgentEvent;
+use agent_rig::AgentEvent;
 
 let stream = runner.run_stream(&agent, "Explain Rust ownership.");
 futures_util::pin_mut!(stream);
@@ -204,8 +204,8 @@ while let Some(event) = stream.next().await {
 Wrap an `AgentRunner` + `Agent` pair as a `Tool` using `AgentTool`, then register it with a parent runner. The parent model can invoke the child agent as if it were a regular tool.
 
 ```rust
-use rust_agent_kit::{AgentTool, Agent, AgentRunner};
-use rust_agent_kit::tool::{ToolDefinition, ToolRegistry};
+use agent_rig::{AgentTool, Agent, AgentRunner};
+use agent_rig::tool::{ToolDefinition, ToolRegistry};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -251,8 +251,8 @@ let result = parent_runner.run(&parent_agent, "Summarise: ...").await?;
 Requires a `GEMINI_API_KEY` environment variable.
 
 ```rust
-use rust_agent_kit::models::gemini::GeminiModel;
-use google_genai::prelude::{ThinkingConfig, ThinkingLevel};
+use agent_rig::models::gemini::GeminiModel;
+use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 
 let model = GeminiModel::builder("API_KEY", "gemini-3.1-flash-lite-preview")
     .temperature(0.7)
@@ -271,7 +271,7 @@ let model = GeminiModel::builder("API_KEY", "gemini-3.1-flash-lite-preview")
 Requires a running [Ollama](https://ollama.ai) server (default: `http://localhost:11434`).
 
 ```rust
-use rust_agent_kit::models::ollama::OllamaModel;
+use agent_rig::models::ollama::OllamaModel;
 
 let model = OllamaModel::builder("llama3.2")
     .temperature(0.8)
@@ -313,8 +313,8 @@ Implement `LlmModel` to add any provider:
 
 ```rust
 use async_trait::async_trait;
-use rust_agent_kit::model::{LlmModel, ModelRequest, ModelResponse};
-use rust_agent_kit::error::Error;
+use agent_rig::model::{LlmModel, ModelRequest, ModelResponse};
+use agent_rig::error::Error;
 
 struct MyModel;
 

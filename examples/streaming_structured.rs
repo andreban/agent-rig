@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 //! Demonstrates `run_stream` with thinking tokens, tool invocation events, and
 //! structured output all in one example.
 //!
@@ -23,8 +26,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use google_genai::prelude::{ThinkingConfig, ThinkingLevel};
-use rust_agent_kit::{
+use geologia::prelude::{ThinkingConfig, ThinkingLevel};
+use agent_rig::{
     Agent, AgentEvent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
@@ -138,7 +141,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runner = AgentRunner::with_registry(Box::new(model), registry);
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
-    println!("Question: {question}\n");
+    println!("Question: {question}
+");
 
     let stream = runner.run_stream(&agent, question);
     futures_util::pin_mut!(stream);
@@ -150,14 +154,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match event? {
             AgentEvent::Thinking(token) => {
                 if !in_thinking {
-                    print!("\x1b[2m[thinking] ");
+                    print!("[2m[thinking] ");
                     in_thinking = true;
                 }
-                print!("\x1b[2m{token}\x1b[0m");
+                print!("[2m{token}[0m");
             }
             AgentEvent::TextDelta(chunk) => {
                 if in_thinking {
-                    println!("\x1b[0m");
+                    println!("[0m");
                     in_thinking = false;
                 }
                 print!("{chunk}");
@@ -165,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             AgentEvent::ToolCallStarted { name, args } => {
                 if in_thinking {
-                    println!("\x1b[0m");
+                    println!("[0m");
                     in_thinking = false;
                 }
                 println!("[tool →] {name}({args})");
@@ -176,7 +180,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("\n");
+    println!("
+");
 
     // Deserialize the accumulated JSON into the typed struct.
     let report: WeatherReport = serde_json::from_str(&output)?;

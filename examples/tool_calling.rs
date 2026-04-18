@@ -1,4 +1,7 @@
-//! Demonstrates tool calling with `rust-agent-kit`.
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
+//! Demonstrates tool calling with `agent-rig`.
 //!
 //! The agent is given two tools — `get_temperature` and `celsius_to_fahrenheit`
 //! — and asked a question that requires calling both in sequence. The runner
@@ -13,7 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tracing_subscriber::EnvFilter;
-use rust_agent_kit::{
+use agent_rig::{
     Agent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
@@ -128,10 +131,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runner = AgentRunner::with_registry(Box::new(GeminiModel::new(api_key, MODEL)), registry);
 
     let question = "What is the current temperature in Tokyo in Fahrenheit?";
-    println!("Question: {question}\n");
+    println!("Question: {question}
+");
 
     let result = runner.run(&agent, question).await?;
-    println!("\nAnswer: {}", result.output);
+    println!("
+Answer: {}", result.output);
 
     Ok(())
 }

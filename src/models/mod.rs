@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 //! Built-in LLM provider implementations.
 //!
 //! Each submodule provides a concrete [`LlmModel`](crate::model::LlmModel)

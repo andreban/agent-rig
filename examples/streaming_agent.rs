@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 //! Demonstrates `AgentRunner::run_stream` with tool calls and thinking events.
 //!
 //! Run with:
@@ -23,8 +26,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use google_genai::prelude::{ThinkingConfig, ThinkingLevel};
-use rust_agent_kit::{
+use geologia::prelude::{ThinkingConfig, ThinkingLevel};
+use agent_rig::{
     Agent, AgentEvent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
@@ -99,7 +102,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runner = AgentRunner::with_registry(Box::new(model), registry);
 
-    println!("Question: What is 1234 + 5678?\n");
+    println!("Question: What is 1234 + 5678?
+");
 
     let stream = runner.run_stream(&agent, "What is 1234 + 5678?");
     futures_util::pin_mut!(stream);
@@ -109,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Thinking(token) => {
                 // Reasoning tokens — only emitted by models with extended
                 // thinking enabled once native Gemini streaming is in place.
-                print!("\x1b[2m{token}\x1b[0m"); // dim text
+                print!("[2m{token}[0m"); // dim text
             }
             AgentEvent::TextDelta(chunk) => {
                 print!("{chunk}");

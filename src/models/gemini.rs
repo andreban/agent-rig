@@ -1,5 +1,8 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use async_trait::async_trait;
-use google_genai::prelude::{
+use geologia::prelude::{
     Candidate, Content, FunctionDeclaration, FunctionResponse, GeminiClient,
     GenerateContentRequest, GenerationConfig, Part, PartData, Role, ThinkingConfig, Tools,
 };
@@ -19,7 +22,7 @@ use crate::{
 /// # Examples
 ///
 /// ```no_run
-/// use rust_agent_kit::models::gemini::GeminiModel;
+/// use agent_rig::models::gemini::GeminiModel;
 ///
 /// // Simple
 /// let model = GeminiModel::new("API_KEY", "gemini-2.5-pro-preview-03-25");
@@ -69,7 +72,7 @@ impl GeminiModel {
 pub struct GeminiModelBuilder {
     api_key: String,
     model: String,
-    generation_config: google_genai::prelude::GenerationConfigBuilder,
+    generation_config: geologia::prelude::GenerationConfigBuilder,
 }
 
 impl GeminiModelBuilder {
@@ -106,14 +109,14 @@ impl GeminiModelBuilder {
     /// Configures the model's thinking (chain-of-thought) behaviour.
     ///
     /// Set `include_thoughts: true` to receive thinking tokens in the response.
-    /// Use [`ThinkingLevel`](google_genai::prelude::ThinkingLevel) or a token
+    /// Use [`ThinkingLevel`](geologia::prelude::ThinkingLevel) or a token
     /// budget to control how much reasoning the model performs.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use rust_agent_kit::models::gemini::GeminiModel;
-    /// use google_genai::prelude::{ThinkingConfig, ThinkingLevel};
+    /// use agent_rig::models::gemini::GeminiModel;
+    /// use geologia::prelude::{ThinkingConfig, ThinkingLevel};
     ///
     /// let model = GeminiModel::builder("API_KEY", "gemini-2.5-flash-preview-04-17")
     ///     .thinking_config(ThinkingConfig {
@@ -408,7 +411,7 @@ fn extract_text_and_thinking(candidate: &Candidate) -> (Option<String>, Option<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use google_genai::prelude::{Candidate, Content, Part, PartData, Role};
+    use geologia::prelude::{Candidate, Content, Part, PartData, Role};
 
     fn make_candidate(parts: Vec<Part>) -> Candidate {
         Candidate {

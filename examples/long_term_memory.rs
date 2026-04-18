@@ -1,4 +1,7 @@
-//! Demonstrates long-term memory via tools in `rust-agent-kit`.
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
+//! Demonstrates long-term memory via tools in `agent-rig`.
 //!
 //! This example shows that "long-term memory" is not an inherent trait of the
 //! LLM — it is simply an I/O operation facilitated by the [`Tool`] trait. The
@@ -20,7 +23,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use rust_agent_kit::{
+use agent_rig::{
     Agent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
@@ -72,7 +75,7 @@ impl Tool for RememberFactTool {
             .as_str()
             .ok_or_else(|| Error::Agent("missing 'fact' argument".to_string()))?
             .to_string();
-        println!("[memory] storing: \"{fact}\"");
+        println!("[memory] storing: "{fact}"");
         self.store
             .lock()
             .map_err(|e| Error::Agent(format!("lock poisoned: {e}")))?
@@ -134,7 +137,7 @@ impl Tool for RecallFactTool {
             })
             .map(String::as_str)
             .collect();
-        println!("[memory] recall(\"{query}\") → {} result(s)", results.len());
+        println!("[memory] recall("{query}") → {} result(s)", results.len());
         Ok(json!({ "results": results }))
     }
 }
@@ -185,20 +188,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -----------------------------------------------------------------------
     // Session 1 — establishing memory
     // -----------------------------------------------------------------------
-    println!("=== Session 1 ===\n");
+    println!("=== Session 1 ===
+");
     let input1 = "My dog's name is Barnaby.";
     println!("User: {input1}");
     let result1 = runner.run(&agent, input1).await?;
-    println!("Assistant: {}\n", result1.output);
+    println!("Assistant: {}
+", result1.output);
 
     // -----------------------------------------------------------------------
     // Session 2 — retrieving memory with a fresh (empty) conversation history
     // -----------------------------------------------------------------------
-    println!("=== Session 2 (new session — no conversation history) ===\n");
+    println!("=== Session 2 (new session — no conversation history) ===
+");
     let input2 = "Do you remember what kind of pet I have and its name?";
     println!("User: {input2}");
     let result2 = runner.run(&agent, input2).await?;
-    println!("Assistant: {}\n", result2.output);
+    println!("Assistant: {}
+", result2.output);
 
     Ok(())
 }

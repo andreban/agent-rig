@@ -1,15 +1,15 @@
 ---
-name: rust-agent-kit
+name: agent-rig
 description: >
-  Guide and write code using the `rust-agent-kit` library — a provider-agnostic AI agent toolkit for Rust.
+  Guide and write code using the `agent-rig` library — a provider-agnostic AI agent toolkit for Rust.
   Use this skill whenever the user is writing, reading, debugging, or extending code that involves
-  `rust_agent_kit`, `AgentRunner`, `Agent`, `LlmModel`, `ToolRegistry`, `AgentTool`, `GeminiModel`,
+  `agent_rig`, `AgentRunner`, `Agent`, `LlmModel`, `ToolRegistry`, `AgentTool`, `GeminiModel`,
   `OllamaModel`, or any type from this crate. Also trigger when the user asks how to add a new LLM
   provider, implement a custom tool, wire up multi-turn conversations, stream agent output, or use
   structured output in the context of this project.
 ---
 
-You are helping the user write code using the `rust_agent_kit` crate — a provider-agnostic toolkit
+You are helping the user write code using the `agent_rig` crate — a provider-agnostic toolkit
 for building AI agents in Rust. Apply the patterns and constraints below precisely.
 
 ---
@@ -21,10 +21,10 @@ opt-in features — core types are always compiled regardless.
 
 ```toml
 [dependencies]
-rust-agent-kit = { git = "https://github.com/andreban/rust-agent-kit.git", features = ["gemini"] }
+agent-rig = { git = "https://github.com/andreban/agent-rig.git", features = ["gemini"] }
 
 # All providers:
-rust-agent-kit = { git = "https://github.com/andreban/rust-agent-kit.git", features = ["full"] }
+agent-rig = { git = "https://github.com/andreban/agent-rig.git", features = ["full"] }
 
 # Common companions:
 async-trait = "0.1"
@@ -65,8 +65,8 @@ dotenvy = "0.15"
 ## Single-Turn (Basic)
 
 ```rust
-use rust_agent_kit::{Agent, AgentRunner};
-use rust_agent_kit::models::gemini::GeminiModel;
+use agent_rig::{Agent, AgentRunner};
+use agent_rig::models::gemini::GeminiModel;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -100,9 +100,9 @@ The runner is stateless. The caller owns and extends the history between turns. 
 `run_builder(&agent).history(history)` for each turn.
 
 ```rust
-use rust_agent_kit::{Agent, AgentRunner};
-use rust_agent_kit::model::Message;
-use rust_agent_kit::models::gemini::GeminiModel;
+use agent_rig::{Agent, AgentRunner};
+use agent_rig::model::Message;
+use agent_rig::models::gemini::GeminiModel;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -153,10 +153,10 @@ final text response.
 ```rust
 use std::sync::Arc;
 use async_trait::async_trait;
-use rust_agent_kit::{Agent, AgentRunner};
-use rust_agent_kit::error::Error;
-use rust_agent_kit::models::gemini::GeminiModel;
-use rust_agent_kit::tool::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::{Agent, AgentRunner};
+use agent_rig::error::Error;
+use agent_rig::models::gemini::GeminiModel;
+use agent_rig::tool::{Tool, ToolDefinition, ToolRegistry};
 use serde_json::{Value, json};
 
 struct GetWeatherTool;
@@ -220,8 +220,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use futures_util::StreamExt;
-use rust_agent_kit::{Agent, AgentEvent, AgentRunner};
-use rust_agent_kit::models::gemini::GeminiModel;
+use agent_rig::{Agent, AgentEvent, AgentRunner};
+use agent_rig::models::gemini::GeminiModel;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -275,8 +275,8 @@ serde = { version = "1", features = ["derive"] }
 ```
 
 ```rust
-use rust_agent_kit::{Agent, AgentRunner};
-use rust_agent_kit::models::gemini::GeminiModel;
+use agent_rig::{Agent, AgentRunner};
+use agent_rig::models::gemini::GeminiModel;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -326,9 +326,9 @@ The parent model delegates work to the child agent as if it were a regular tool 
 
 ```rust
 use std::sync::Arc;
-use rust_agent_kit::{Agent, AgentRunner, AgentTool};
-use rust_agent_kit::models::gemini::GeminiModel;
-use rust_agent_kit::tool::{ToolDefinition, ToolRegistry};
+use agent_rig::{Agent, AgentRunner, AgentTool};
+use agent_rig::models::gemini::GeminiModel;
+use agent_rig::tool::{ToolDefinition, ToolRegistry};
 use serde_json::json;
 
 const MODEL: &str = "gemini-3.1-flash-lite-preview";
@@ -400,8 +400,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Requires `GEMINI_API_KEY` environment variable.
 
 ```rust
-use rust_agent_kit::models::gemini::GeminiModel;
-use google_genai::prelude::{ThinkingConfig, ThinkingLevel};
+use agent_rig::models::gemini::GeminiModel;
+use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 
 // Minimal
 let model = GeminiModel::builder(api_key, "gemini-3.1-flash-lite-preview").build();
@@ -425,7 +425,7 @@ let model = GeminiModel::builder(api_key, "gemini-3.1-flash-lite-preview")
 Requires a running Ollama server (default: `http://localhost:11434`).
 
 ```rust
-use rust_agent_kit::models::ollama::OllamaModel;
+use agent_rig::models::ollama::OllamaModel;
 
 let model = OllamaModel::builder("llama3.2")
     .temperature(0.8)
@@ -446,8 +446,8 @@ default that calls `generate` and emits the result as a single `TextDelta`.
 
 ```rust
 use async_trait::async_trait;
-use rust_agent_kit::error::Error;
-use rust_agent_kit::model::{
+use agent_rig::error::Error;
+use agent_rig::model::{
     LlmModel, Message, MessageContent, ModelRequest, ModelResponse, Role, ToolCall,
 };
 

@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use async_trait::async_trait;
 use tracing::{debug, instrument};
 
@@ -30,10 +33,10 @@ use crate::{
 ///
 /// ```no_run,ignore
 /// use std::sync::Arc;
-/// use rust_agent_kit::{Agent, AgentRunner};
-/// use rust_agent_kit::agent_tool::AgentTool;
-/// use rust_agent_kit::tool::{ToolDefinition, ToolRegistry};
-/// use rust_agent_kit::models::gemini::GeminiModel;
+/// use agent_rig::{Agent, AgentRunner};
+/// use agent_rig::agent_tool::AgentTool;
+/// use agent_rig::tool::{ToolDefinition, ToolRegistry};
+/// use agent_rig::models::gemini::GeminiModel;
 /// use serde_json::json;
 ///
 /// # #[tokio::main]

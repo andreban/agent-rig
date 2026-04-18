@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`rust-agent-kit` is a Rust library (edition 2024) for building provider-agnostic AI agents. Supported providers: Google Gemini and Ollama. See `docs/PRD.md` for requirements and `docs/SPEC.md` for the technical specification.
+`agent-rig` is a Rust library (edition 2024) for building provider-agnostic AI agents. Supported providers: Google Gemini and Ollama. See `docs/PRD.md` for requirements and `docs/SPEC.md` for the technical specification.
 
 ## Working with this project
 
@@ -31,12 +31,12 @@ cargo build --release
 
 ## Dependencies
 
-- **google-genai**: Rust client for the Google Generative AI API. Sourced from a private git repo (`https://git.bandarra.me/andreban/google-genai.git`) — not on crates.io.
+- **geologia**: Rust client for the Google Generative AI API. Sourced from GitHub (`https://github.com/andreban/geologia`) — not on crates.io.
 - Requires `GEMINI_API_KEY` environment variable (use a `.env` file with `dotenvy`).
 
-## google-genai API
+## geologia API
 
-Import from `google_genai::prelude::*`. Key types:
+Import from `geologia::prelude::*`. Key types:
 
 - `GeminiClient::new(api_key: String)` — main client
 - `Content::builder().role(Role::User).add_text_part("...").build()` — message builder

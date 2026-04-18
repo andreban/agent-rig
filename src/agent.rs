@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,7 +23,7 @@ use serde_json::Value;
 /// # Examples
 ///
 /// ```
-/// use rust_agent_kit::Agent;
+/// use agent_rig::Agent;
 ///
 /// let agent = Agent::builder()
 ///     .name("Summariser")
