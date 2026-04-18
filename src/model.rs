@@ -6,11 +6,14 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use futures_util::stream::Stream;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::Error;
 use crate::tool::ToolDefinition;
 
 /// The role of a participant in a conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     /// A message from the user.
     User,
@@ -19,7 +22,8 @@ pub enum Role {
 }
 
 /// The content carried by a [`Message`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "content", rename_all = "snake_case")]
 pub enum MessageContent {
     /// Plain text.
     Text(String),
@@ -37,12 +41,13 @@ pub enum MessageContent {
         result: serde_json::Value,
         /// Opaque provider metadata copied from the originating [`ToolCall`].
         /// Used by Gemini to echo `thought_signature`; other providers ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<serde_json::Value>,
     },
 }
 
 /// A single message in a conversation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     /// The role of the message sender.
     pub role: Role,
@@ -84,7 +89,7 @@ impl Message {
     }
 
     /// Creates an assistant message representing all tool calls from one model turn.
-    pub(crate) fn tool_calls(calls: Vec<ToolCall>) -> Self {
+    pub fn tool_calls(calls: Vec<ToolCall>) -> Self {
         Self {
             role: Role::Assistant,
             content: MessageContent::ToolCalls(calls),
@@ -92,7 +97,7 @@ impl Message {
     }
 
     /// Creates a message carrying the result of one tool execution.
-    pub(crate) fn tool_result(
+    pub fn tool_result(
         id: String,
         name: String,
         result: serde_json::Value,
@@ -100,13 +105,18 @@ impl Message {
     ) -> Self {
         Self {
             role: Role::User,
-            content: MessageContent::ToolResult { id, name, result, provider_metadata },
+            content: MessageContent::ToolResult {
+                id,
+                name,
+                result,
+                provider_metadata,
+            },
         }
     }
 }
 
 /// A request to an LLM model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelRequest {
     /// The conversation history, in chronological order.
     pub messages: Vec<Message>,
@@ -125,7 +135,7 @@ pub struct ModelRequest {
 }
 
 /// A tool call issued by the model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     /// Provider-assigned call identifier. Must be echoed in the tool response
     /// for providers that require it (e.g. Gemini).
@@ -137,14 +147,27 @@ pub struct ToolCall {
     /// Opaque provider metadata that must be round-tripped back with the tool
     /// response. Used by Gemini to carry the `thought_signature`; other
     /// providers leave this as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) provider_metadata: Option<serde_json::Value>,
+}
+
+impl ToolCall {
+    /// Creates a new `ToolCall`.
+    pub fn new(id: String, name: String, args: serde_json::Value) -> Self {
+        Self {
+            id,
+            name,
+            args,
+            provider_metadata: None,
+        }
+    }
 }
 
 /// A response from an LLM model.
 ///
 /// Exactly one of `text` or `tool_calls` will be non-empty per turn:
 /// a final response carries text; an intermediate turn carries tool calls.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelResponse {
     /// The generated text output, present only when the model produced a final
     /// text response (i.e. `tool_calls` is empty).
@@ -168,7 +191,8 @@ pub struct ModelResponse {
 /// and adds tool-call lifecycle events on top.
 ///
 /// [`AgentEvent`]: crate::AgentEvent
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "content", rename_all = "snake_case")]
 pub enum ModelStreamChunk {
     /// A reasoning/thinking token from a model that supports extended thinking
     /// (e.g. Gemini 2.5 with extended thinking enabled).

@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::Error;
 
 /// Describes a tool to the model: its name, purpose, and parameter schema.
@@ -16,7 +18,7 @@ use crate::error::Error;
 /// alongside their implementations.
 ///
 /// [`Agent`]: crate::Agent
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     /// The tool name the model uses to invoke it. Must match the key in the
     /// [`ToolRegistry`].
