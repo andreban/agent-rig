@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -25,7 +28,7 @@ use crate::{
 /// # Examples
 ///
 /// ```no_run
-/// use rust_agent_kit::models::ollama::OllamaModel;
+/// use agent_rig::models::ollama::OllamaModel;
 ///
 /// // Simple
 /// let model = OllamaModel::new("http://localhost:11434", "llama3");

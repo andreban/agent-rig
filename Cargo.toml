@@ -1,17 +1,18 @@
 [package]
-name = "rust-agent-kit"
+name = "agent-rig"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
 
 [features]
 default = []
-gemini = ["dep:google-genai"]
+gemini = ["dep:geologia"]
 ollama = ["dep:ollama-rs"]
 full = ["gemini", "ollama"]
 
 [dependencies]
 ollama-rs = { git = "https://github.com/andreban/ollama-rs", optional = true }
-google-genai = { git = "https://github.com/andreban/google-genai", optional = true }
+geologia = { git = "https://github.com/andreban/geologia", optional = true }
 async-trait = "0.1"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }

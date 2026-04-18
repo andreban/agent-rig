@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -53,7 +56,7 @@ impl Message {
     /// # Examples
     ///
     /// ```
-    /// use rust_agent_kit::model::Message;
+    /// use agent_rig::model::Message;
     ///
     /// let msg = Message::user("What is the capital of France?");
     /// ```
@@ -69,7 +72,7 @@ impl Message {
     /// # Examples
     ///
     /// ```
-    /// use rust_agent_kit::model::Message;
+    /// use agent_rig::model::Message;
     ///
     /// let msg = Message::assistant("The capital of France is Paris.");
     /// ```
@@ -155,7 +158,7 @@ pub struct ModelResponse {
     /// [`ThinkingConfig`]). All other adapters leave this as `None`.
     ///
     /// [`GeminiModel`]: crate::models::gemini::GeminiModel
-    /// [`ThinkingConfig`]: google_genai::prelude::ThinkingConfig
+    /// [`ThinkingConfig`]: geologia::prelude::ThinkingConfig
     pub thinking: Option<String>,
 }
 
@@ -187,8 +190,8 @@ pub enum ModelStreamChunk {
 ///
 /// ```no_run
 /// use async_trait::async_trait;
-/// use rust_agent_kit::error::Error;
-/// use rust_agent_kit::model::{LlmModel, MessageContent, ModelRequest, ModelResponse};
+/// use agent_rig::error::Error;
+/// use agent_rig::model::{LlmModel, MessageContent, ModelRequest, ModelResponse};
 ///
 /// struct EchoModel;
 ///

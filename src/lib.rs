@@ -1,13 +1,16 @@
-//! # rust-agent-kit
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
+//! # agent-rig
 //!
 //! A provider-agnostic toolkit for building AI agents in Rust.
 //!
 //! ## Quick Start
 //!
 //! ```no_run,ignore
-//! // Requires the `gemini` feature: `cargo add rust-agent-kit --features gemini`
-//! use rust_agent_kit::{Agent, AgentRunner};
-//! use rust_agent_kit::models::gemini::GeminiModel;
+//! // Requires the `gemini` feature: `cargo add agent-rig --features gemini`
+//! use agent_rig::{Agent, AgentRunner};
+//! use agent_rig::models::gemini::GeminiModel;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,8 +1,8 @@
-# Product Requirements Document — rust-agent-kit
+# Product Requirements Document — agent-rig
 
 ## Overview
 
-`rust-agent-kit` is a Rust library for building AI agents that is **provider-agnostic**: the same agent definition runs against any supported LLM backend (Google Gemini, Ollama, and more) without code changes.
+`agent-rig` is a Rust library for building AI agents that is **provider-agnostic**: the same agent definition runs against any supported LLM backend (Google Gemini, Ollama, and more) without code changes.
 
 ## Problem
 

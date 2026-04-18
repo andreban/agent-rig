@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -35,8 +38,8 @@ pub struct ToolDefinition {
 ///
 /// ```no_run
 /// use async_trait::async_trait;
-/// use rust_agent_kit::error::Error;
-/// use rust_agent_kit::tool::{Tool, ToolDefinition};
+/// use agent_rig::error::Error;
+/// use agent_rig::tool::{Tool, ToolDefinition};
 /// use serde_json::{Value, json};
 ///
 /// struct AddTool;
@@ -86,12 +89,12 @@ pub trait Tool: Send + Sync {
 ///
 /// ```no_run
 /// use std::sync::Arc;
-/// use rust_agent_kit::tool::ToolRegistry;
+/// use agent_rig::tool::ToolRegistry;
 ///
 /// # struct MyTool;
 /// # use async_trait::async_trait;
-/// # use rust_agent_kit::tool::{Tool, ToolDefinition};
-/// # use rust_agent_kit::error::Error;
+/// # use agent_rig::tool::{Tool, ToolDefinition};
+/// # use agent_rig::error::Error;
 /// # #[async_trait]
 /// # impl Tool for MyTool {
 /// #     fn definition(&self) -> ToolDefinition { unimplemented!() }

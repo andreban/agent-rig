@@ -1,7 +1,10 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rust_agent_kit::{
+use agent_rig::{
     Agent, AgentRunner,
     error::Error,
     models::ollama::OllamaModel,

@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
@@ -58,8 +61,8 @@ pub enum AgentEvent {
 /// # Examples
 ///
 /// ```no_run,ignore
-/// use rust_agent_kit::{Agent, AgentRunner};
-/// use rust_agent_kit::models::gemini::GeminiModel;
+/// use agent_rig::{Agent, AgentRunner};
+/// use agent_rig::models::gemini::GeminiModel;
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -119,9 +122,9 @@ impl AgentRunner {
     /// # Examples
     ///
     /// ```no_run,ignore
-    /// use rust_agent_kit::{Agent, AgentRunner};
-    /// use rust_agent_kit::model::Message;
-    /// use rust_agent_kit::models::gemini::GeminiModel;
+    /// use agent_rig::{Agent, AgentRunner};
+    /// use agent_rig::model::Message;
+    /// use agent_rig::models::gemini::GeminiModel;
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -237,8 +240,8 @@ impl AgentRunner {
     /// # Examples
     ///
     /// ```no_run,ignore
-    /// use rust_agent_kit::{Agent, AgentRunner};
-    /// use rust_agent_kit::models::gemini::GeminiModel;
+    /// use agent_rig::{Agent, AgentRunner};
+    /// use agent_rig::models::gemini::GeminiModel;
     /// use schemars::JsonSchema;
     /// use serde::Deserialize;
     ///
@@ -302,9 +305,9 @@ impl<'a> RunBuilder<'a> {
     /// # Examples
     ///
     /// ```no_run,ignore
-    /// use rust_agent_kit::model::Message;
-    /// # use rust_agent_kit::{Agent, AgentRunner};
-    /// # use rust_agent_kit::models::gemini::GeminiModel;
+    /// use agent_rig::model::Message;
+    /// # use agent_rig::{Agent, AgentRunner};
+    /// # use agent_rig::models::gemini::GeminiModel;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let model = GeminiModel::builder("KEY", "gemini-2.5-flash").build();

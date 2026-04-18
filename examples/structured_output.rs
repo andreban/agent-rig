@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 //! Demonstrates typed structured output using `AgentRunner::run_typed`.
 //!
 //! `schemars` generates the JSON Schema from `ResearchPlan` and it is set on the
@@ -10,7 +13,7 @@
 //! GEMINI_API_KEY=<key> cargo run --example structured_output
 //! ```
 
-use rust_agent_kit::{Agent, AgentRunner, models::gemini::GeminiModel};
+use agent_rig::{Agent, AgentRunner, models::gemini::GeminiModel};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::error::Error;

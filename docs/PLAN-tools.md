@@ -1,4 +1,4 @@
-# Plan: Decoupled Tool Support for rust_agent_kit
+# Plan: Decoupled Tool Support for agent_rig
 
 ## 1. Executive Summary
 The goal is to implement a tool-calling system that keeps `Agent` fully serializable. `Agent` declares only the *names* of tools it uses; the actual `ToolDefinition` (description, parameters schema) is owned by each `Tool` implementation and lives in the `AgentRunner`'s registry. At runtime the runner resolves names to definitions, forwards them to the model, and executes returned tool calls. The `LlmModel` trait and both provider adapters must also be extended to carry tool definitions into requests and surface tool calls in responses.
