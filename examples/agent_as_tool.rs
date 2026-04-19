@@ -1,9 +1,9 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
-use agent_rig::{Agent, AgentRunner, AgentTool};
 use agent_rig::models::gemini::GeminiModel;
 use agent_rig::tool::{ToolDefinition, ToolRegistry};
+use agent_rig::{Agent, AgentRunner, AgentTool};
 use serde_json::json;
 use std::error::Error;
 use std::sync::Arc;
@@ -44,13 +44,13 @@ fn summariser_tool(api_key: &str) -> AgentTool {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
     // Build the parent runner with the summariser child agent registered as a tool.
-    let registry = Arc::new(
-        ToolRegistry::new().register(Box::new(summariser_tool(&api_key))),
-    );
+    let registry = Arc::new(ToolRegistry::new().register(Box::new(summariser_tool(&api_key))));
 
     let parent_model = GeminiModel::builder(&api_key, MODEL).build();
     let parent_runner = AgentRunner::with_registry(Box::new(parent_model), registry);

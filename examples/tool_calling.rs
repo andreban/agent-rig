@@ -14,15 +14,15 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use tracing_subscriber::EnvFilter;
 use agent_rig::{
     Agent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
     tool::{Tool, ToolDefinition, ToolRegistry},
 };
+use async_trait::async_trait;
 use serde_json::{Value, json};
+use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite-preview";
 
@@ -108,7 +108,9 @@ impl Tool for CelsiusToFahrenheitTool {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
     let registry = Arc::new(
@@ -131,12 +133,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runner = AgentRunner::with_registry(Box::new(GeminiModel::new(api_key, MODEL)), registry);
 
     let question = "What is the current temperature in Tokyo in Fahrenheit?";
-    println!("Question: {question}
-");
+    println!(
+        "Question: {question}
+"
+    );
 
     let result = runner.run(&agent, question).await?;
-    println!("
-Answer: {}", result.output);
+    println!(
+        "
+Answer: {}",
+        result.output
+    );
 
     Ok(())
 }

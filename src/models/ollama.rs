@@ -16,7 +16,9 @@ use ollama_rs::{
 
 use crate::{
     error::Error,
-    model::{LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role, ToolCall},
+    model::{
+        LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role, ToolCall,
+    },
     tool::ToolDefinition,
 };
 
@@ -197,8 +199,7 @@ fn build_chat_request(
                     .collect(),
             },
             MessageContent::ToolResult { result, .. } => {
-                OllamaMessage::tool_response(&result)
-                    .map_err(|e| Error::Provider(e.to_string()))?
+                OllamaMessage::tool_response(&result).map_err(|e| Error::Provider(e.to_string()))?
             }
         };
         messages.push(ollama_msg);
@@ -211,8 +212,7 @@ fn build_chat_request(
     }
 
     if !request.tools.is_empty() {
-        let ollama_tools: Vec<OllamaTool> =
-            request.tools.iter().map(to_ollama_tool).collect();
+        let ollama_tools: Vec<OllamaTool> = request.tools.iter().map(to_ollama_tool).collect();
         // Ollama requires streaming to be disabled when using tools.
         builder = builder.tools(ollama_tools).stream(false);
     }
@@ -236,7 +236,12 @@ impl LlmModel for OllamaModel {
             let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
 
             if !response.message.tool_calls.is_empty() {
-                tool_calls = response.message.tool_calls.iter().map(to_tool_call).collect();
+                tool_calls = response
+                    .message
+                    .tool_calls
+                    .iter()
+                    .map(to_tool_call)
+                    .collect();
             }
 
             output.push_str(&response.message.content);
@@ -247,10 +252,18 @@ impl LlmModel for OllamaModel {
         }
 
         if !tool_calls.is_empty() {
-            return Ok(ModelResponse { text: None, tool_calls, thinking: None });
+            return Ok(ModelResponse {
+                text: None,
+                tool_calls,
+                thinking: None,
+            });
         }
 
-        Ok(ModelResponse { text: Some(output), tool_calls: vec![], thinking: None })
+        Ok(ModelResponse {
+            text: Some(output),
+            tool_calls: vec![],
+            thinking: None,
+        })
     }
 
     /// Streams the Ollama response as [`ModelStreamChunk`] values.

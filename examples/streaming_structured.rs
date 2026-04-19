@@ -24,15 +24,15 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use futures_util::StreamExt;
-use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use agent_rig::{
     Agent, AgentEvent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
     tool::{Tool, ToolDefinition, ToolRegistry},
 };
+use async_trait::async_trait;
+use futures_util::StreamExt;
+use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -141,8 +141,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runner = AgentRunner::with_registry(Box::new(model), registry);
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
-    println!("Question: {question}
-");
+    println!(
+        "Question: {question}
+"
+    );
 
     let stream = runner.run_stream(&agent, question);
     futures_util::pin_mut!(stream);
@@ -180,8 +182,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("
-");
+    println!(
+        "
+"
+    );
 
     // Deserialize the accumulated JSON into the typed struct.
     let report: WeatherReport = serde_json::from_str(&output)?;

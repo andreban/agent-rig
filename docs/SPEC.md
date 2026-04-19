@@ -214,6 +214,64 @@ let second = runner
 
 The runner remains stateless; the caller owns and extends the history.
 
+### `Conversation` / `ConversationStream` (`src/conversation.rs`)
+
+`Conversation` is a stateful multi-turn wrapper that automatically maintains message history across turns, removing the per-call bookkeeping burden from callers.
+
+```rust
+pub struct Conversation<'a> {
+    runner: &'a AgentRunner,
+    agent: &'a Agent,
+    history: Vec<Message>,
+}
+
+impl<'a> Conversation<'a> {
+    pub fn history(&self) -> &[Message];
+    pub fn history_mut(&mut self) -> &mut Vec<Message>;
+    pub async fn run(&mut self, input: &str) -> Result<AgentResult, Error>;
+    pub fn run_stream<'b>(&'b mut self, input: &'b str) -> ConversationStream<'b>;
+}
+```
+
+Created via `AgentRunner::conversation(&agent)`.
+
+**`run`** drives the agentic loop via `RunBuilder`, then automatically pushes a `Message::user(input)` and `Message::assistant(&result.output)` onto `self.history` before returning.
+
+**`run_stream`** returns a `ConversationStream<'b>` that wraps the inner `RunBuilder` stream and borrows `&mut self.history`. The stream accumulates `TextDelta` chunks internally. When the stream is exhausted (`Poll::Ready(None)`), it pushes the user message and the accumulated assistant reply onto the history. If the stream is **dropped before being fully consumed**, the history is not modified.
+
+```rust
+pub struct ConversationStream<'a> {
+    inner: Pin<Box<dyn Stream<Item = Result<AgentEvent, Error>> + Send + 'a>>,
+    history: &'a mut Vec<Message>,
+    input: String,
+    reply: String,
+    done: bool,
+}
+
+impl Stream for ConversationStream<'_> {
+    type Item = Result<AgentEvent, Error>;
+    // polls inner; on Poll::Ready(None) writes user+assistant messages to history
+}
+```
+
+**History access:** `history()` and `history_mut()` provide shared and mutable access at any time between turns. This allows callers to implement compression, trimming, or synthetic turn injection without abandoning the automatic bookkeeping for future turns.
+
+**Design rationale:** The borrow checker enforces that `ConversationStream` holds `&mut history`, preventing concurrent mutable access. The stream must be fully consumed before the next `run` or `run_stream` call, which is a natural constraint — the caller cannot drive two turns in parallel anyway. This avoids the overhead of `Arc<Mutex<…>>` while keeping the ownership model explicit.
+
+**Usage pattern:**
+
+```rust
+let runner = AgentRunner::new(Box::new(model));
+let mut conv = runner.conversation(&agent);
+
+conv.run("My name is Alice.").await?;
+let result = conv.run("What is my name?").await?;
+// result.output contains the reply; history has all four messages
+
+// Trim old turns if the context grows too large:
+conv.history_mut().drain(..2);
+```
+
 ### `AgentTool` (`src/agent_tool.rs`)
 
 `AgentTool` wraps an `AgentRunner` + `Agent` pair into a value that implements `Tool`, so any agent can delegate to a child agent as if it were a regular tool.
@@ -344,6 +402,7 @@ src/
   tool.rs          — ToolDefinition, Tool trait, ToolRegistry
   agent.rs         — Agent, AgentBuilder
   runner.rs        — AgentRunner, AgentResult, AgentEvent
+  conversation.rs  — Conversation, ConversationStream (stateful multi-turn wrapper)
   agent_tool.rs    — AgentTool (wraps AgentRunner + Agent as a Tool)
   models/
     mod.rs         — feature-gated: #[cfg(feature="gemini")] pub mod gemini; etc.
@@ -366,6 +425,6 @@ tests/
 
 The following capabilities are planned but not yet implemented:
 
-1. ~~**Multi-turn conversations.**~~ Implemented via `AgentRunner::run_builder` + `RunBuilder::history`.
+1. ~~**Multi-turn conversations.**~~ Implemented via `Conversation` (automatic) and `AgentRunner::run_builder` + `RunBuilder::history` (manual).
 2. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.
 3. **True token-by-token Gemini streaming.** `GeminiModel` currently uses the default `generate_stream` (wraps `generate`), so text arrives as a single `TextDelta` after the full response is received. A native implementation using `generate_content_stream` would emit tokens incrementally as they are generated. Thinking tokens and tool calls are already correctly separated and emitted.
