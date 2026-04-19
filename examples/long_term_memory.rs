@@ -22,13 +22,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use agent_rig::{
     Agent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
     tool::{Tool, ToolDefinition, ToolRegistry},
 };
+use async_trait::async_trait;
 use serde_json::{Value, json};
 use tracing_subscriber::EnvFilter;
 
@@ -159,8 +159,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let registry = Arc::new(
         ToolRegistry::new()
-            .register(Box::new(RememberFactTool { store: store.clone() }))
-            .register(Box::new(RecallFactTool { store: store.clone() })),
+            .register(Box::new(RememberFactTool {
+                store: store.clone(),
+            }))
+            .register(Box::new(RecallFactTool {
+                store: store.clone(),
+            })),
     );
 
     let agent = Agent::builder()
@@ -180,32 +184,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("recall_fact")
         .build();
 
-    let runner = AgentRunner::with_registry(
-        Box::new(GeminiModel::new(api_key, MODEL)),
-        registry,
-    );
+    let runner = AgentRunner::with_registry(Box::new(GeminiModel::new(api_key, MODEL)), registry);
 
     // -----------------------------------------------------------------------
     // Session 1 — establishing memory
     // -----------------------------------------------------------------------
-    println!("=== Session 1 ===
-");
+    println!(
+        "=== Session 1 ===
+"
+    );
     let input1 = "My dog's name is Barnaby.";
     println!("User: {input1}");
     let result1 = runner.run(&agent, input1).await?;
-    println!("Assistant: {}
-", result1.output);
+    println!(
+        "Assistant: {}
+",
+        result1.output
+    );
 
     // -----------------------------------------------------------------------
     // Session 2 — retrieving memory with a fresh (empty) conversation history
     // -----------------------------------------------------------------------
-    println!("=== Session 2 (new session — no conversation history) ===
-");
+    println!(
+        "=== Session 2 (new session — no conversation history) ===
+"
+    );
     let input2 = "Do you remember what kind of pet I have and its name?";
     println!("User: {input2}");
     let result2 = runner.run(&agent, input2).await?;
-    println!("Assistant: {}
-", result2.output);
+    println!(
+        "Assistant: {}
+",
+        result2.output
+    );
 
     Ok(())
 }

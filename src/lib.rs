@@ -31,6 +31,7 @@
 //! ```
 
 pub mod agent_tool;
+pub mod conversation;
 pub mod error;
 pub mod model;
 pub mod models;
@@ -41,4 +42,5 @@ mod runner;
 
 pub use agent::{Agent, AgentBuilder};
 pub use agent_tool::AgentTool;
+pub use conversation::{Conversation, ConversationStream};
 pub use runner::{AgentEvent, AgentResult, AgentRunner, RunBuilder};

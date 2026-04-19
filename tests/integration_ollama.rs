@@ -3,16 +3,16 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use agent_rig::{
     Agent, AgentRunner,
     error::Error,
     models::ollama::OllamaModel,
     tool::{Tool, ToolDefinition, ToolRegistry},
 };
-use serde_json::{Value, json};
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::{Value, json};
 
 struct AddTool;
 
@@ -145,7 +145,11 @@ async fn agent_tool_calling_returns_correct_result() {
         .await
         .unwrap();
 
-    assert!(result.output.contains("42"), "expected '42' in output, got: {}", result.output);
+    assert!(
+        result.output.contains("42"),
+        "expected '42' in output, got: {}",
+        result.output
+    );
 }
 
 #[tokio::test]

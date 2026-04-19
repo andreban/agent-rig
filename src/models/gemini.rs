@@ -56,10 +56,7 @@ impl GeminiModel {
     ///
     /// - `api_key` — your Gemini API key.
     /// - `model` — the Gemini model identifier (e.g. `"gemini-2.5-pro-preview-03-25"`).
-    pub fn builder(
-        api_key: impl Into<String>,
-        model: impl Into<String>,
-    ) -> GeminiModelBuilder {
+    pub fn builder(api_key: impl Into<String>, model: impl Into<String>) -> GeminiModelBuilder {
         GeminiModelBuilder {
             api_key: api_key.into(),
             model: model.into(),
@@ -245,7 +242,12 @@ impl LlmModel for GeminiModel {
                                 .collect(),
                         ),
                     },
-                    MessageContent::ToolResult { id, name, result, provider_metadata } => {
+                    MessageContent::ToolResult {
+                        id,
+                        name,
+                        result,
+                        provider_metadata,
+                    } => {
                         let thought_signature = provider_metadata
                             .as_ref()
                             .and_then(|m| m["thought_signature"].as_str())
@@ -342,10 +344,10 @@ impl LlmModel for GeminiModel {
                             // Stash the thought_signature so it can be echoed
                             // back on both the replayed FunctionCall and the
                             // FunctionResponse parts in subsequent turns.
-                            let provider_metadata =
-                                part.thought_signature.as_ref().map(|ts| {
-                                    serde_json::json!({ "thought_signature": ts })
-                                });
+                            let provider_metadata = part
+                                .thought_signature
+                                .as_ref()
+                                .map(|ts| serde_json::json!({ "thought_signature": ts }));
                             Some(ToolCall {
                                 id: id.clone().unwrap_or_default(),
                                 name: name.clone(),
@@ -403,8 +405,16 @@ fn extract_text_and_thinking(candidate: &Candidate) -> (Option<String>, Option<S
         }
     }
 
-    let thinking = if thinking_buf.is_empty() { None } else { Some(thinking_buf) };
-    let text = if text_buf.is_empty() { None } else { Some(text_buf) };
+    let thinking = if thinking_buf.is_empty() {
+        None
+    } else {
+        Some(thinking_buf)
+    };
+    let text = if text_buf.is_empty() {
+        None
+    } else {
+        Some(text_buf)
+    };
     (thinking, text)
 }
 
@@ -415,7 +425,10 @@ mod tests {
 
     fn make_candidate(parts: Vec<Part>) -> Candidate {
         Candidate {
-            content: Some(Content { role: Some(Role::Model), parts: Some(parts) }),
+            content: Some(Content {
+                role: Some(Role::Model),
+                parts: Some(parts),
+            }),
             finish_reason: None,
             citation_metadata: None,
             safety_ratings: None,
@@ -445,10 +458,8 @@ mod tests {
 
     #[test]
     fn extract_separates_thought_and_text_parts() {
-        let candidate = make_candidate(vec![
-            thought_part("hmm..."),
-            text_part("The answer is 42."),
-        ]);
+        let candidate =
+            make_candidate(vec![thought_part("hmm..."), text_part("The answer is 42.")]);
         let (thinking, text) = extract_text_and_thinking(&candidate);
         assert_eq!(thinking.as_deref(), Some("hmm..."));
         assert_eq!(text.as_deref(), Some("The answer is 42."));

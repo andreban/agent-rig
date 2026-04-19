@@ -158,6 +158,17 @@ impl AgentRunner {
     /// [`run`]: RunBuilder::run
     /// [`run_typed`]: RunBuilder::run_typed
     /// [`run_stream`]: RunBuilder::run_stream
+    /// Returns a [`Conversation`] that automatically manages history across turns.
+    ///
+    /// Use this for multi-turn dialogue where you want the library to handle
+    /// appending user and assistant messages after each turn. The history can
+    /// be inspected or modified at any time via [`Conversation::history_mut`].
+    ///
+    /// [`Conversation`]: crate::Conversation
+    pub fn conversation<'a>(&'a self, agent: &'a Agent) -> crate::conversation::Conversation<'a> {
+        crate::conversation::Conversation::new(self, agent)
+    }
+
     pub fn run_builder<'a>(&'a self, agent: &'a Agent) -> RunBuilder<'a> {
         RunBuilder {
             runner: self,
@@ -332,7 +343,10 @@ impl<'a> RunBuilder<'a> {
     /// new `input` turn, yielding [`AgentEvent`] values as the run progresses.
     ///
     /// [`history`]: RunBuilder::history
-    pub fn run_stream(self, input: &str) -> impl Stream<Item = Result<AgentEvent, Error>> + Send + 'a {
+    pub fn run_stream(
+        self,
+        input: &str,
+    ) -> impl Stream<Item = Result<AgentEvent, Error>> + Send + 'a {
         self.run_stream_owned(input.to_string())
     }
 
@@ -382,7 +396,11 @@ impl<'a> RunBuilder<'a> {
         self,
         input: String,
     ) -> impl Stream<Item = Result<AgentEvent, Error>> + Send + 'a {
-        let RunBuilder { runner, agent, mut history } = self;
+        let RunBuilder {
+            runner,
+            agent,
+            mut history,
+        } = self;
         history.push(Message::user(input));
 
         async_stream::try_stream! {
@@ -508,7 +526,11 @@ mod tests {
                     None
                 }
             });
-            Ok(ModelResponse { text: echo, tool_calls: vec![], thinking: None })
+            Ok(ModelResponse {
+                text: echo,
+                tool_calls: vec![],
+                thinking: None,
+            })
         }
     }
 
@@ -538,7 +560,11 @@ mod tests {
     #[async_trait]
     impl LlmModel for JsonModel {
         async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, Error> {
-            Ok(ModelResponse { text: Some(self.0.clone()), tool_calls: vec![], thinking: None })
+            Ok(ModelResponse {
+                text: Some(self.0.clone()),
+                tool_calls: vec![],
+                thinking: None,
+            })
         }
     }
 
@@ -574,7 +600,9 @@ mod tests {
             .tool("missing_tool")
             .build();
 
-        let result = AgentRunner::new(Box::new(EchoModel)).run(&agent, "go").await;
+        let result = AgentRunner::new(Box::new(EchoModel))
+            .run(&agent, "go")
+            .await;
         assert!(matches!(result, Err(Error::Agent(_))));
     }
 
@@ -613,7 +641,11 @@ mod tests {
                     } else {
                         "no result".to_string()
                     };
-                    Ok(ModelResponse { text: Some(answer), tool_calls: vec![], thinking: None })
+                    Ok(ModelResponse {
+                        text: Some(answer),
+                        tool_calls: vec![],
+                        thinking: None,
+                    })
                 }
             }
         }
@@ -698,13 +730,16 @@ mod tests {
                     })
                 } else {
                     let last = request.messages.last().unwrap();
-                    let answer =
-                        if let MessageContent::ToolResult { result, .. } = &last.content {
-                            result["sum"].as_i64().unwrap_or(0).to_string()
-                        } else {
-                            "no result".to_string()
-                        };
-                    Ok(ModelResponse { text: Some(answer), tool_calls: vec![], thinking: None })
+                    let answer = if let MessageContent::ToolResult { result, .. } = &last.content {
+                        result["sum"].as_i64().unwrap_or(0).to_string()
+                    } else {
+                        "no result".to_string()
+                    };
+                    Ok(ModelResponse {
+                        text: Some(answer),
+                        tool_calls: vec![],
+                        thinking: None,
+                    })
                 }
             }
         }
@@ -721,14 +756,20 @@ mod tests {
                 }
             }
             async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, Error> {
-                Ok(json!({"sum": args["a"].as_i64().unwrap_or(0) + args["b"].as_i64().unwrap_or(0)}))
+                Ok(
+                    json!({"sum": args["a"].as_i64().unwrap_or(0) + args["b"].as_i64().unwrap_or(0)}),
+                )
             }
         }
 
         CALL_COUNT2.store(0, Ordering::SeqCst);
         let registry = Arc::new(ToolRegistry::new().register(Box::new(AddTool2)));
         let runner = AgentRunner::with_registry(Box::new(ToolLoopModel2), registry);
-        let agent = Agent::builder().name("T").instructions("i").tool("add").build();
+        let agent = Agent::builder()
+            .name("T")
+            .instructions("i")
+            .tool("add")
+            .build();
 
         let events = collect_stream(&runner, &agent, "go").await;
 
@@ -741,7 +782,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_stream_executes_multiple_tool_calls_in_parallel() {
-        use crate::model::{ToolCall as ModelToolCall};
+        use crate::model::ToolCall as ModelToolCall;
         use crate::tool::{Tool, ToolDefinition, ToolRegistry};
         use serde_json::json;
         use std::sync::atomic::{AtomicU32, Ordering};
@@ -814,10 +855,18 @@ mod tests {
 
         // Expected: Started(c1), Started(c2), Completed(c1), Completed(c2), TextDelta
         assert_eq!(events.len(), 5);
-        assert!(matches!(&events[0], AgentEvent::ToolCallStarted { name, args } if name == "double" && args["x"] == 3));
-        assert!(matches!(&events[1], AgentEvent::ToolCallStarted { name, args } if name == "double" && args["x"] == 7));
-        assert!(matches!(&events[2], AgentEvent::ToolCallCompleted { name, result } if name == "double" && result["result"] == 6));
-        assert!(matches!(&events[3], AgentEvent::ToolCallCompleted { name, result } if name == "double" && result["result"] == 14));
+        assert!(
+            matches!(&events[0], AgentEvent::ToolCallStarted { name, args } if name == "double" && args["x"] == 3)
+        );
+        assert!(
+            matches!(&events[1], AgentEvent::ToolCallStarted { name, args } if name == "double" && args["x"] == 7)
+        );
+        assert!(
+            matches!(&events[2], AgentEvent::ToolCallCompleted { name, result } if name == "double" && result["result"] == 6)
+        );
+        assert!(
+            matches!(&events[3], AgentEvent::ToolCallCompleted { name, result } if name == "double" && result["result"] == 14)
+        );
         assert!(matches!(&events[4], AgentEvent::TextDelta(t) if t == "done"));
     }
 
@@ -831,13 +880,18 @@ mod tests {
         #[async_trait]
         impl LlmModel for ThinkingModel {
             async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, Error> {
-                Ok(ModelResponse { text: Some("answer".to_string()), tool_calls: vec![], thinking: None })
+                Ok(ModelResponse {
+                    text: Some("answer".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                })
             }
 
             fn generate_stream(
                 &self,
                 _request: ModelRequest,
-            ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
+            ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>>
+            {
                 Box::pin(async_stream::stream! {
                     yield Ok(ModelStreamChunk::Thinking("hmm".to_string()));
                     yield Ok(ModelStreamChunk::TextDelta("answer".to_string()));
@@ -869,7 +923,10 @@ mod tests {
         let agent = Agent::builder().name("T").instructions("i").build();
         let stream = runner.run_stream(&agent, "q");
         futures_util::pin_mut!(stream);
-        let first = stream.next().await.expect("stream should yield at least one item");
+        let first = stream
+            .next()
+            .await
+            .expect("stream should yield at least one item");
         assert!(matches!(first, Err(Error::Provider(_))));
     }
 
@@ -883,7 +940,11 @@ mod tests {
         impl LlmModel for CaptureModel {
             async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
                 *self.captured.lock().unwrap() = Some(request.clone());
-                Ok(ModelResponse { text: Some(String::new()), tool_calls: vec![], thinking: None })
+                Ok(ModelResponse {
+                    text: Some(String::new()),
+                    tool_calls: vec![],
+                    thinking: None,
+                })
             }
         }
 

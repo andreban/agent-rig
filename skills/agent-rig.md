@@ -47,8 +47,10 @@ dotenvy = "0.15"
 | Type | Description |
 |------|-------------|
 | `Agent` / `AgentBuilder` | Pure data blueprint: name, instructions, optional output schema, allowed tool names. Implements `Serialize`/`Deserialize` so configs can be stored as JSON/YAML. |
-| `AgentRunner` | Execution engine; owns `Box<dyn LlmModel>` and a shared `ToolRegistry`. Stateless — callers own conversation history. |
-| `RunBuilder` | Fluent per-run builder produced by `runner.run_builder(&agent)`. Accepts optional conversation history. |
+| `AgentRunner` | Execution engine; owns `Box<dyn LlmModel>` and a shared `ToolRegistry`. Stateless — use `Conversation` for automatic history or `RunBuilder` for manual control. |
+| `Conversation` | Stateful multi-turn wrapper produced by `runner.conversation(&agent)`. Automatically appends user and assistant messages after each turn. History is accessible and mutable via `history()` / `history_mut()`. |
+| `ConversationStream` | Returned by `Conversation::run_stream`. Updates history when fully consumed; history is unchanged if dropped early. |
+| `RunBuilder` | Fluent per-run builder produced by `runner.run_builder(&agent)`. Accepts manually-supplied conversation history. Use when you need fine-grained control over what goes into the history. |
 | `AgentResult` | Returned by `run` / `run_typed`. Has a single field: `output: String`. |
 | `LlmModel` | Async trait all provider adapters implement. The extension point for new providers. |
 | `Tool` / `ToolDefinition` | Async trait for callable tools; parameters are a JSON Schema `Value`. |
@@ -58,7 +60,8 @@ dotenvy = "0.15"
 | `Error` | `Provider(String)` or `Agent(String)`. |
 
 **Key design rule**: `Agent` carries no model reference — the same blueprint can run on any
-`AgentRunner`. The runner is stateless; callers own and extend conversation history between turns.
+`AgentRunner`. Use `Conversation` for automatic history management; use `RunBuilder` when you need
+to supply or manipulate history explicitly.
 
 ---
 
@@ -96,12 +99,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Multi-Turn Conversations
 
-The runner is stateless. The caller owns and extends the history between turns. Use
-`run_builder(&agent).history(history)` for each turn.
+### Automatic history — `Conversation` (preferred)
+
+`runner.conversation(&agent)` returns a `Conversation` that tracks history automatically.
+After each completed turn the user message and assistant reply are pushed onto the internal
+history, so the next call sees full context.
 
 ```rust
 use agent_rig::{Agent, AgentRunner};
-use agent_rig::model::Message;
 use agent_rig::models::gemini::GeminiModel;
 
 #[tokio::main]
@@ -115,31 +120,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .instructions("You are a helpful assistant.")
         .build();
     let runner = AgentRunner::new(Box::new(model));
+    let mut conv = runner.conversation(&agent);
 
-    // First turn — no history.
-    let first = runner.run(&agent, "My name is Alice.").await?;
-    println!("Turn 1: {}", first.output);
+    conv.run("My name is Alice.").await?;
+    let result = conv.run("What is my name?").await?;
+    println!("{}", result.output); // "Your name is Alice."
 
-    // Build history from the completed turn.
-    let mut history = vec![
-        Message::user("My name is Alice."),
-        Message::assistant(&first.output),
-    ];
-
-    // Second turn — pass accumulated history.
-    let second = runner
-        .run_builder(&agent)
-        .history(history.clone())
-        .run("What is my name?")
-        .await?;
-    println!("Turn 2: {}", second.output); // "Your name is Alice."
-
-    // Extend for the next turn.
-    history.push(Message::user("What is my name?"));
-    history.push(Message::assistant(&second.output));
+    // Trim oldest two messages when the context grows large.
+    conv.history_mut().drain(..2);
 
     Ok(())
 }
+```
+
+Streaming also updates history automatically — when the stream is **fully consumed**:
+
+```rust
+use futures_util::StreamExt;
+use agent_rig::AgentEvent;
+
+let stream = conv.run_stream("Tell me a joke.");
+futures_util::pin_mut!(stream);
+while let Some(event) = stream.next().await {
+    if let AgentEvent::TextDelta(chunk) = event? { print!("{chunk}"); }
+}
+// History now includes this turn.
+```
+
+### Manual history — `RunBuilder`
+
+Use `run_builder` when you need fine-grained control over what gets stored in the history
+(e.g., injecting synthetic messages or skipping certain turns).
+
+```rust
+use agent_rig::model::Message;
+
+let first = runner.run(&agent, "My name is Alice.").await?;
+
+let mut history = vec![
+    Message::user("My name is Alice."),
+    Message::assistant(&first.output),
+];
+
+let second = runner
+    .run_builder(&agent)
+    .history(history.clone())
+    .run("What is my name?")
+    .await?;
+
+history.push(Message::user("What is my name?"));
+history.push(Message::assistant(&second.output));
 ```
 
 ---
@@ -259,7 +289,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `Thinking` tokens are only emitted when the model has extended thinking enabled **and** the
   provider has a native `generate_stream` implementation. `OllamaModel` has native streaming;
   `GeminiModel` currently emits output as a single `TextDelta`.
-- For multi-turn streaming, use `runner.run_builder(&agent).history(history).run_stream(input)`.
+- For multi-turn streaming with automatic history, use `conv.run_stream(input)` on a `Conversation`.
+  For manual history, use `runner.run_builder(&agent).history(history).run_stream(input)`.
 
 ---
 
@@ -525,8 +556,12 @@ Add `"myprovider"` to the `full` feature alias in `Cargo.toml`.
 
 - **Tool name mismatch**: `.tool("name")` on the agent must match `ToolDefinition::name` exactly, or
   the runner panics / returns `Error::Agent` at runtime. Check spelling and casing.
-- **History ownership**: The runner is stateless. After each turn, append `Message::user(input)` and
-  `Message::assistant(&result.output)` to your vec manually before the next call.
+- **History ownership**: Prefer `Conversation` — it appends user and assistant messages automatically
+  after each turn. If using `RunBuilder` directly, you must append `Message::user(input)` and
+  `Message::assistant(&result.output)` manually before the next call.
+- **`ConversationStream` must be fully consumed**: History is only updated when the stream is driven
+  to completion (`Poll::Ready(None)`). Dropping a `ConversationStream` early silently skips the
+  history update.
 - **`text` and `tool_calls` are mutually exclusive in `ModelResponse`**: return one or the other,
   never both. The runner loops until it receives a text-only response.
 - **Stream must be pinned**: Always `futures_util::pin_mut!(stream)` before calling `.next().await`

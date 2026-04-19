@@ -44,7 +44,9 @@ struct ResearchPlan {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
     let model = GeminiModel::builder(api_key, MODEL)

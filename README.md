@@ -9,7 +9,7 @@ Define your agent once and run it against any supported LLM backend — swap pro
 - **Provider-agnostic API** — same `Agent` + `AgentRunner` code works with Google Gemini, Ollama, or any custom `LlmModel` implementation
 - **Agentic loop** — the runner automatically handles tool call / response cycles until the model produces a final text response
 - **Concurrent tool execution** — multiple tool calls in a single model turn are executed in parallel
-- **Multi-turn conversations** — pass conversation history via `RunBuilder` for stateful dialogue
+- **Multi-turn conversations** — `Conversation` manages history automatically; `RunBuilder` for manual control
 - **Structured output** — constrain model output to a JSON Schema; `run_typed<T>` deserializes directly into your type
 - **Streaming** — token-by-token output via `run_stream`, including thinking tokens from extended-reasoning models
 - **Agent composition** — wrap any agent as a `Tool` with `AgentTool` so a parent agent can delegate to child agents
@@ -81,28 +81,52 @@ println!("{}", result.output); // "Paris"
 
 ### Multi-turn conversations
 
-`run_builder` + `history` enables stateful dialogue. The runner is stateless; you own and extend the history.
+Use `runner.conversation(&agent)` to create a `Conversation` that manages history automatically. After each turn the user message and assistant reply are appended to the internal history, so the next call sees full context.
+
+```rust
+let mut conv = runner.conversation(&agent);
+
+conv.run("My name is Alice.").await?;
+let result = conv.run("What is my name?").await?;
+println!("{}", result.output); // "Your name is Alice."
+```
+
+The history is accessible and mutable between turns, allowing strategies such as compression or trimming:
+
+```rust
+// Trim oldest two messages when the context grows large.
+conv.history_mut().drain(..2);
+```
+
+Streaming works the same way — history is updated automatically when the stream is fully consumed:
+
+```rust
+use futures_util::StreamExt;
+use agent_rig::AgentEvent;
+
+let stream = conv.run_stream("Tell me a joke.");
+futures_util::pin_mut!(stream);
+while let Some(event) = stream.next().await {
+    if let AgentEvent::TextDelta(chunk) = event? { print!("{chunk}"); }
+}
+// History now includes this turn.
+```
+
+For cases where you need to manage history yourself, `run_builder` + `history` is still available:
 
 ```rust
 use agent_rig::model::Message;
 
-// First turn
 let first = runner.run(&agent, "My name is Alice.").await?;
-
-// Build history
-let mut history = vec![
+let history = vec![
     Message::user("My name is Alice."),
     Message::assistant(&first.output),
 ];
-
-// Second turn — model remembers the name
 let second = runner
     .run_builder(&agent)
-    .history(history.clone())
+    .history(history)
     .run("What is my name?")
     .await?;
-
-println!("{}", second.output); // "Your name is Alice."
 ```
 
 ### Tool calling
@@ -298,7 +322,8 @@ graph TD
 |------|-------------|
 | `Agent` / `AgentBuilder` | Serializable agent definition (name, instructions, tools, output schema) |
 | `AgentRunner` | Execution engine; owns the model and tool registry |
-| `RunBuilder` | Fluent builder for a single run; accepts conversation history |
+| `Conversation` | Stateful multi-turn wrapper; manages history automatically across turns |
+| `RunBuilder` | Fluent builder for a single run; accepts manually-supplied conversation history |
 | `LlmModel` | Async trait that provider adapters implement |
 | `Tool` / `ToolDefinition` | Async trait for callable tools; JSON Schema parameters |
 | `ToolRegistry` | Shared, thread-safe registry of `Tool` implementations |

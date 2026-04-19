@@ -24,15 +24,15 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use futures_util::StreamExt;
-use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use agent_rig::{
     Agent, AgentEvent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
     tool::{Tool, ToolDefinition, ToolRegistry},
 };
+use async_trait::async_trait;
+use futures_util::StreamExt;
+use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use serde_json::{Value, json};
 use tracing_subscriber::EnvFilter;
 
@@ -102,8 +102,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runner = AgentRunner::with_registry(Box::new(model), registry);
 
-    println!("Question: What is 1234 + 5678?
-");
+    println!(
+        "Question: What is 1234 + 5678?
+"
+    );
 
     let stream = runner.run_stream(&agent, "What is 1234 + 5678?");
     futures_util::pin_mut!(stream);

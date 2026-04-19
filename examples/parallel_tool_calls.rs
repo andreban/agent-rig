@@ -25,14 +25,14 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use async_trait::async_trait;
-use futures_util::StreamExt;
 use agent_rig::{
     Agent, AgentEvent, AgentRunner,
     error::Error,
     models::gemini::GeminiModel,
     tool::{Tool, ToolDefinition, ToolRegistry},
 };
+use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tracing_subscriber::EnvFilter;
 
@@ -109,15 +109,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("get_temperature")
         .build();
 
-    let runner = AgentRunner::with_registry(
-        Box::new(GeminiModel::new(api_key, MODEL)),
-        registry,
-    );
+    let runner = AgentRunner::with_registry(Box::new(GeminiModel::new(api_key, MODEL)), registry);
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
     println!("Question: {question}");
-    println!("(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)
-");
+    println!(
+        "(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)
+"
+    );
 
     let start = Instant::now();
     let stream = runner.run_stream(&agent, question);
@@ -139,11 +138,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!();
-    println!("
-Total elapsed: {:.0?}", start.elapsed());
     println!(
-        "  3 × 500 ms in parallel ≈ 500 ms  (sequential would be ≈ 1 500 ms)"
+        "
+Total elapsed: {:.0?}",
+        start.elapsed()
     );
+    println!("  3 × 500 ms in parallel ≈ 500 ms  (sequential would be ≈ 1 500 ms)");
 
     Ok(())
 }

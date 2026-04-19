@@ -80,7 +80,11 @@ impl AgentTool {
     /// description, parameters). The `agent` and `runner` are the child
     /// agent's blueprint and execution engine respectively.
     pub fn new(definition: ToolDefinition, agent: Agent, runner: AgentRunner) -> Self {
-        Self { definition, agent, runner }
+        Self {
+            definition,
+            agent,
+            runner,
+        }
     }
 }
 
@@ -125,7 +129,11 @@ mod tests {
                     None
                 }
             });
-            Ok(ModelResponse { text: echo, tool_calls: vec![], thinking: None })
+            Ok(ModelResponse {
+                text: echo,
+                tool_calls: vec![],
+                thinking: None,
+            })
         }
     }
 
