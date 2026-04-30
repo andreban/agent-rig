@@ -147,8 +147,12 @@ pub struct ToolCall {
     /// Opaque provider metadata that must be round-tripped back with the tool
     /// response. Used by Gemini to carry the `thought_signature`; other
     /// providers leave this as `None`.
+    ///
+    /// External [`LlmModel`] implementations populate this when constructing a
+    /// [`ToolCall`] from a provider response, and read it when echoing the call
+    /// back on the next turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) provider_metadata: Option<serde_json::Value>,
+    pub provider_metadata: Option<serde_json::Value>,
 }
 
 impl ToolCall {
