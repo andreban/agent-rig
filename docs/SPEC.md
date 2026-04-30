@@ -86,6 +86,7 @@ pub struct ToolCall {
     pub id: String,                    // provider-supplied call ID (echoed in response)
     pub name: String,
     pub args: serde_json::Value,
+    pub provider_metadata: Option<serde_json::Value>, // opaque metadata round-tripped to the provider (e.g. Gemini thought_signature)
 }
 
 pub struct ModelResponse {
