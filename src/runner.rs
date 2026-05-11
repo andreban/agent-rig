@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
 use serde::de::DeserializeOwned;
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::{
     agent::Agent,
@@ -451,23 +451,35 @@ impl<'a> RunBuilder<'a> {
                     }
                 }
 
-                if turn_tool_calls.is_empty() {
+                let call_count = turn_tool_calls.len();
+                // Drop tool calls whose names are not in the registry (e.g.
+                // provider-executed built-in tools or model hallucinations) so
+                // they do not corrupt the message history with unpaired
+                // tool_call/tool_result entries.
+                let runnable_tool_calls: Vec<ToolCall> = turn_tool_calls
+                    .into_iter()
+                    .filter(|c| runner.registry.contains(&c.name))
+                    .collect();
+
+                info!(call_count, runnable = runnable_tool_calls.len(), "Tools");
+
+                if runnable_tool_calls.is_empty() {
                     if !has_text {
                         Err(Error::Agent(
-                            "model returned neither text nor tool calls".to_string(),
+                            "model returned neither text nor runnable tool calls".to_string(),
                         ))?;
                     }
                     debug!("run complete");
                     break;
                 }
 
-                debug!(count = turn_tool_calls.len(), "model requested tool calls");
+                debug!(count = runnable_tool_calls.len(), "model requested tool calls");
 
-                // Append all tool calls as a single assistant turn.
-                messages.push(Message::tool_calls(turn_tool_calls.clone()));
+                // Append the runnable tool calls as a single assistant turn.
+                messages.push(Message::tool_calls(runnable_tool_calls.clone()));
 
                 // Emit ToolCallStarted for every call before any execute.
-                for call in &turn_tool_calls {
+                for call in &runnable_tool_calls {
                     debug!(tool = call.name, "executing tool");
                     yield AgentEvent::ToolCallStarted {
                         name: call.name.clone(),
@@ -475,20 +487,24 @@ impl<'a> RunBuilder<'a> {
                     };
                 }
 
-                // Validate all tools exist and build their call futures.
-                let mut tool_futures = Vec::new();
-                for call in &turn_tool_calls {
-                    let tool = runner.registry.get(&call.name).ok_or_else(|| {
-                        Error::Agent(format!("model called unregistered tool '{}'", call.name))
-                    })?;
-                    tool_futures.push(tool.call(call.args.clone()));
-                }
+                // Build the tool call futures. Lookup is infallible — the
+                // filter above guarantees every name is registered.
+                let tool_futures: Vec<_> = runnable_tool_calls
+                    .iter()
+                    .map(|call| {
+                        runner
+                            .registry
+                            .get(&call.name)
+                            .expect("filtered to registered tools above")
+                            .call(call.args.clone())
+                    })
+                    .collect();
 
                 // Execute all tool calls concurrently.
                 let results = futures_util::future::join_all(tool_futures).await;
 
                 // Emit ToolCallCompleted and append result messages in order.
-                for (call, result) in turn_tool_calls.iter().zip(results) {
+                for (call, result) in runnable_tool_calls.iter().zip(results) {
                     debug!(tool = call.name, "tool call complete");
                     let result = result?;
                     yield AgentEvent::ToolCallCompleted {
