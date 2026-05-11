@@ -10,7 +10,7 @@ use std::{
 };
 use tracing_subscriber::EnvFilter;
 
-const MODEL: &str = "gemini-3.1-flash-lite-preview";
+const MODEL: &str = "gemini-3.1-flash-lite";
 
 /// A simple streaming REPL that demonstrates multi-turn conversation using
 /// [`Conversation::run_stream`].
