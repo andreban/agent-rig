@@ -117,6 +117,7 @@ mod tests {
     use serde_json::json;
 
     /// A stub model that echoes the last user message text as its response.
+    #[derive(Clone)]
     struct EchoModel;
 
     #[async_trait]
@@ -138,6 +139,7 @@ mod tests {
     }
 
     /// A stub model that always returns an error.
+    #[derive(Clone)]
     struct ErrorModel;
 
     #[async_trait]

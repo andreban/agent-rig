@@ -39,6 +39,7 @@ pub mod tool;
 
 mod agent;
 mod runner;
+pub mod mpsc_runner;
 
 pub use agent::{Agent, AgentBuilder};
 pub use agent_tool::AgentTool;
