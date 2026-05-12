@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use tracing_subscriber::EnvFilter;
 
-const MODEL: &str = "gemini-3.1-flash-lite-preview";
+const MODEL: &str = "gemini-3.1-flash-lite";
 
 const INSTRUCTIONS: &str = "\
 You are a research planning assistant. \

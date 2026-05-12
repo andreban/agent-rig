@@ -36,7 +36,7 @@ use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use serde_json::{Value, json};
 use tracing_subscriber::EnvFilter;
 
-const MODEL: &str = "gemini-3.1-flash-lite-preview";
+const MODEL: &str = "gemini-3.1-flash-lite";
 
 // ---------------------------------------------------------------------------
 // Tool: add two integers

@@ -9,7 +9,7 @@ use std::error::Error;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
-const MODEL: &str = "gemini-3.1-flash-lite-preview";
+const MODEL: &str = "gemini-3.1-flash-lite";
 
 /// Child agent: summarises text passed in the `text` field of its JSON input.
 fn summariser_tool(api_key: &str) -> AgentTool {
