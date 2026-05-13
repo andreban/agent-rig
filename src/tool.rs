@@ -130,6 +130,10 @@ impl ToolRegistry {
         self
     }
 
+    pub fn definitions(&self) -> Vec<ToolDefinition> {
+        self.tools.values().map(|t| t.definition()).collect()
+    }
+
     /// Returns the tool registered under `name`, or `None` if not found.
     pub(crate) fn get(&self, name: &str) -> Option<&dyn Tool> {
         self.tools.get(name).map(|t| t.as_ref())
