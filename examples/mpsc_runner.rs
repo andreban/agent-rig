@@ -95,6 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCallError { name, error } => {
                 println!("[runner] error:     {name} → {error}");
             }
+            AgentEvent::ToolCallDenied { name, reason } => {
+                println!("[runner] denied:    {name} → {reason}");
+            }
             AgentEvent::TextDelta(chunk) => {
                 print!("{chunk}");
             }

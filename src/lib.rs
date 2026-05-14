@@ -31,6 +31,7 @@
 //! ```
 
 pub mod agent_tool;
+pub mod auth;
 pub mod conversation;
 pub mod error;
 pub mod model;

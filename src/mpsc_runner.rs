@@ -7,6 +7,7 @@ use tracing::debug;
 
 use crate::{
     Agent,
+    auth::AuthManager,
     model::{LlmModel, Message, ModelRequest, ModelStreamChunk, ToolCall},
     tool::{ToolDefinition, ToolRegistry},
 };
@@ -25,6 +26,10 @@ pub enum AgentEvent {
         name: String,
         error: crate::error::Error,
     },
+    ToolCallDenied {
+        name: String,
+        reason: String,
+    },
     ThinkingDelta(String),
     TextDelta(String),
     Error(crate::error::Error),
@@ -40,6 +45,7 @@ pub struct RunnerEvent {
 pub struct MpscRunner {
     model: Arc<dyn LlmModel>,
     registry: Arc<ToolRegistry>,
+    auth_manager: Option<Arc<dyn AuthManager>>,
 }
 
 impl MpscRunner {
@@ -47,11 +53,25 @@ impl MpscRunner {
         MpscRunner {
             model,
             registry: Arc::new(ToolRegistry::new()),
+            auth_manager: None,
         }
     }
 
     pub fn with_registry(model: Arc<dyn LlmModel>, registry: Arc<ToolRegistry>) -> Self {
-        MpscRunner { model, registry }
+        MpscRunner {
+            model,
+            registry,
+            auth_manager: None,
+        }
+    }
+
+    /// Sets the [`AuthManager`] consulted before every tool call.
+    ///
+    /// With no manager set, no authorization is performed and all calls run.
+    /// The manager decides which calls require approval and how to obtain it.
+    pub fn with_auth_manager(mut self, auth_manager: Arc<dyn AuthManager>) -> Self {
+        self.auth_manager = Some(auth_manager);
+        self
     }
 
     pub fn run(
@@ -123,25 +143,41 @@ impl MpscRunner {
         // Append the tool calls as a single assistant turn.
         thread.push(Message::tool_calls(tool_calls.clone()));
 
-        // Each future runs the full lifecycle for one call: emit Started (if
-        // the tool is registered), execute, emit Finished/Error. Hallucinated
-        // calls skip Started but still produce a synthetic error result so the
-        // assistant turn and tool-result messages remain paired.
+        // Each future runs the full lifecycle for one call: authorization check
+        // (if required), emit Started, execute, emit Finished / Error / Denied.
+        // Hallucinated calls skip Started but still produce a synthetic result
+        // so the assistant turn and tool-result messages remain paired.
         let tool_futures = tool_calls.into_iter().map(|call| async move {
-            let result = match self.registry.get(&call.name) {
-                Some(tool) => {
-                    let _ = tx
-                        .send(AgentEvent::ToolCallStarted {
-                            name: call.name.clone(),
-                            args: call.args.clone(),
-                        })
-                        .await;
-                    tool.call(call.args.clone()).await
-                }
-                None => Ok(Value::from(format!("unknown tool: {}", call.name))),
+            // Hallucinated tool: produce a synthetic message, no events.
+            let Some(tool) = self.registry.get(&call.name) else {
+                let value = Value::from(format!("unknown tool: {}", call.name));
+                return (call, value);
             };
 
-            let (event, result_value) = match result {
+            // Authorization gate: the sync check decides whether to consult
+            // the async decision path. If no manager is configured, no gating.
+            if let Some(auth) = &self.auth_manager
+                && auth.requires_authorization(&call.name, &call.args)
+                && let Err(reason) = auth.authorize(&call.name, &call.args).await
+            {
+                let value = Value::from(format!("authorization denied: {reason}"));
+                let _ = tx
+                    .send(AgentEvent::ToolCallDenied {
+                        name: call.name.clone(),
+                        reason,
+                    })
+                    .await;
+                return (call, value);
+            }
+
+            let _ = tx
+                .send(AgentEvent::ToolCallStarted {
+                    name: call.name.clone(),
+                    args: call.args.clone(),
+                })
+                .await;
+
+            let (event, result_value) = match tool.call(call.args.clone()).await {
                 Ok(value) => (
                     AgentEvent::ToolCallFinished {
                         name: call.name.clone(),
@@ -150,7 +186,7 @@ impl MpscRunner {
                     value,
                 ),
                 Err(error) => {
-                    let value = Value::from(format!("Error: {}", error));
+                    let value = Value::from(format!("Error: {error}"));
                     (
                         AgentEvent::ToolCallError {
                             name: call.name.clone(),
