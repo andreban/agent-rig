@@ -29,6 +29,12 @@ use crate::{
 mod events;
 pub use events::{AgentEvent, RunEvent, ToolCallResult};
 
+/// Buffer size of the per-run mpsc channel that carries [`RunEvent`]s from
+/// the spawned agentic loop to the consumer's stream. Sized to absorb a
+/// typical token burst from a streaming provider without forcing the
+/// worker to round-trip on every event.
+const EVENT_CHANNEL_CAPACITY: usize = 100;
+
 #[derive(Debug)]
 pub struct RunEmitter {
     pub run_id: usize,
@@ -135,7 +141,7 @@ impl AgentRunner {
         let agent = agent.clone();
 
         let stream = async_stream::stream! {
-          let (tx, mut rx) = mpsc::channel::<RunEvent>(100);
+          let (tx, mut rx) = mpsc::channel::<RunEvent>(EVENT_CHANNEL_CAPACITY);
           let tx = RunEmitter::new(tx, None);
           tokio::spawn(cloned.main_loop(tx, agent, thread));
 
