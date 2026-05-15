@@ -5,7 +5,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [features]
-default = ["gemini"]
+default = []
 gemini = ["dep:geologia"]
 ollama = ["dep:ollama-rs"]
 full = ["gemini", "ollama"]

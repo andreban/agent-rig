@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use crate::tools::{
     agent_tool::AgentTool,
@@ -13,8 +13,9 @@ use crate::tools::{
 pub enum ToolRegistryEntry {
     /// A plain tool implementation.
     Tool(Box<dyn Tool>),
-    /// A sub-agent registered as a tool.
-    Agent(AgentTool),
+    /// A sub-agent registered as a tool. Boxed to keep the enum compact —
+    /// `AgentTool` is much larger than `Box<dyn Tool>`.
+    Agent(Box<AgentTool>),
 }
 
 impl ToolRegistryEntry {
@@ -83,7 +84,8 @@ impl ToolRegistry {
     /// the same name is already registered, it is overwritten.
     pub fn register_agent(mut self, agent: AgentTool) -> Self {
         let name = agent.definition().name.clone();
-        self.tools.insert(name, ToolRegistryEntry::Agent(agent));
+        self.tools
+            .insert(name, ToolRegistryEntry::Agent(Box::new(agent)));
         self
     }
 
@@ -96,17 +98,7 @@ impl ToolRegistry {
 
     /// Returns the tool registered under `name`, or `None` if not found.
     pub(crate) fn get(&self, name: &str) -> Option<&ToolRegistryEntry> {
-        self.tools.get(name).map(|t| t)
-    }
-
-    /// Returns `true` if a tool with the given name is registered.
-    pub(crate) fn contains(&self, name: &str) -> bool {
-        self.tools.contains_key(name)
-    }
-
-    /// Returns an empty registry wrapped in `Arc`.
-    pub(crate) fn empty() -> Arc<Self> {
-        Arc::new(Self::new())
+        self.tools.get(name)
     }
 }
 
@@ -147,13 +139,11 @@ mod tests {
         let reg = ToolRegistry::new();
         assert!(reg.definitions().is_empty());
         assert!(reg.get("anything").is_none());
-        assert!(!reg.contains("anything"));
     }
 
     #[test]
     fn register_keys_by_definition_name() {
         let reg = ToolRegistry::new().register(Box::new(StubTool { name: "alpha" }));
-        assert!(reg.contains("alpha"));
         assert!(matches!(reg.get("alpha"), Some(ToolRegistryEntry::Tool(_))));
     }
 

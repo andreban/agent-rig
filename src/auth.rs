@@ -22,9 +22,11 @@ use serde_json::Value;
 ///   args inspection). No I/O, no locks, no awaits — the sync signature is
 ///   the contract.
 /// - [`authorize`] — async, may block on user input, RPC, dialogs, etc.
-///   Returns `Ok(())` to allow, `Err(reason)` to deny. The reason is
-///   surfaced as a denial event by the runner and fed back to the model
-///   as the tool result so it can react.
+///   Returns `true` to allow the call, `false` to deny it. Denial is a
+///   binary outcome (modelled after an accept/decline approval prompt);
+///   the runner reports it via
+///   [`ToolCallResult::Denied`](crate::runner::ToolCallResult::Denied) with
+///   no accompanying reason.
 ///
 /// `authorize` may be called concurrently when the model returns multiple
 /// tool calls in one turn. Implementations sharing UI resources (stdin, a

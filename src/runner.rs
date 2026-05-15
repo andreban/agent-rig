@@ -48,10 +48,10 @@ pub enum ToolCallResult {
 impl From<ToolCallResult> for Value {
     fn from(value: ToolCallResult) -> Self {
         match value {
-            ToolCallResult::Denied => Value::from(format!("Tool call denied")),
+            ToolCallResult::Denied => Value::from("Tool call denied"),
             ToolCallResult::Ok(result) => result,
-            ToolCallResult::Err(error) => Value::from(format!("Tool call error: {error:?}")),
-            ToolCallResult::Unknown => Value::from(format!("Unknown tool")),
+            ToolCallResult::Err(error) => Value::from(format!("Tool call error: {error}")),
+            ToolCallResult::Unknown => Value::from("Unknown tool"),
         }
     }
 }
@@ -271,8 +271,8 @@ impl AgentRunner {
                 .await;
 
             let event = match tool {
-                ToolRegistryEntry::Tool(t) => handle_tool(t, &call).await,
-                ToolRegistryEntry::Agent(a) => handle_agent(a, &call, tx.clone()).await,
+                ToolRegistryEntry::Tool(t) => handle_tool(t.as_ref(), &call).await,
+                ToolRegistryEntry::Agent(a) => handle_agent(a.as_ref(), &call, tx.clone()).await,
             };
 
             debug!(tool = call.name, "tool call complete");
@@ -300,7 +300,7 @@ impl AgentRunner {
     }
 }
 
-async fn handle_tool(tool: &Box<dyn Tool>, tool_call: &ToolCall) -> ToolCallResult {
+async fn handle_tool(tool: &dyn Tool, tool_call: &ToolCall) -> ToolCallResult {
     let result = tool.call(tool_call.args.clone()).await;
     match result {
         Ok(result) => ToolCallResult::Ok(result),
