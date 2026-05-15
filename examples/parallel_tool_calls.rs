@@ -13,8 +13,7 @@
 //! - Measuring wall-clock time: ~500 ms total instead of the ~1 500 ms that
 //!   sequential execution would take.
 //!
-//! The `run_stream` output also illustrates the new event ordering:
-//! all `ToolCallStarted` events fire before any `ToolCallCompleted` event,
+//! All `ToolCallStarted` events fire before any `ToolCallFinished` event,
 //! confirming that the calls are in flight simultaneously.
 //!
 //! Run with:
@@ -25,23 +24,17 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use agent_rig::{
-    Agent, AgentEvent, AgentRunner,
-    error::Error,
-    models::gemini::GeminiModel,
-    tool::{Tool, ToolDefinition, ToolRegistry},
-};
+use agent_rig::error::Error;
+use agent_rig::model::Message;
+use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
-
-// ---------------------------------------------------------------------------
-// Tool: get_temperature
-// Simulates a slow remote weather API (500 ms round-trip).
-// ---------------------------------------------------------------------------
 
 struct GetTemperatureTool;
 
@@ -68,7 +61,6 @@ impl Tool for GetTemperatureTool {
     async fn call(&self, args: Value) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown").to_string();
 
-        // Simulate a 500 ms network round-trip.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         let celsius = match city.to_lowercase().as_str() {
@@ -82,10 +74,6 @@ impl Tool for GetTemperatureTool {
         Ok(json!({ "city": city, "celsius": celsius }))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -109,40 +97,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("get_temperature")
         .build();
 
-    let runner = AgentRunner::with_registry(Box::new(GeminiModel::new(api_key, MODEL)), registry);
+    let runner = AgentRunner::with_registry(Arc::new(GeminiModel::new(api_key, MODEL)), registry);
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
     println!("Question: {question}");
-    println!(
-        "(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)
-"
-    );
+    println!("(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)\n");
 
     let start = Instant::now();
-    let stream = runner.run_stream(&agent, question);
-    futures_util::pin_mut!(stream);
+    let mut stream = runner.run(agent, vec![Message::user(question)]);
 
     while let Some(event) = stream.next().await {
-        match event? {
+        match event {
             AgentEvent::ToolCallStarted { name, args } => {
-                println!("[runner] started:   {name}({})", args);
+                println!("[runner] started:   {name}({args})");
             }
-            AgentEvent::ToolCallCompleted { name, result } => {
-                println!("[runner] completed: {name} → {result}");
-            }
-            AgentEvent::TextDelta(chunk) => {
-                print!("{chunk}");
-            }
-            AgentEvent::Thinking(_) => {}
+            AgentEvent::ToolCallFinished { name, result } => match result {
+                ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
+                ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
+                ToolCallResult::Denied => println!("[runner] denied:    {name}"),
+                ToolCallResult::Unknown => println!("[runner] unknown:   {name}"),
+            },
+            AgentEvent::TextDelta(chunk) => print!("{chunk}"),
+            AgentEvent::ThinkingDelta(_) => {}
+            AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
         }
     }
 
     println!();
-    println!(
-        "
-Total elapsed: {:.0?}",
-        start.elapsed()
-    );
+    println!("\nTotal elapsed: {:.0?}", start.elapsed());
     println!("  3 × 500 ms in parallel ≈ 500 ms  (sequential would be ≈ 1 500 ms)");
 
     Ok(())

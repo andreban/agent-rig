@@ -1,6 +1,12 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
+//! [Ollama](https://ollama.com/) provider adapter.
+//!
+//! Implements [`LlmModel`] against a local or remote
+//! Ollama server using the [`ollama-rs`](https://crates.io/crates/ollama-rs)
+//! client. Requires the `ollama` Cargo feature.
+
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -19,7 +25,7 @@ use crate::{
     model::{
         LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role, ToolCall,
     },
-    tool::ToolDefinition,
+    tools::ToolDefinition,
 };
 
 /// LLM provider backed by an [Ollama](https://ollama.com/) server.

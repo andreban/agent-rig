@@ -1,17 +1,28 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
+//! Demonstrates running an agent as a tool of another agent on top of
+//! [`MpscRunner`].
+//!
+//! A `Summariser` child agent is wrapped in an [`AgentTool`] and registered
+//! with the parent runner via [`ToolRegistry::register_agent`]. The parent
+//! `Orchestrator` agent calls the `summarise` tool to delegate work; the
+//! parent runner streams the child's events through to the consumer.
+
+use std::sync::Arc;
+
+use agent_rig::Agent;
+use agent_rig::model::Message;
 use agent_rig::models::gemini::GeminiModel;
-use agent_rig::tool::{ToolDefinition, ToolRegistry};
-use agent_rig::{Agent, AgentRunner, AgentTool};
+use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
+use agent_rig::tools::{AgentTool, ToolDefinition, ToolRegistry};
+use futures_util::StreamExt;
 use serde_json::json;
 use std::error::Error;
-use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
 
-/// Child agent: summarises text passed in the `text` field of its JSON input.
 fn summariser_tool(api_key: &str) -> AgentTool {
     let model = GeminiModel::builder(api_key, MODEL).build();
     let agent = Agent::builder()
@@ -21,7 +32,7 @@ fn summariser_tool(api_key: &str) -> AgentTool {
              Summarise the text in two sentences or fewer.",
         )
         .build();
-    let runner = AgentRunner::new(Box::new(model));
+    let runner = AgentRunner::new(Arc::new(model));
     AgentTool::new(
         ToolDefinition {
             name: "summarise".to_string(),
@@ -49,11 +60,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
-    // Build the parent runner with the summariser child agent registered as a tool.
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(summariser_tool(&api_key))));
+    let registry = Arc::new(ToolRegistry::new().register_agent(summariser_tool(&api_key)));
 
     let parent_model = GeminiModel::builder(&api_key, MODEL).build();
-    let parent_runner = AgentRunner::with_registry(Box::new(parent_model), registry);
+    let parent_runner = AgentRunner::with_registry(Arc::new(parent_model), registry);
 
     let parent_agent = Agent::builder()
         .name("Orchestrator")
@@ -71,7 +81,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         programs with specific space and time requirements, and writing low-level code, like \
         device drivers and operating systems.";
 
-    let result = parent_runner.run(&parent_agent, input).await?;
-    println!("{}", result.output);
+    let mut answer = String::new();
+    let mut stream = parent_runner.run(parent_agent, vec![Message::user(input)]);
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::TextDelta(chunk) => answer.push_str(&chunk),
+            AgentEvent::ToolCallStarted { name, args } => {
+                println!("[runner] started:   {name}({args})");
+            }
+            AgentEvent::ToolCallFinished { name, result } => match result {
+                ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
+                ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
+                ToolCallResult::Denied => println!("[runner] denied:    {name}"),
+                ToolCallResult::Unknown => println!("[runner] unknown:   {name}"),
+            },
+            AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
+            AgentEvent::ThinkingDelta(_) => {}
+        }
+    }
+    println!("\n{answer}");
     Ok(())
 }

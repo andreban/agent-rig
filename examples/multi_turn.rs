@@ -1,26 +1,31 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
-use agent_rig::{Agent, AgentEvent, AgentRunner, models::gemini::GeminiModel};
+//! A streaming REPL demonstrating multi-turn conversation on top of
+//! [`MpscRunner`].
+//!
+//! `MpscRunner::run` takes ownership of the message thread for one run, so this
+//! example keeps the running history locally: each turn appends the user input
+//! to the thread, runs the agent, accumulates the assistant's reply from
+//! `TextDelta` events, and finally pushes a single
+//! `Message::assistant(reply)` so the next turn sees the full context.
+//!
+//! Run with:
+//!   GEMINI_API_KEY=... cargo run --example multi_turn
+
+use std::io::{self, BufRead, Write};
+use std::sync::Arc;
+
+use agent_rig::model::Message;
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::{Agent, models::gemini::GeminiModel};
 use futures_util::StreamExt;
 use geologia::prelude::{ThinkingConfig, ThinkingLevel};
-use std::{
-    error::Error,
-    io::{self, BufRead, Write},
-};
+use std::error::Error;
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
 
-/// A simple streaming REPL that demonstrates multi-turn conversation using
-/// [`Conversation::run_stream`].
-///
-/// History is managed automatically by the [`Conversation`] — no manual
-/// message tracking needed. Each completed stream updates the internal history
-/// so subsequent turns see the full context.
-///
-/// Run with:
-///   GEMINI_API_KEY=... cargo run --example multi_turn
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let _ = dotenvy::dotenv();
@@ -40,15 +45,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .name("Assistant")
         .instructions("You are a helpful assistant. Keep replies concise.")
         .build();
-    let runner = AgentRunner::new(Box::new(model));
-    let mut conv = runner.conversation(&agent);
+    let runner = AgentRunner::new(Arc::new(model));
 
+    let mut thread: Vec<Message> = Vec::new();
     let stdin = io::stdin();
 
-    println!(
-        "Multi-turn chat (Ctrl-C or Ctrl-D to quit)
-"
-    );
+    println!("Multi-turn chat (Ctrl-C or Ctrl-D to quit)\n");
     print!("You: ");
     io::stdout().flush()?;
 
@@ -61,29 +63,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
+        thread.push(Message::user(input));
+
         print!("Assistant: ");
         io::stdout().flush()?;
 
-        let stream = conv.run_stream(&input);
-        futures_util::pin_mut!(stream);
-
+        let mut reply = String::new();
+        let mut stream = runner.run(agent.clone(), thread.clone());
         while let Some(event) = stream.next().await {
-            match event? {
-                AgentEvent::Thinking(token) => {
-                    print!("[2m{token}[0m"); // dim text
+            match event {
+                AgentEvent::ThinkingDelta(token) => {
+                    print!("\x1b[2m{token}\x1b[0m");
                     io::stdout().flush()?;
                 }
                 AgentEvent::TextDelta(chunk) => {
                     print!("{chunk}");
                     io::stdout().flush()?;
+                    reply.push_str(&chunk);
+                }
+                AgentEvent::Error(error) => {
+                    eprintln!("\n[runner] stream error: {error}");
                 }
                 _ => {}
             }
         }
-        println!(
-            "
-"
-        );
+        thread.push(Message::assistant(reply));
+        println!("\n");
 
         print!("You: ");
         io::stdout().flush()?;

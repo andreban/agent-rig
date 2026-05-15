@@ -1,6 +1,14 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
+//! Provider-agnostic conversation primitives.
+//!
+//! This module defines the data types every provider adapter speaks: [`Message`]
+//! and its [`MessageContent`] variants, the [`ToolCall`] issued by the model,
+//! the [`ModelRequest`] / [`ModelResponse`] envelope, and the [`LlmModel`]
+//! trait that every provider implements. The runner in [`crate::runner`]
+//! drives [`LlmModel`] in a loop until the model produces no more tool calls.
+
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -9,7 +17,7 @@ use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-use crate::tool::ToolDefinition;
+use crate::tools::ToolDefinition;
 
 /// The role of a participant in a conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,7 +202,7 @@ pub struct ModelResponse {
 /// Provider adapters emit these values; the runner wraps them into [`AgentEvent`]
 /// and adds tool-call lifecycle events on top.
 ///
-/// [`AgentEvent`]: crate::AgentEvent
+/// [`AgentEvent`]: crate::runner::AgentEvent
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "content", rename_all = "snake_case")]
 pub enum ModelStreamChunk {

@@ -48,10 +48,13 @@ pub trait AuthManager: Send + Sync {
     fn requires_authorization(&self, _name: &str, _args: &Value) -> bool {
         true
     }
-
-    /// Decides whether to allow this tool call. Only invoked when
-    /// [`requires_authorization`] returned `true`.
+    /// Decides whether the call with these arguments may run.
     ///
-    /// [`requires_authorization`]: AuthManager::requires_authorization
-    async fn authorize(&self, name: &str, args: &Value) -> Result<(), String>;
+    /// Returning `true` allows the runner to execute the tool; returning
+    /// `false` surfaces a [`ToolCallResult::Denied`](crate::runner::ToolCallResult::Denied)
+    /// without invoking the tool.
+    ///
+    /// This is the async decision path — block on user input, RPCs, or any
+    /// other I/O here. See the trait docs for concurrency requirements.
+    async fn authorize(&self, name: &str, args: &Value) -> bool;
 }

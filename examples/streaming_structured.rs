@@ -1,17 +1,17 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
-//! Demonstrates `run_stream` with thinking tokens, tool invocation events, and
-//! structured output all in one example.
+//! Combines streaming, tool calls, thinking events, and structured output on
+//! top of [`MpscRunner`].
 //!
 //! The agent is asked about temperatures in several cities. It must call the
 //! `get_temperature` tool for each city, then respond with a structured JSON
 //! summary that matches the `WeatherReport` schema.
 //!
-//! Every `AgentEvent` is printed as it arrives:
-//! - `Thinking`           — dim grey reasoning tokens
+//! Every event is printed as it arrives:
+//! - `ThinkingDelta`      — dim grey reasoning tokens
 //! - `ToolCallStarted`    — printed before the tool runs
-//! - `ToolCallCompleted`  — printed after the tool returns
+//! - `ToolCallFinished`   — printed after the tool returns
 //! - `TextDelta`          — the (JSON) answer arriving incrementally
 //!
 //! After the stream ends, the accumulated text is deserialized into
@@ -24,12 +24,11 @@
 
 use std::sync::Arc;
 
-use agent_rig::{
-    Agent, AgentEvent, AgentRunner,
-    error::Error,
-    models::gemini::GeminiModel,
-    tool::{Tool, ToolDefinition, ToolRegistry},
-};
+use agent_rig::error::Error;
+use agent_rig::model::Message;
+use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use geologia::prelude::{ThinkingConfig, ThinkingLevel};
@@ -40,33 +39,18 @@ use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
 
-// ---------------------------------------------------------------------------
-// Output schema
-// ---------------------------------------------------------------------------
-
-/// Temperature reading for a single city.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct CityTemperature {
-    /// City name.
     city: String,
-    /// Temperature in Celsius.
     celsius: f64,
-    /// Temperature in Fahrenheit.
     fahrenheit: f64,
 }
 
-/// Structured weather report returned by the agent.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct WeatherReport {
-    /// List of cities with their current temperatures.
     cities: Vec<CityTemperature>,
-    /// One-sentence summary of the overall conditions.
     summary: String,
 }
-
-// ---------------------------------------------------------------------------
-// Tool: get_temperature
-// ---------------------------------------------------------------------------
 
 struct GetTemperatureTool;
 
@@ -103,10 +87,6 @@ impl Tool for GetTemperatureTool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
@@ -138,32 +118,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .output_schema(schemars::schema_for!(WeatherReport))
         .build();
 
-    let runner = AgentRunner::with_registry(Box::new(model), registry);
+    let runner = AgentRunner::with_registry(Arc::new(model), registry);
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
-    println!(
-        "Question: {question}
-"
-    );
-
-    let stream = runner.run_stream(&agent, question);
-    futures_util::pin_mut!(stream);
+    println!("Question: {question}\n");
 
     let mut output = String::new();
     let mut in_thinking = false;
 
+    let mut stream = runner.run(agent, vec![Message::user(question)]);
     while let Some(event) = stream.next().await {
-        match event? {
-            AgentEvent::Thinking(token) => {
+        match event {
+            AgentEvent::ThinkingDelta(token) => {
                 if !in_thinking {
-                    print!("[2m[thinking] ");
+                    print!("\x1b[2m[thinking] ");
                     in_thinking = true;
                 }
-                print!("[2m{token}[0m");
+                print!("\x1b[2m{token}\x1b[0m");
             }
             AgentEvent::TextDelta(chunk) => {
                 if in_thinking {
-                    println!("[0m");
+                    println!("\x1b[0m");
                     in_thinking = false;
                 }
                 print!("{chunk}");
@@ -171,23 +146,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             AgentEvent::ToolCallStarted { name, args } => {
                 if in_thinking {
-                    println!("[0m");
+                    println!("\x1b[0m");
                     in_thinking = false;
                 }
                 println!("[tool →] {name}({args})");
             }
-            AgentEvent::ToolCallCompleted { name, result } => {
-                println!("[tool ←] {name} = {result}");
-            }
+            AgentEvent::ToolCallFinished { name, result } => match result {
+                ToolCallResult::Ok(value) => println!("[tool ←] {name} = {value}"),
+                ToolCallResult::Err(error) => println!("[tool ✗] {name} → {error:?}"),
+                ToolCallResult::Denied => println!("[tool ⨯] {name} denied"),
+                ToolCallResult::Unknown => println!("[tool ?] {name} unknown"),
+            },
+            AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
         }
     }
 
-    println!(
-        "
-"
-    );
+    println!("\n");
 
-    // Deserialize the accumulated JSON into the typed struct.
     let report: WeatherReport = serde_json::from_str(&output)?;
     println!("--- Typed WeatherReport ---");
     for city in &report.cities {

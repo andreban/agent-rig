@@ -1,7 +1,8 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
-//! Demonstrates `AgentRunner::run_stream` with tool calls and thinking events.
+//! Demonstrates streaming with tool calls and thinking events on top of
+//! [`MpscRunner`].
 //!
 //! Run with:
 //! ```text
@@ -9,27 +10,21 @@
 //! ```
 //!
 //! The example wires up a calculator agent that must use an `add` tool to
-//! answer the question. `run_stream` is used so every event is visible as it
-//! happens:
+//! answer the question. Every event is printed as it happens:
 //!
-//! - `ToolCallStarted` / `ToolCallCompleted` — printed when the agent invokes
+//! - `ToolCallStarted` / `ToolCallFinished` — printed when the agent invokes
 //!   the tool.
 //! - `TextDelta` — printed incrementally as the model generates its answer.
-//! - `Thinking` — printed if the model emits reasoning tokens. This requires
-//!   both a model with extended thinking enabled *and* a provider adapter with
-//!   a native `generate_stream` implementation. With the current `GeminiModel`
-//!   (which uses the default stream wrapper), thinking tokens from the model
-//!   are not yet surfaced; they will appear once native Gemini streaming is
-//!   added.
+//! - `ThinkingDelta` — printed if the model emits reasoning tokens (requires
+//!   extended thinking enabled and a provider with native streaming).
 
 use std::sync::Arc;
 
-use agent_rig::{
-    Agent, AgentEvent, AgentRunner,
-    error::Error,
-    models::gemini::GeminiModel,
-    tool::{Tool, ToolDefinition, ToolRegistry},
-};
+use agent_rig::error::Error;
+use agent_rig::model::Message;
+use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use geologia::prelude::{ThinkingConfig, ThinkingLevel};
@@ -37,10 +32,6 @@ use serde_json::{Value, json};
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
-
-// ---------------------------------------------------------------------------
-// Tool: add two integers
-// ---------------------------------------------------------------------------
 
 struct AddTool;
 
@@ -69,10 +60,6 @@ impl Tool for AddTool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
@@ -100,22 +87,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("add")
         .build();
 
-    let runner = AgentRunner::with_registry(Box::new(model), registry);
+    let runner = AgentRunner::with_registry(Arc::new(model), registry);
 
-    println!(
-        "Question: What is 1234 + 5678?
-"
-    );
+    println!("Question: What is 1234 + 5678?\n");
 
-    let stream = runner.run_stream(&agent, "What is 1234 + 5678?");
-    futures_util::pin_mut!(stream);
-
+    let mut stream = runner.run(agent, vec![Message::user("What is 1234 + 5678?")]);
     while let Some(event) = stream.next().await {
-        match event? {
-            AgentEvent::Thinking(token) => {
-                // Reasoning tokens — only emitted by models with extended
-                // thinking enabled once native Gemini streaming is in place.
-                print!("[2m{token}[0m"); // dim text
+        match event {
+            AgentEvent::ThinkingDelta(token) => {
+                print!("\x1b[2m{token}\x1b[0m");
             }
             AgentEvent::TextDelta(chunk) => {
                 print!("{chunk}");
@@ -123,12 +103,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCallStarted { name, args } => {
                 println!("[runner] tool call started: {name}({args})");
             }
-            AgentEvent::ToolCallCompleted { name, result } => {
-                println!("[runner] tool call completed: {name} → {result}");
-            }
+            AgentEvent::ToolCallFinished { name, result } => match result {
+                ToolCallResult::Ok(value) => {
+                    println!("[runner] tool call finished: {name} → {value}")
+                }
+                ToolCallResult::Err(error) => {
+                    println!("[runner] tool call error: {name} → {error:?}")
+                }
+                ToolCallResult::Denied => println!("[runner] tool call denied: {name}"),
+                ToolCallResult::Unknown => println!("[runner] tool call unknown: {name}"),
+            },
+            AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
         }
     }
 
-    println!(); // newline after streamed output
+    println!();
     Ok(())
 }

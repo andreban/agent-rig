@@ -3,17 +3,17 @@
 
 //! Demonstrates long-term memory via tools in `agent-rig`.
 //!
-//! This example shows that "long-term memory" is not an inherent trait of the
-//! LLM — it is simply an I/O operation facilitated by the [`Tool`] trait. The
-//! agent is given two tools:
+//! "Long-term memory" is not an inherent trait of the LLM — it is simply an
+//! I/O operation facilitated by the [`Tool`] trait. The agent is given two
+//! tools:
 //!
 //! - `remember_fact`: writes a fact to a shared in-memory store.
-//! - `recall_fact`: searches the store for facts matching a keyword.
+//! - `recall_fact`:  searches the store for facts matching a keyword.
 //!
 //! Two simulated sessions are run back-to-back with an empty conversation
 //! history between them (the way a real multi-session system works). The
-//! model relies solely on its tools to persist and retrieve information across
-//! the session boundary.
+//! model relies solely on its tools to persist and retrieve information
+//! across the session boundary.
 //!
 //! Run with:
 //! ```bash
@@ -22,30 +22,20 @@
 
 use std::sync::{Arc, Mutex};
 
-use agent_rig::{
-    Agent, AgentRunner,
-    error::Error,
-    models::gemini::GeminiModel,
-    tool::{Tool, ToolDefinition, ToolRegistry},
-};
+use agent_rig::error::Error;
+use agent_rig::model::Message;
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
 
-// ---------------------------------------------------------------------------
-// Shared memory store
-// ---------------------------------------------------------------------------
-
-/// A thread-safe list of fact strings shared between the two memory tools.
 type MemoryStore = Arc<Mutex<Vec<String>>>;
 
-// ---------------------------------------------------------------------------
-// Tool: remember_fact
-// ---------------------------------------------------------------------------
-
-/// Saves a self-contained fact to the shared [`MemoryStore`].
 struct RememberFactTool {
     store: MemoryStore,
 }
@@ -75,7 +65,7 @@ impl Tool for RememberFactTool {
             .as_str()
             .ok_or_else(|| Error::Agent("missing 'fact' argument".to_string()))?
             .to_string();
-        println!("[memory] storing: "{fact}"");
+        println!("[memory] storing: \"{fact}\"");
         self.store
             .lock()
             .map_err(|e| Error::Agent(format!("lock poisoned: {e}")))?
@@ -84,12 +74,6 @@ impl Tool for RememberFactTool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tool: recall_fact
-// ---------------------------------------------------------------------------
-
-/// Searches the shared [`MemoryStore`] for facts that contain the given query
-/// string (case-insensitive substring match).
 struct RecallFactTool {
     store: MemoryStore,
 }
@@ -122,8 +106,6 @@ impl Tool for RecallFactTool {
             .as_str()
             .ok_or_else(|| Error::Agent("missing 'query' argument".to_string()))?
             .to_lowercase();
-        // Split into individual words so that a query like "dog name" matches
-        // facts containing *either* "dog" or "name".
         let terms: Vec<&str> = query.split_whitespace().collect();
         let store = self
             .store
@@ -137,14 +119,23 @@ impl Tool for RecallFactTool {
             })
             .map(String::as_str)
             .collect();
-        println!("[memory] recall("{query}") → {} result(s)", results.len());
+        println!("[memory] recall(\"{query}\") → {} result(s)", results.len());
         Ok(json!({ "results": results }))
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+async fn run_once(runner: &AgentRunner, agent: &Agent, input: &str) -> String {
+    let mut reply = String::new();
+    let mut stream = runner.run(agent.clone(), vec![Message::user(input)]);
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::TextDelta(chunk) => reply.push_str(&chunk),
+            AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
+            _ => {}
+        }
+    }
+    reply
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -154,7 +145,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
-    // Shared store — the only state that survives across "sessions".
     let store: MemoryStore = Arc::new(Mutex::new(Vec::new()));
 
     let registry = Arc::new(
@@ -184,39 +174,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("recall_fact")
         .build();
 
-    let runner = AgentRunner::with_registry(Box::new(GeminiModel::new(api_key, MODEL)), registry);
+    let runner = AgentRunner::with_registry(Arc::new(GeminiModel::new(api_key, MODEL)), registry);
 
-    // -----------------------------------------------------------------------
-    // Session 1 — establishing memory
-    // -----------------------------------------------------------------------
-    println!(
-        "=== Session 1 ===
-"
-    );
+    println!("=== Session 1 ===\n");
     let input1 = "My dog's name is Barnaby.";
     println!("User: {input1}");
-    let result1 = runner.run(&agent, input1).await?;
-    println!(
-        "Assistant: {}
-",
-        result1.output
-    );
+    let reply1 = run_once(&runner, &agent, input1).await;
+    println!("Assistant: {reply1}\n");
 
-    // -----------------------------------------------------------------------
-    // Session 2 — retrieving memory with a fresh (empty) conversation history
-    // -----------------------------------------------------------------------
-    println!(
-        "=== Session 2 (new session — no conversation history) ===
-"
-    );
+    println!("=== Session 2 (new session — no conversation history) ===\n");
     let input2 = "Do you remember what kind of pet I have and its name?";
     println!("User: {input2}");
-    let result2 = runner.run(&agent, input2).await?;
-    println!(
-        "Assistant: {}
-",
-        result2.output
-    );
+    let reply2 = run_once(&runner, &agent, input2).await;
+    println!("Assistant: {reply2}\n");
 
     Ok(())
 }

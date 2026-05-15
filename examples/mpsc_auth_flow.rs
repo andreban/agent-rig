@@ -3,7 +3,7 @@
 //! The runner consults its configured [`AuthManager`] for every tool call;
 //! managers decide which ones actually need approval. Here we plug in a CLI
 //! `StdinPromptAuthManager` that holds a set of protected tool names — it
-//! fast-paths `Ok(())` for anything not in the set and prompts y/N on stdin
+//! fast-paths `true` for anything not in the set and prompts y/N on stdin
 //! for the rest.
 //!
 //! Run with:
@@ -17,8 +17,8 @@ use std::sync::Arc;
 use agent_rig::auth::AuthManager;
 use agent_rig::error::Error;
 use agent_rig::model::Message;
-use agent_rig::mpsc_runner::{AgentEvent, MpscRunner};
-use agent_rig::tool::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -88,27 +88,23 @@ impl AuthManager for StdinPromptAuthManager {
         self.protected.contains(name)
     }
 
-    async fn authorize(&self, name: &str, args: &Value) -> Result<(), String> {
+    async fn authorize(&self, name: &str, args: &Value) -> bool {
         let _guard = self.prompt_lock.lock().await;
 
         println!("\n[auth]  Tool '{name}' wants to run with args:");
         println!("[auth]    {args}");
         print!("[auth]  Approve? [y/N]: ");
-        // Make sure the prompt is visible before we block on stdin.
         use std::io::Write;
         let _ = std::io::stdout().flush();
 
         let mut line = String::new();
         let mut stdin = BufReader::new(tokio::io::stdin());
-        stdin
-            .read_line(&mut line)
-            .await
-            .map_err(|e| format!("stdin error: {e}"))?;
-
-        match line.trim().to_lowercase().as_str() {
-            "y" | "yes" => Ok(()),
-            other => Err(format!("user declined (input: {other:?})")),
+        if let Err(e) = stdin.read_line(&mut line).await {
+            eprintln!("[auth]  stdin error: {e}");
+            return false;
         }
+
+        matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
     }
 }
 
@@ -135,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let auth_manager = Arc::new(StdinPromptAuthManager::new(["send_email"]));
     let runner =
-        MpscRunner::with_registry(Arc::new(model), registry).with_auth_manager(auth_manager);
+        AgentRunner::with_registry(Arc::new(model), registry).with_auth_manager(auth_manager);
 
     let question =
         "Send an email to bob@example.com with subject 'Lunch' and body 'See you at noon.'";
@@ -149,22 +145,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCallStarted { name, args } => {
                 println!("\n[runner] started:   {name}({args})");
             }
-            AgentEvent::ToolCallFinished { name, result } => {
-                println!("[runner] finished:  {name} → {result}");
-            }
-            AgentEvent::ToolCallError { name, error } => {
-                println!("[runner] error:     {name} → {error}");
-            }
-            AgentEvent::ToolCallDenied { name, reason } => {
-                println!("[runner] denied:    {name} → {reason}");
-            }
-            AgentEvent::TextDelta(chunk) => {
-                print!("{chunk}");
-            }
+            AgentEvent::ToolCallFinished { name, result } => match result {
+                ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
+                ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
+                ToolCallResult::Denied => println!("[runner] denied:    {name}"),
+                ToolCallResult::Unknown => println!("[runner] unknown:   {name}"),
+            },
+            AgentEvent::TextDelta(chunk) => print!("{chunk}"),
             AgentEvent::ThinkingDelta(_) => {}
-            AgentEvent::Error(error) => {
-                eprintln!("\n[runner] stream error: {error}");
-            }
+            AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
         }
     }
 

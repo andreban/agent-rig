@@ -1,0 +1,221 @@
+use std::{collections::HashMap, sync::Arc};
+
+use crate::tools::{
+    agent_tool::AgentTool,
+    tool::{Tool, ToolDefinition},
+};
+/// One entry stored in a [`ToolRegistry`].
+///
+/// The registry holds two kinds of callables — plain [`Tool`] implementations
+/// and sub-agents wrapped in [`AgentTool`]. The runner dispatches each
+/// variant differently: plain tools resolve to a single JSON value, while
+/// agents produce a stream of events that the parent forwards.
+pub enum ToolRegistryEntry {
+    /// A plain tool implementation.
+    Tool(Box<dyn Tool>),
+    /// A sub-agent registered as a tool.
+    Agent(AgentTool),
+}
+
+impl ToolRegistryEntry {
+    /// Returns the public [`ToolDefinition`] for this entry regardless of
+    /// variant.
+    pub fn definition(&self) -> ToolDefinition {
+        match self {
+            ToolRegistryEntry::Tool(t) => t.definition(),
+            ToolRegistryEntry::Agent(a) => a.definition(),
+        }
+    }
+}
+
+/// A collection of [`Tool`]s and [`AgentTool`]s keyed by name.
+///
+/// `ToolRegistry` is independent of any [`AgentRunner`](crate::runner::AgentRunner)
+/// so a single registry can be shared across multiple runners via [`Arc`].
+/// Build one with the chained [`register`](Self::register) /
+/// [`register_agent`](Self::register_agent) methods.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use agent_rig::tools::ToolRegistry;
+///
+/// # struct MyTool;
+/// # use async_trait::async_trait;
+/// # use agent_rig::tools::{Tool, ToolDefinition};
+/// # use agent_rig::error::Error;
+/// # #[async_trait]
+/// # impl Tool for MyTool {
+/// #     fn definition(&self) -> ToolDefinition { unimplemented!() }
+/// #     async fn call(&self, _: serde_json::Value) -> Result<serde_json::Value, Error> { unimplemented!() }
+/// # }
+/// let registry = Arc::new(
+///     ToolRegistry::new()
+///         .register(Box::new(MyTool))
+/// );
+/// ```
+pub struct ToolRegistry {
+    tools: HashMap<String, ToolRegistryEntry>,
+}
+
+impl ToolRegistry {
+    /// Creates an empty registry.
+    pub fn new() -> Self {
+        Self {
+            tools: HashMap::new(),
+        }
+    }
+
+    /// Registers a [`Tool`], keyed by its [`ToolDefinition::name`].
+    ///
+    /// Consumes and returns `self` for builder-style chaining. If a tool with
+    /// the same name is already registered, it is overwritten.
+    pub fn register(mut self, tool: Box<dyn Tool>) -> Self {
+        let name = tool.definition().name.clone();
+        self.tools.insert(name, ToolRegistryEntry::Tool(tool));
+        self
+    }
+
+    /// Registers a sub-agent as a tool, keyed by its [`ToolDefinition::name`].
+    ///
+    /// Consumes and returns `self` for builder-style chaining. If a tool with
+    /// the same name is already registered, it is overwritten.
+    pub fn register_agent(mut self, agent: AgentTool) -> Self {
+        let name = agent.definition().name.clone();
+        self.tools.insert(name, ToolRegistryEntry::Agent(agent));
+        self
+    }
+
+    /// Returns every registered tool's [`ToolDefinition`].
+    ///
+    /// The order is unspecified.
+    pub fn definitions(&self) -> Vec<ToolDefinition> {
+        self.tools.values().map(|t| t.definition()).collect()
+    }
+
+    /// Returns the tool registered under `name`, or `None` if not found.
+    pub(crate) fn get(&self, name: &str) -> Option<&ToolRegistryEntry> {
+        self.tools.get(name).map(|t| t)
+    }
+
+    /// Returns `true` if a tool with the given name is registered.
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
+    }
+
+    /// Returns an empty registry wrapped in `Arc`.
+    pub(crate) fn empty() -> Arc<Self> {
+        Arc::new(Self::new())
+    }
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Error;
+    use async_trait::async_trait;
+    use serde_json::{Value, json};
+
+    struct StubTool {
+        name: &'static str,
+    }
+
+    #[async_trait]
+    impl Tool for StubTool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: self.name.to_string(),
+                description: "stub".to_string(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        async fn call(&self, _args: Value) -> Result<Value, Error> {
+            Ok(json!({}))
+        }
+    }
+
+    #[test]
+    fn new_registry_is_empty() {
+        let reg = ToolRegistry::new();
+        assert!(reg.definitions().is_empty());
+        assert!(reg.get("anything").is_none());
+        assert!(!reg.contains("anything"));
+    }
+
+    #[test]
+    fn register_keys_by_definition_name() {
+        let reg = ToolRegistry::new().register(Box::new(StubTool { name: "alpha" }));
+        assert!(reg.contains("alpha"));
+        assert!(matches!(reg.get("alpha"), Some(ToolRegistryEntry::Tool(_))));
+    }
+
+    #[test]
+    fn definitions_lists_every_registered_tool() {
+        let reg = ToolRegistry::new()
+            .register(Box::new(StubTool { name: "alpha" }))
+            .register(Box::new(StubTool { name: "beta" }));
+        let mut names: Vec<String> = reg.definitions().into_iter().map(|d| d.name).collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
+    }
+
+    #[test]
+    fn last_registration_wins_on_name_collision() {
+        let reg = ToolRegistry::new()
+            .register(Box::new(StubTool { name: "alpha" }))
+            .register(Box::new(StubTool { name: "alpha" }));
+        // The registry is keyed by name; a second `register` with the same
+        // name overwrites the first. Verifying via count so a future change
+        // (e.g. rejecting duplicates) surfaces here.
+        assert_eq!(reg.definitions().len(), 1);
+    }
+
+    #[test]
+    fn register_agent_stores_an_agent_entry() {
+        use crate::Agent;
+        use crate::runner::AgentRunner;
+        use crate::tools::agent_tool::AgentTool;
+        use std::sync::Arc;
+
+        // Build a runner with no model interactions — the test never invokes
+        // the AgentTool, only verifies the registry classifies it as an Agent
+        // entry.
+        struct DummyModel;
+        #[async_trait]
+        impl crate::model::LlmModel for DummyModel {
+            async fn generate(
+                &self,
+                _request: crate::model::ModelRequest,
+            ) -> Result<crate::model::ModelResponse, Error> {
+                unreachable!("not called in this test")
+            }
+        }
+
+        let agent = Agent::builder().name("Child").instructions("noop").build();
+        let runner = AgentRunner::new(Arc::new(DummyModel));
+        let tool = AgentTool::new(
+            ToolDefinition {
+                name: "delegate".to_string(),
+                description: "delegate to child".to_string(),
+                parameters: json!({"type": "object"}),
+            },
+            agent,
+            runner,
+        );
+
+        let reg = ToolRegistry::new().register_agent(tool);
+        assert!(matches!(
+            reg.get("delegate"),
+            Some(ToolRegistryEntry::Agent(_))
+        ));
+        assert_eq!(reg.definitions().len(), 1);
+    }
+}

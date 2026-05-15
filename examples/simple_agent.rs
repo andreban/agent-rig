@@ -1,7 +1,12 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
-use agent_rig::{Agent, AgentRunner, models::gemini::GeminiModel};
+use std::sync::Arc;
+
+use agent_rig::model::Message;
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::{Agent, models::gemini::GeminiModel};
+use futures_util::StreamExt;
 use std::error::Error;
 use tracing_subscriber::EnvFilter;
 
@@ -33,8 +38,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .instructions(INSTRUCTIONS)
         .build();
 
-    let input = "learn about AI agents";
-    let result = AgentRunner::new(Box::new(model)).run(&agent, input).await?;
-    println!("{}", result.output);
+    let runner = AgentRunner::new(Arc::new(model));
+
+    let mut stream = runner.run(agent, vec![Message::user("learn about AI agents")]);
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::TextDelta(chunk) => print!("{chunk}"),
+            AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
+            _ => {}
+        }
+    }
+    println!();
     Ok(())
 }

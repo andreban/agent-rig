@@ -1,6 +1,12 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
+//! Google Gemini provider adapter.
+//!
+//! Implements [`LlmModel`] on top of the
+//! [`geologia`](https://github.com/andreban/geologia) client. Requires the
+//! `gemini` Cargo feature.
+
 use async_trait::async_trait;
 use geologia::prelude::{
     Candidate, Content, FunctionDeclaration, FunctionResponse, GeminiClient,
@@ -11,7 +17,7 @@ use serde_json::Value;
 use crate::{
     error::Error,
     model::{LlmModel, MessageContent, ModelRequest, ModelResponse, Role as AgentRole, ToolCall},
-    tool::ToolDefinition,
+    tools::ToolDefinition,
 };
 
 /// LLM provider backed by Google Gemini.

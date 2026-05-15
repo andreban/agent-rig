@@ -14,22 +14,17 @@
 
 use std::sync::Arc;
 
-use agent_rig::{
-    Agent, AgentRunner,
-    error::Error,
-    models::gemini::GeminiModel,
-    tool::{Tool, ToolDefinition, ToolRegistry},
-};
+use agent_rig::error::Error;
+use agent_rig::model::Message;
+use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
-
-// ---------------------------------------------------------------------------
-// Tool: get_temperature
-// Returns the current temperature in Celsius for a given city (stubbed).
-// ---------------------------------------------------------------------------
 
 struct GetTemperatureTool;
 
@@ -55,7 +50,6 @@ impl Tool for GetTemperatureTool {
 
     async fn call(&self, args: Value) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");
-        // Stubbed data — a real implementation would call a weather API.
         let celsius = match city.to_lowercase().as_str() {
             "london" => 15.0,
             "tokyo" => 28.0,
@@ -66,11 +60,6 @@ impl Tool for GetTemperatureTool {
         Ok(json!({ "city": city, "celsius": celsius }))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tool: celsius_to_fahrenheit
-// Converts a Celsius value to Fahrenheit.
-// ---------------------------------------------------------------------------
 
 struct CelsiusToFahrenheitTool;
 
@@ -101,10 +90,6 @@ impl Tool for CelsiusToFahrenheitTool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
@@ -130,20 +115,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("celsius_to_fahrenheit")
         .build();
 
-    let runner = AgentRunner::with_registry(Box::new(GeminiModel::new(api_key, MODEL)), registry);
+    let runner = AgentRunner::with_registry(Arc::new(GeminiModel::new(api_key, MODEL)), registry);
 
     let question = "What is the current temperature in Tokyo in Fahrenheit?";
-    println!(
-        "Question: {question}
-"
-    );
+    println!("Question: {question}\n");
 
-    let result = runner.run(&agent, question).await?;
-    println!(
-        "
-Answer: {}",
-        result.output
-    );
+    let mut answer = String::new();
+    let mut stream = runner.run(agent, vec![Message::user(question)]);
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::ToolCallStarted { name, args } => {
+                println!("[runner] started:   {name}({args})");
+            }
+            AgentEvent::ToolCallFinished { name, result } => match result {
+                ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
+                ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
+                ToolCallResult::Denied => println!("[runner] denied:    {name}"),
+                ToolCallResult::Unknown => println!("[runner] unknown:   {name}"),
+            },
+            AgentEvent::TextDelta(chunk) => answer.push_str(&chunk),
+            AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
+            AgentEvent::ThinkingDelta(_) => {}
+        }
+    }
 
+    println!("\nAnswer: {answer}");
     Ok(())
 }

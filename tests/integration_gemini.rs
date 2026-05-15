@@ -3,13 +3,13 @@
 
 use std::sync::Arc;
 
-use agent_rig::{
-    Agent, AgentRunner,
-    error::Error,
-    models::gemini::GeminiModel,
-    tool::{Tool, ToolDefinition, ToolRegistry},
-};
+use agent_rig::error::Error;
+use agent_rig::model::Message;
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -40,11 +40,23 @@ impl Tool for AddTool {
     }
 }
 
-const MODEL: &str = "gemini-3.1-flash-lite-preview";
+const MODEL: &str = "gemini-3.1-flash-lite";
 
 fn api_key() -> Option<String> {
     let _ = dotenvy::dotenv();
     std::env::var("GEMINI_API_KEY").ok()
+}
+
+/// Drives the runner to completion and concatenates the streamed text.
+async fn collect_text(runner: AgentRunner, agent: Agent, prompt: &str) -> String {
+    let mut text = String::new();
+    let mut stream = runner.run(agent, vec![Message::user(prompt)]);
+    while let Some(event) = stream.next().await {
+        if let AgentEvent::TextDelta(chunk) = event {
+            text.push_str(&chunk);
+        }
+    }
+    text
 }
 
 #[tokio::test]
@@ -57,11 +69,9 @@ async fn agent_run_returns_non_empty_output() {
         .instructions("Reply with exactly one sentence.")
         .build();
 
-    let result = AgentRunner::new(Box::new(model))
-        .run(&agent, "Say hello.")
-        .await
-        .unwrap();
-    assert!(!result.output.is_empty());
+    let runner = AgentRunner::new(Arc::new(model));
+    let output = collect_text(runner, agent, "Say hello.").await;
+    assert!(!output.is_empty());
 }
 
 #[tokio::test]
@@ -74,11 +84,9 @@ async fn agent_follows_system_instructions() {
         .instructions("You are a pirate. Always respond with 'Arrr' somewhere in your reply.")
         .build();
 
-    let result = AgentRunner::new(Box::new(model))
-        .run(&agent, "How are you?")
-        .await
-        .unwrap();
-    assert!(result.output.to_lowercase().contains("arrr"));
+    let runner = AgentRunner::new(Arc::new(model));
+    let output = collect_text(runner, agent, "How are you?").await;
+    assert!(output.to_lowercase().contains("arrr"));
 }
 
 #[tokio::test]
@@ -91,21 +99,17 @@ async fn agent_output_schema_returns_valid_json() {
         score: f32,
     }
 
-    let schema = schemars::schema_for!(Sentiment);
-
     let model = GeminiModel::new(api_key, MODEL);
     let agent = Agent::builder()
         .name("Classifier")
         .instructions("Classify the sentiment of the input. Return a label (positive/negative/neutral) and a confidence score between 0 and 1.")
-        .output_schema(schema)
+        .output_schema(schemars::schema_for!(Sentiment))
         .build();
 
-    let result = AgentRunner::new(Box::new(model))
-        .run(&agent, "I love sunny days!")
-        .await
-        .unwrap();
+    let runner = AgentRunner::new(Arc::new(model));
+    let output = collect_text(runner, agent, "I love sunny days!").await;
 
-    let parsed: Sentiment = serde_json::from_str(&result.output).unwrap();
+    let parsed: Sentiment = serde_json::from_str(&output).unwrap();
     assert!(!parsed.label.is_empty());
     assert!((0.0..=1.0).contains(&parsed.score));
 }
@@ -122,15 +126,12 @@ async fn agent_tool_calling_returns_correct_result() {
         .tool("add")
         .build();
 
-    let result = AgentRunner::with_registry(Box::new(model), registry)
-        .run(&agent, "What is 17 + 25?")
-        .await
-        .unwrap();
+    let runner = AgentRunner::with_registry(Arc::new(model), registry);
+    let output = collect_text(runner, agent, "What is 17 + 25?").await;
 
     assert!(
-        result.output.contains("42"),
-        "expected '42' in output, got: {}",
-        result.output
+        output.contains("42"),
+        "expected '42' in output, got: {output}"
     );
 }
 
@@ -148,9 +149,7 @@ async fn agent_run_with_temperature_setting() {
         .instructions("Be concise.")
         .build();
 
-    let result = AgentRunner::new(Box::new(model))
-        .run(&agent, "What is 2 + 2?")
-        .await
-        .unwrap();
-    assert!(!result.output.is_empty());
+    let runner = AgentRunner::new(Arc::new(model));
+    let output = collect_text(runner, agent, "What is 2 + 2?").await;
+    assert!(!output.is_empty());
 }

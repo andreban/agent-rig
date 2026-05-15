@@ -17,8 +17,8 @@ use serde_json::Value;
 /// format. Tool definitions are intentionally not serialized — they are
 /// resolved from the [`ToolRegistry`] at runtime.
 ///
-/// [`AgentRunner`]: crate::AgentRunner
-/// [`ToolRegistry`]: crate::tool::ToolRegistry
+/// [`AgentRunner`]: crate::runner::AgentRunner
+/// [`ToolRegistry`]: crate::tools::ToolRegistry
 ///
 /// # Examples
 ///
@@ -107,7 +107,7 @@ impl AgentBuilder {
     /// The name must match a key registered in the [`ToolRegistry`] supplied
     /// to the runner. Call this method once per tool.
     ///
-    /// [`ToolRegistry`]: crate::tool::ToolRegistry
+    /// [`ToolRegistry`]: crate::tools::ToolRegistry
     pub fn tool(mut self, name: impl Into<String>) -> Self {
         self.tool_names.push(name.into());
         self

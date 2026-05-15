@@ -3,8 +3,9 @@ use std::time::Instant;
 
 use agent_rig::error::Error;
 use agent_rig::model::Message;
-use agent_rig::mpsc_runner::{AgentEvent, MpscRunner};
-use agent_rig::tool::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
+use agent_rig::tools::ToolRegistry;
+use agent_rig::tools::{Tool, ToolDefinition};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -75,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("get_temperature")
         .build();
 
-    let runner = MpscRunner::with_registry(Arc::new(model), registry);
+    let runner = AgentRunner::with_registry(Arc::new(model), registry);
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
     println!("Question: {question}");
@@ -89,15 +90,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCallStarted { name, args } => {
                 println!("[runner] started:   {name}({args})");
             }
-            AgentEvent::ToolCallFinished { name, result } => {
-                println!("[runner] finished:  {name} → {result}");
-            }
-            AgentEvent::ToolCallError { name, error } => {
-                println!("[runner] error:     {name} → {error}");
-            }
-            AgentEvent::ToolCallDenied { name, reason } => {
-                println!("[runner] denied:    {name} → {reason}");
-            }
+            AgentEvent::ToolCallFinished { name, result } => match result {
+                ToolCallResult::Ok(result) => {
+                    println!("[runner] finished:  {name} → {result}");
+                }
+                ToolCallResult::Err(error) => {
+                    println!("[runner] finished:  {name} → {error:?}");
+                }
+                ToolCallResult::Denied => {
+                    println!("[runner] denied:    {name}");
+                }
+                ToolCallResult::Unknown => {
+                    println!("[runner] unknown:    {name}");
+                }
+            },
             AgentEvent::TextDelta(chunk) => {
                 print!("{chunk}");
             }
