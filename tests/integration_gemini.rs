@@ -50,9 +50,9 @@ fn api_key() -> Option<String> {
 /// Drives the runner to completion and concatenates the streamed text.
 async fn collect_text(runner: AgentRunner, agent: Agent, prompt: &str) -> String {
     let mut text = String::new();
-    let mut stream = runner.run(agent, vec![Message::user(prompt)]);
+    let mut stream = runner.run(&agent, vec![Message::user(prompt)]);
     while let Some(event) = stream.next().await {
-        if let AgentEvent::TextDelta(chunk) = event {
+        if let AgentEvent::TextDelta(chunk) = event.agent_event {
             text.push_str(&chunk);
         }
     }

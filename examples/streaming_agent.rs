@@ -91,9 +91,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Question: What is 1234 + 5678?\n");
 
-    let mut stream = runner.run(agent, vec![Message::user("What is 1234 + 5678?")]);
+    let mut stream = runner.run(&agent, vec![Message::user("What is 1234 + 5678?")]);
     while let Some(event) = stream.next().await {
-        match event {
+        match event.agent_event {
             AgentEvent::ThinkingDelta(token) => {
                 print!("\x1b[2m{token}\x1b[0m");
             }

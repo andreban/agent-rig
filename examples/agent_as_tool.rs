@@ -1,13 +1,14 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
-//! Demonstrates running an agent as a tool of another agent on top of
-//! [`MpscRunner`].
+//! Demonstrates running an agent as a tool of another agent.
 //!
 //! A `Summariser` child agent is wrapped in an [`AgentTool`] and registered
 //! with the parent runner via [`ToolRegistry::register_agent`]. The parent
 //! `Orchestrator` agent calls the `summarise` tool to delegate work; the
-//! parent runner streams the child's events through to the consumer.
+//! parent runner streams the child's events through to the consumer, each
+//! tagged with its originating `run_id` so events from the parent and
+//! child runs can be told apart.
 
 use std::sync::Arc;
 
@@ -81,24 +82,53 @@ async fn main() -> Result<(), Box<dyn Error>> {
         programs with specific space and time requirements, and writing low-level code, like \
         device drivers and operating systems.";
 
+    // Every event carries `run_id` and an `Option<usize>` parent. The root
+    // run has `parent = None`; sub-agent runs have `parent = Some(...)`
+    // pointing at the run that invoked them. We log every event with both
+    // fields and accumulate the *root* run's TextDelta into the final
+    // answer (so the child summariser's own tokens aren't double-counted).
     let mut answer = String::new();
-    let mut stream = parent_runner.run(parent_agent, vec![Message::user(input)]);
+    let mut stream = parent_runner.run(&parent_agent, vec![Message::user(input)]);
     while let Some(event) = stream.next().await {
-        match event {
-            AgentEvent::TextDelta(chunk) => answer.push_str(&chunk),
+        let run_id = event.run_id;
+        let parent = event
+            .parent
+            .map_or_else(|| "-".to_string(), |p| p.to_string());
+        let is_root = event.parent.is_none();
+        let prefix = format!("[run={run_id} parent={parent}]");
+
+        match event.agent_event {
+            AgentEvent::ThinkingDelta(chunk) => {
+                println!("{prefix} thinking: {chunk:?}");
+            }
+            AgentEvent::TextDelta(chunk) => {
+                println!("{prefix} text:     {chunk:?}");
+                if is_root {
+                    answer.push_str(&chunk);
+                }
+            }
             AgentEvent::ToolCallStarted { name, args } => {
-                println!("[runner] started:   {name}({args})");
+                println!("{prefix} started:  {name}({args})");
             }
             AgentEvent::ToolCallFinished { name, result } => match result {
-                ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
-                ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
-                ToolCallResult::Denied => println!("[runner] denied:    {name}"),
-                ToolCallResult::Unknown => println!("[runner] unknown:   {name}"),
+                ToolCallResult::Ok(value) => {
+                    println!("{prefix} ok:       {name} → {value}")
+                }
+                ToolCallResult::Err(error) => {
+                    println!("{prefix} err:      {name} → {error}")
+                }
+                ToolCallResult::Denied => {
+                    println!("{prefix} denied:   {name}")
+                }
+                ToolCallResult::Unknown => {
+                    println!("{prefix} unknown:  {name}")
+                }
             },
-            AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
-            AgentEvent::ThinkingDelta(_) => {}
+            AgentEvent::Error(error) => {
+                eprintln!("{prefix} error:    {error}")
+            }
         }
     }
-    println!("\n{answer}");
+    println!("\n--- final answer ---\n{answer}");
     Ok(())
 }

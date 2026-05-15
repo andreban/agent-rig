@@ -138,10 +138,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Question: {question}");
     println!("(The runner will pause and ask for approval before send_email runs.)\n");
 
-    let mut stream = runner.run(agent, vec![Message::user(question)]);
+    let mut stream = runner.run(&agent, vec![Message::user(question)]);
 
     while let Some(event) = stream.next().await {
-        match event {
+        match event.agent_event {
             AgentEvent::ToolCallStarted { name, args } => {
                 println!("\n[runner] started:   {name}({args})");
             }

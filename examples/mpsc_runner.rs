@@ -83,33 +83,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)\n");
 
     let start = Instant::now();
-    let mut stream = runner.run(agent, vec![Message::user(question)]);
+    let mut stream = runner.run(&agent, vec![Message::user(question)]);
 
     while let Some(event) = stream.next().await {
-        match event {
+        let run_id = event.run_id;
+        match event.agent_event {
             AgentEvent::ToolCallStarted { name, args } => {
-                println!("[runner] started:   {name}({args})");
+                println!("[runner[{run_id}]] started:   {name}({args})");
             }
             AgentEvent::ToolCallFinished { name, result } => match result {
                 ToolCallResult::Ok(result) => {
-                    println!("[runner] finished:  {name} → {result}");
+                    println!("[runner[{run_id}]] finished:  {name} → {result}");
                 }
                 ToolCallResult::Err(error) => {
-                    println!("[runner] finished:  {name} → {error:?}");
+                    println!("[runner[{run_id}]] finished:  {name} → {error:?}");
                 }
                 ToolCallResult::Denied => {
-                    println!("[runner] denied:    {name}");
+                    println!("[runner[{run_id}]] denied:    {name}");
                 }
                 ToolCallResult::Unknown => {
-                    println!("[runner] unknown:    {name}");
+                    println!("[runner[{run_id}]] unknown:    {name}");
                 }
             },
             AgentEvent::TextDelta(chunk) => {
                 print!("{chunk}");
             }
-            AgentEvent::ThinkingDelta(_) => {}
+            AgentEvent::ThinkingDelta(thinking) => {
+                print!("{thinking}")
+            }
             AgentEvent::Error(error) => {
-                eprintln!("\n[runner] stream error: {error}");
+                eprintln!("\n[runner[{run_id}]] stream error: {error}");
             }
         }
     }

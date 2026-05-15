@@ -1,15 +1,15 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
-use futures_util::Stream;
-use std::pin::Pin;
+use futures_util::StreamExt;
+use serde_json::{Value, json};
 use tracing::instrument;
 
 use crate::{
     agent::Agent,
     error::Error,
     model::Message,
-    runner::{AgentEvent, AgentRunner},
+    runner::{AgentEvent, AgentRunner, RunEmitter},
     tools::tool::ToolDefinition,
 };
 
@@ -52,14 +52,21 @@ impl AgentTool {
     /// run. The caller (the parent runner) consumes the stream, forwards each
     /// event, and uses the accumulated text as the tool result.
     #[instrument(skip(self, args), fields(tool = self.definition.name))]
-    pub async fn call(
-        &self,
-        args: serde_json::Value,
-    ) -> Result<Pin<Box<dyn Stream<Item = AgentEvent> + Send>>, Error> {
+    pub async fn call(&self, tx: RunEmitter, args: serde_json::Value) -> Result<Value, Error> {
         let input = serde_json::to_string(&args)
             .map_err(|e| Error::Agent(format!("failed to serialize args: {e}")))?;
-        Ok(self
-            .runner
-            .run(self.agent.clone(), vec![Message::user(input)]))
+
+        let mut result = String::new();
+        let mut stream = self.runner.run(&self.agent, vec![Message::user(input)]);
+        while let Some(next) = stream.next().await {
+            if let AgentEvent::TextDelta(text) = &next.agent_event {
+                result += text;
+            }
+            let _ = tx.send(next.agent_event).await;
+        }
+        Ok(json!({"output": result }))
     }
 }
+
+#[cfg(test)]
+mod tests;

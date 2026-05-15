@@ -69,9 +69,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         io::stdout().flush()?;
 
         let mut reply = String::new();
-        let mut stream = runner.run(agent.clone(), thread.clone());
+        let mut stream = runner.run(&agent, thread.clone());
         while let Some(event) = stream.next().await {
-            match event {
+            match event.agent_event {
                 AgentEvent::ThinkingDelta(token) => {
                     print!("\x1b[2m{token}\x1b[0m");
                     io::stdout().flush()?;

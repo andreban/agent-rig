@@ -126,9 +126,9 @@ impl Tool for RecallFactTool {
 
 async fn run_once(runner: &AgentRunner, agent: &Agent, input: &str) -> String {
     let mut reply = String::new();
-    let mut stream = runner.run(agent.clone(), vec![Message::user(input)]);
+    let mut stream = runner.run(agent, vec![Message::user(input)]);
     while let Some(event) = stream.next().await {
-        match event {
+        match event.agent_event {
             AgentEvent::TextDelta(chunk) => reply.push_str(&chunk),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             _ => {}

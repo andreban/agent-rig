@@ -65,9 +65,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let runner = AgentRunner::new(Arc::new(model));
 
     let mut output = String::new();
-    let mut stream = runner.run(agent, vec![Message::user("learn about AI agents")]);
+    let mut stream = runner.run(&agent, vec![Message::user("learn about AI agents")]);
     while let Some(event) = stream.next().await {
-        match event {
+        match event.agent_event {
             AgentEvent::TextDelta(chunk) => output.push_str(&chunk),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             _ => {}
