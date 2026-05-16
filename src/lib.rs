@@ -7,14 +7,19 @@
 //!
 //! ## Quick Start
 //!
-//! ```no_run,ignore
+//! ```no_run
+//! # // Compile-tested only when the `gemini` feature is enabled.
+//! # #[cfg(feature = "gemini")]
+//! # mod doc {
 //! // Requires the `gemini` feature: `cargo add agent-rig --features gemini`
-//! use agent_rig::{Agent, AgentRunner};
-//! use agent_rig::models::gemini::GeminiModel;
+//! use std::sync::Arc;
+//! use agent_rig::{Agent, model::Message, models::gemini::GeminiModel,
+//!     runner::{AgentEvent, AgentRunner}};
+//! use futures_util::StreamExt;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let model = GeminiModel::builder("API_KEY", "gemini-2.5-pro-preview-03-25")
+//! let model = GeminiModel::builder("API_KEY", "gemini-2.5-pro")
 //!     .temperature(0.8)
 //!     .build();
 //!
@@ -23,10 +28,15 @@
 //!     .instructions("You are a helpful assistant.")
 //!     .build();
 //!
-//! let runner = AgentRunner::new(Box::new(model));
-//! let result = runner.run(&agent, "Hello!").await?;
-//! println!("{}", result.output);
+//! let runner = AgentRunner::new(Arc::new(model));
+//! let mut stream = runner.run(&agent, vec![Message::user("Hello!")]);
+//! while let Some(event) = stream.next().await {
+//!     if let AgentEvent::TextDelta(chunk) = event.agent_event {
+//!         print!("{chunk}");
+//!     }
+//! }
 //! # Ok(())
+//! # }
 //! # }
 //! ```
 

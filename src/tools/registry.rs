@@ -32,7 +32,7 @@ impl ToolRegistryEntry {
 /// A collection of [`Tool`]s and [`AgentTool`]s keyed by name.
 ///
 /// `ToolRegistry` is independent of any [`AgentRunner`](crate::runner::AgentRunner)
-/// so a single registry can be shared across multiple runners via [`Arc`].
+/// so a single registry can be shared across multiple runners via [`Arc`](std::sync::Arc).
 /// Build one with the chained [`register`](Self::register) /
 /// [`register_agent`](Self::register_agent) methods.
 ///
