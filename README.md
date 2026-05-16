@@ -60,9 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runner = AgentRunner::new(Arc::new(model));
 
-    let mut stream = runner.run(agent, vec![Message::user("Hello!")]);
+    let mut stream = runner.run(&agent, vec![Message::user("Hello!")]);
     while let Some(event) = stream.next().await {
-        if let AgentEvent::TextDelta(chunk) = event {
+        if let AgentEvent::TextDelta(chunk) = event.agent_event {
             print!("{chunk}");
         }
     }
@@ -81,9 +81,15 @@ GEMINI_API_KEY=your_key cargo run --features gemini
 
 ### The stream API
 
-`AgentRunner::run` takes the agent and the conversation thread by value and returns an async stream of [`AgentEvent`]s. The stream ends when the model produces a turn with no tool calls (or on an `AgentEvent::Error`).
+`AgentRunner::run` takes the agent by reference and the conversation thread by value, and returns an async stream of `RunEvent`s. A `RunEvent` is an [`AgentEvent`] tagged with the `run_id` of the run that produced it and an optional `parent` run id (set for sub-agent invocations). For a flat single-run consumer the extra fields can be ignored — read `event.agent_event`. The stream ends when the model produces a turn with no tool calls (or on an `AgentEvent::Error`).
 
 ```rust
+pub struct RunEvent {
+    pub run_id: usize,
+    pub parent: Option<usize>,
+    pub agent_event: AgentEvent,
+}
+
 pub enum AgentEvent {
     ToolCallStarted { name: String, args: serde_json::Value },
     ToolCallFinished { name: String, result: ToolCallResult },
@@ -99,9 +105,9 @@ Concatenating every `TextDelta` reconstructs the final reply.
 
 ```rust
 let mut text = String::new();
-let mut stream = runner.run(agent, vec![Message::user("What is the capital of France?")]);
+let mut stream = runner.run(&agent, vec![Message::user("What is the capital of France?")]);
 while let Some(event) = stream.next().await {
-    if let AgentEvent::TextDelta(chunk) = event {
+    if let AgentEvent::TextDelta(chunk) = event.agent_event {
         text.push_str(&chunk);
     }
 }
@@ -120,15 +126,15 @@ let mut thread: Vec<Message> = Vec::new();
 // Turn 1
 thread.push(Message::user("My name is Alice."));
 let mut reply = String::new();
-let mut stream = runner.run(agent.clone(), thread.clone());
+let mut stream = runner.run(&agent, thread.clone());
 while let Some(event) = stream.next().await {
-    if let AgentEvent::TextDelta(chunk) = event { reply.push_str(&chunk); }
+    if let AgentEvent::TextDelta(chunk) = event.agent_event { reply.push_str(&chunk); }
 }
 thread.push(Message::assistant(reply));
 
 // Turn 2 — the runner sees the full history
 thread.push(Message::user("What is my name?"));
-let mut stream = runner.run(agent.clone(), thread.clone());
+let mut stream = runner.run(&agent, thread.clone());
 // drive the stream and append the assistant reply again
 ```
 
@@ -187,7 +193,7 @@ Drive the stream and inspect `ToolCallStarted` / `ToolCallFinished` events to ob
 use agent_rig::runner::{AgentEvent, ToolCallResult};
 
 while let Some(event) = stream.next().await {
-    match event {
+    match event.agent_event {
         AgentEvent::ToolCallStarted { name, args } => println!("[start] {name}({args})"),
         AgentEvent::ToolCallFinished { name, result: ToolCallResult::Ok(value) } => {
             println!("[done]  {name} → {value}");
@@ -258,9 +264,9 @@ let agent = Agent::builder()
     .build();
 
 let mut output = String::new();
-let mut stream = runner.run(agent, vec![Message::user("AI agents")]);
+let mut stream = runner.run(&agent, vec![Message::user("AI agents")]);
 while let Some(event) = stream.next().await {
-    if let AgentEvent::TextDelta(chunk) = event { output.push_str(&chunk); }
+    if let AgentEvent::TextDelta(chunk) = event.agent_event { output.push_str(&chunk); }
 }
 let plan: ResearchPlan = serde_json::from_str(&output)?;
 println!("{}", plan.title);
@@ -274,9 +280,9 @@ Streaming is the only mode — `AgentRunner::run` already returns a stream. `Thi
 use futures_util::StreamExt;
 use agent_rig::runner::AgentEvent;
 
-let mut stream = runner.run(agent, vec![Message::user("Explain Rust ownership.")]);
+let mut stream = runner.run(&agent, vec![Message::user("Explain Rust ownership.")]);
 while let Some(event) = stream.next().await {
-    match event {
+    match event.agent_event {
         AgentEvent::ThinkingDelta(token) => print!("\x1b[2m{token}\x1b[0m"),
         AgentEvent::TextDelta(chunk) => print!("{chunk}"),
         AgentEvent::ToolCallStarted { name, .. } => println!("[calling {name}]"),
@@ -285,6 +291,8 @@ while let Some(event) = stream.next().await {
     }
 }
 ```
+
+Each `RunEvent` also carries a `run_id` (unique per run) and an optional `parent` run id. For sub-agent invocations, child events have `parent = Some(parent_run_id)`, so consumers can tell parent and child output apart. See [`examples/agent_as_tool.rs`](examples/agent_as_tool.rs) for a worked example.
 
 ### Agent composition
 
@@ -393,6 +401,7 @@ graph TD
 | `AgentTool` | Wraps an `AgentRunner` + `Agent` as a tool for agent composition |
 | `AuthManager` | Trait for gating tool calls before execution |
 | `AgentEvent` | Stream event: `TextDelta`, `ThinkingDelta`, `ToolCallStarted`, `ToolCallFinished`, `Error` |
+| `RunEvent` | `AgentEvent` tagged with `run_id` and optional `parent` run id (for sub-agent invocations) |
 | `ToolCallResult` | Outcome of a tool call: `Ok(Value)`, `Err(Error)`, `Denied`, `Unknown` |
 | `Error` | `Provider(String)` or `Agent(String)` |
 
