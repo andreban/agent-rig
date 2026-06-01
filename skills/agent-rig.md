@@ -525,6 +525,7 @@ impl LlmModel for MyModel {
             text: Some("Hello from MyModel!".to_string()),
             tool_calls: vec![],
             thinking: None,
+            token_usage: None,
         })
     }
 }
@@ -541,8 +542,11 @@ Ok(ModelResponse {
         serde_json::json!({ "city": "Tokyo" }),
     )],
     thinking: None,
+    token_usage: None,
 })
 ```
+
+**Reporting token usage:** populate `token_usage` with a `TokenUsage { input_tokens, output_tokens, cached_input_tokens, thinking_tokens, tool_use_prompt_tokens }` when the provider returns per-call token counts. Leave dimensions the provider does not report as `None` (distinct from `Some(0)`). The runner forwards it as `AgentEvent::Usage` — one event per model call. Cache semantics are subset: `cached_input_tokens ⊆ input_tokens`.
 
 If your provider has opaque per-call metadata that must be round-tripped (e.g. Gemini's
 `thought_signature`), set it via `ToolCall { provider_metadata: Some(...), .. }`. The runner

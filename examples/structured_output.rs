@@ -69,6 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::TextDelta(chunk) => output.push_str(&chunk),
+            AgentEvent::Usage(usage) => println!("[runner] token usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             _ => {}
         }

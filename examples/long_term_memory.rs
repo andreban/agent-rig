@@ -130,6 +130,7 @@ async fn run_once(runner: &AgentRunner, agent: &Agent, input: &str) -> String {
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::TextDelta(chunk) => reply.push_str(&chunk),
+            AgentEvent::Usage(usage) => println!("[runner] usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             _ => {}
         }

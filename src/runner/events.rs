@@ -11,6 +11,7 @@
 use serde_json::Value;
 
 use crate::error::Error;
+use crate::model::TokenUsage;
 
 /// Outcome of executing a single tool call.
 ///
@@ -67,6 +68,9 @@ impl From<Result<Value, Error>> for ToolCallResult {
 ///   [`ToolCallFinished`](AgentEvent::ToolCallFinished) fires once it
 ///   resolves. Hallucinated tool calls (no matching registry entry) emit
 ///   *neither* event; see [`ToolCallResult::Unknown`].
+/// - [`Usage`](AgentEvent::Usage) reports token counts for one model call.
+///   A run that performs `N` model calls produces up to `N` `Usage`
+///   events; consumers sum across them to derive per-run totals.
 /// - [`Error`](AgentEvent::Error) terminates the stream early when the
 ///   underlying provider fails.
 #[derive(Clone, Debug)]
@@ -91,6 +95,12 @@ pub enum AgentEvent {
     ThinkingDelta(String),
     /// A chunk of the model's text output.
     TextDelta(String),
+    /// Token counts reported by the provider for one model call.
+    ///
+    /// Emitted at most once per model call (a run that issues multiple
+    /// tool-calling turns produces multiple `Usage` events). Provider
+    /// adapters that do not report usage never produce this event.
+    Usage(TokenUsage),
     /// The provider returned an error. The stream ends after this event.
     Error(crate::error::Error),
 }

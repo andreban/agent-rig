@@ -124,6 +124,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     println!("{prefix} unknown:  {name}")
                 }
             },
+            AgentEvent::Usage(usage) => {
+                println!("{prefix} usage:    {usage:?}")
+            }
             AgentEvent::Error(error) => {
                 eprintln!("{prefix} error:    {error}")
             }

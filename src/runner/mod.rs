@@ -176,6 +176,9 @@ impl AgentRunner {
                     Ok(ModelStreamChunk::ToolCall(call)) => {
                         tool_calls.push(call);
                     }
+                    Ok(ModelStreamChunk::Usage(usage)) => {
+                        let _ = tx.send(AgentEvent::Usage(usage)).await;
+                    }
                     Err(error) => {
                         let _ = tx.send(AgentEvent::Error(error)).await;
                         return;

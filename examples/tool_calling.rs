@@ -136,6 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::TextDelta(chunk) => answer.push_str(&chunk),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             AgentEvent::ThinkingDelta(_) => {}
+            AgentEvent::Usage(usage) => println!("[runner] usage:     {usage:?}"),
         }
     }
 

@@ -1,6 +1,6 @@
 use super::*;
 use crate::error::Error;
-use crate::model::{MessageContent, ModelResponse, Role};
+use crate::model::{MessageContent, ModelResponse, Role, TokenUsage};
 use crate::tools::Tool;
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -45,6 +45,7 @@ fn final_response(text: &str) -> Result<ModelResponse, Error> {
         text: Some(text.to_string()),
         tool_calls: vec![],
         thinking: None,
+        token_usage: None,
     })
 }
 
@@ -57,6 +58,7 @@ fn tool_call_response(
         text: None,
         tool_calls: vec![ToolCall::new(id.into(), name.into(), args)],
         thinking: None,
+        token_usage: None,
     })
 }
 
@@ -333,6 +335,7 @@ async fn thinking_chunks_are_forwarded() {
         text: Some("answer".into()),
         tool_calls: vec![],
         thinking: Some("reasoning".into()),
+        token_usage: None,
     })]);
     let runner = AgentRunner::new(model);
 
@@ -344,11 +347,96 @@ async fn thinking_chunks_are_forwarded() {
             AgentEvent::TextDelta(_) => "text",
             AgentEvent::ToolCallStarted { .. } => "started",
             AgentEvent::ToolCallFinished { .. } => "finished",
+            AgentEvent::Usage(_) => "usage",
             AgentEvent::Error(_) => "error",
         })
         .collect();
     // Default `generate_stream` yields thinking before text.
     assert_eq!(kinds, vec!["thinking", "text"]);
+}
+
+#[tokio::test]
+async fn token_usage_is_forwarded_as_agent_event() {
+    let usage = TokenUsage {
+        input_tokens: Some(11),
+        output_tokens: Some(22),
+        cached_input_tokens: Some(3),
+        thinking_tokens: None,
+        tool_use_prompt_tokens: None,
+    };
+    let model = ScriptedModel::new(vec![Ok(ModelResponse {
+        text: Some("hello".into()),
+        tool_calls: vec![],
+        thinking: None,
+        token_usage: Some(usage.clone()),
+    })]);
+    let runner = AgentRunner::new(model);
+
+    let events = collect(&runner, agent("a"), "q").await;
+    let usages: Vec<&TokenUsage> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Usage(u) => Some(u),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(usages.len(), 1);
+    assert_eq!(usages[0], &usage);
+}
+
+#[tokio::test]
+async fn one_usage_event_per_model_call() {
+    let (tool, _) = EchoTool::ok("echo");
+    let registry = Arc::new(ToolRegistry::new().register(Box::new(tool)));
+    let first_usage = TokenUsage {
+        input_tokens: Some(10),
+        output_tokens: Some(5),
+        ..Default::default()
+    };
+    let second_usage = TokenUsage {
+        input_tokens: Some(20),
+        output_tokens: Some(8),
+        ..Default::default()
+    };
+    let model = ScriptedModel::new(vec![
+        Ok(ModelResponse {
+            text: None,
+            tool_calls: vec![ToolCall::new("c1".into(), "echo".into(), json!({"x": 1}))],
+            thinking: None,
+            token_usage: Some(first_usage.clone()),
+        }),
+        Ok(ModelResponse {
+            text: Some("done".into()),
+            tool_calls: vec![],
+            thinking: None,
+            token_usage: Some(second_usage.clone()),
+        }),
+    ]);
+    let runner = AgentRunner::with_registry(model, registry);
+
+    let events = collect(&runner, agent("a"), "go").await;
+    let usages: Vec<&TokenUsage> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Usage(u) => Some(u),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(usages, vec![&first_usage, &second_usage]);
+}
+
+#[tokio::test]
+async fn no_usage_event_when_provider_does_not_report() {
+    let model = ScriptedModel::new(vec![Ok(ModelResponse {
+        text: Some("hi".into()),
+        tool_calls: vec![],
+        thinking: None,
+        token_usage: None,
+    })]);
+    let runner = AgentRunner::new(model);
+
+    let events = collect(&runner, agent("a"), "q").await;
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Usage(_))));
 }
 
 #[tokio::test]
@@ -375,6 +463,7 @@ async fn parallel_tool_results_are_paired_in_request_order() {
                 ToolCall::new("c3".into(), "echo".into(), json!({"i": 3})),
             ],
             thinking: None,
+            token_usage: None,
         }),
         final_response("done"),
     ]);
