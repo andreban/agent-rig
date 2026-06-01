@@ -44,6 +44,7 @@ fn text_only(text: &str) -> Result<ModelResponse, Error> {
         text: Some(text.to_string()),
         tool_calls: vec![],
         thinking: None,
+        token_usage: None,
     })
 }
 

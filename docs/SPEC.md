@@ -51,13 +51,14 @@ All provider adapters implement this trait. The runner holds an `Arc<dyn LlmMode
 
 ```rust
 pub enum ModelStreamChunk {
-    Thinking(String),   // reasoning/thinking token (extended thinking models)
-    TextDelta(String),  // incremental text output chunk
-    ToolCall(ToolCall), // a complete tool call (not streamed mid-call)
+    Thinking(String),       // reasoning/thinking token (extended thinking models)
+    TextDelta(String),      // incremental text output chunk
+    ToolCall(ToolCall),     // a complete tool call (not streamed mid-call)
+    Usage(TokenUsage),      // per-call token counts (at most one per stream)
 }
 ```
 
-Emitted by [`LlmModel::generate_stream`]. The runner wraps these into [`AgentEvent`], adding tool call lifecycle events on top.
+Emitted by [`LlmModel::generate_stream`]. The runner wraps these into [`AgentEvent`], adding tool call lifecycle events on top. `Usage` is yielded at most once per `generate_stream` invocation — providers that do not report token counts simply never yield it.
 
 ### `AgentEvent` and `RunEvent` (`src/runner/events.rs`)
 
@@ -72,6 +73,9 @@ pub enum AgentEvent {
     ThinkingDelta(String),
     /// Incremental text chunk forwarded from the model stream.
     TextDelta(String),
+    /// Token counts reported by the provider for one model call.
+    /// A run that issues N model calls produces up to N `Usage` events.
+    Usage(TokenUsage),
     /// The provider returned an error. The stream ends after this event.
     Error(Error),
 }
@@ -124,6 +128,15 @@ pub struct ModelResponse {
     pub text: Option<String>,          // None when the model issued tool calls
     pub tool_calls: Vec<ToolCall>,     // empty on a final text response
     pub thinking: Option<String>,      // reasoning trace; only set by Gemini when include_thoughts is enabled
+    pub token_usage: Option<TokenUsage>, // per-call token counts; None when the provider did not report usage
+}
+
+pub struct TokenUsage {
+    pub input_tokens: Option<u32>,            // prompt / input tokens
+    pub output_tokens: Option<u32>,           // generated / output tokens
+    pub cached_input_tokens: Option<u32>,     // subset of input_tokens served from cache
+    pub thinking_tokens: Option<u32>,         // reasoning tokens billed separately
+    pub tool_use_prompt_tokens: Option<u32>,  // tool-use prompt tokens billed separately (Gemini)
 }
 ```
 
@@ -311,6 +324,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Structured output: when `ModelRequest::output_schema` is set, a `GenerationConfig` with `response_mime_type("application/json")` and the normalised schema is applied, overriding any model-level config (with `thinking_config` carried over). Schema normalisation (stripping `$schema`/`$defs`, inlining `$ref`) is performed internally.
 - Response parts are split by `thought` flag: parts where `thought == Some(true)` are concatenated into `ModelResponse::thinking`; remaining text parts form `ModelResponse::text`. This surfaces reasoning tokens as `AgentEvent::ThinkingDelta` via the runner.
 - `provider_metadata` carries Gemini's `thought_signature`, which the adapter echoes back on both the replayed `FunctionCall` parts and the matching `FunctionResponse` parts.
+- Token usage: `usage_metadata.prompt_token_count` → `TokenUsage::input_tokens`, `usage_metadata.candidates_token_count` → `TokenUsage::output_tokens`. `cached_input_tokens`, `thinking_tokens`, and `tool_use_prompt_tokens` are left `None` pending [geologia#11](https://github.com/andreban/geologia/issues/11).
 - Uses the default `generate_stream` (wraps `generate`); text arrives as a single `TextDelta` after the full response is received. See Roadmap.
 
 ### `OllamaModel` (`src/models/ollama.rs`)
@@ -321,6 +335,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Structured output: when `ModelRequest::output_schema` is set, the schema is passed to the Ollama `format` field (requires Ollama ≥ 0.5 and a model that supports structured output).
 - Implements `generate_stream` natively: emits `TextDelta` chunks as they arrive (no-tools path); emits `ToolCall` chunks from the single-shot response when tools are present (Ollama requires `stream(false)` for tool calls).
 - Ollama has no call ID; the function name is currently reused as the `ToolCall::id` (sufficient because no part of the codebase keys on the id for Ollama).
+- Token usage: currently emits `token_usage: None`. The Ollama API returns `prompt_eval_count` and `eval_count` on the final chunk, but `ollama-rs` does not yet expose them on `ChatResponse` — pending [ollama-rs#11](https://github.com/andreban/ollama-rs/issues/11).
 
 ## Cargo Features
 
@@ -353,7 +368,7 @@ src/
   lib.rs              — crate root, public re-exports
   error.rs            — Error enum
   model.rs            — LlmModel trait, ModelStreamChunk, Message, MessageContent,
-                        ModelRequest, ModelResponse, ToolCall, Role
+                        ModelRequest, ModelResponse, TokenUsage, ToolCall, Role
   agent.rs            — Agent, AgentBuilder
   auth.rs             — AuthManager trait
   runner/

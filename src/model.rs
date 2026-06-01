@@ -175,6 +175,45 @@ impl ToolCall {
     }
 }
 
+/// Token counts reported by a provider for one model call.
+///
+/// Every field is `Option<u32>` so providers that do not report a given
+/// dimension leave it `None` — distinct from `Some(0)`, which means
+/// the provider reported zero tokens in this dimension.
+///
+/// Consumers concatenate per-call counts themselves to derive run totals.
+/// Total tokens are intentionally not stored — derive as
+/// `input_tokens + output_tokens` (plus the optional dimensions) when
+/// needed, to avoid drift against provider-reported totals that may round
+/// each dimension independently.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    /// Prompt / input tokens billed for this call.
+    pub input_tokens: Option<u32>,
+    /// Generated / output tokens billed for this call.
+    pub output_tokens: Option<u32>,
+    /// Tokens served from the provider's prompt cache.
+    ///
+    /// **Contract:** subset of `input_tokens`. That is, `input_tokens`
+    /// includes cached tokens; `cached_input_tokens` is the portion of
+    /// that count served from the cache. The non-cached portion is
+    /// `input_tokens - cached_input_tokens`.
+    ///
+    /// This matches Gemini's `promptTokenCount` / `cachedContentTokenCount`
+    /// and OpenAI's `prompt_tokens` / `prompt_tokens_details.cached_tokens`.
+    /// Providers that report cache tokens additively (e.g. Anthropic's
+    /// `cache_read_input_tokens`) must normalise inside the adapter so
+    /// this invariant holds.
+    pub cached_input_tokens: Option<u32>,
+    /// Reasoning / thinking tokens, when the provider bills them
+    /// separately from `output_tokens`.
+    pub thinking_tokens: Option<u32>,
+    /// Tokens consumed by tool-use prompt parts, when the provider bills
+    /// them separately from `input_tokens` (Gemini's
+    /// `toolUsePromptTokenCount`).
+    pub tool_use_prompt_tokens: Option<u32>,
+}
+
 /// A response from an LLM model.
 ///
 /// Exactly one of `text` or `tool_calls` will be non-empty per turn:
@@ -195,6 +234,13 @@ pub struct ModelResponse {
     /// [`GeminiModel`]: crate::models::gemini::GeminiModel
     /// [`ThinkingConfig`]: geologia::prelude::ThinkingConfig
     pub thinking: Option<String>,
+    /// Token counts reported by the provider for this call.
+    ///
+    /// `None` when the provider did not report usage on this response.
+    /// Adapters that support usage reporting populate this; the default
+    /// [`LlmModel::generate_stream`] forwards it as a trailing
+    /// [`ModelStreamChunk::Usage`] chunk.
+    pub token_usage: Option<TokenUsage>,
 }
 
 /// A chunk yielded by [`LlmModel::generate_stream`] during a single model turn.
@@ -214,6 +260,12 @@ pub enum ModelStreamChunk {
     /// A complete tool call. Tool calls are not streamed mid-call; the full
     /// call is emitted as a single chunk once the model has finished specifying it.
     ToolCall(ToolCall),
+    /// Token counts reported by the provider for this model call.
+    ///
+    /// Emitted at most once per [`LlmModel::generate_stream`] invocation,
+    /// typically as the final chunk before the stream ends. Provider
+    /// adapters that do not report usage simply never yield this variant.
+    Usage(TokenUsage),
 }
 
 /// Trait implemented by all LLM provider backends.
@@ -237,7 +289,7 @@ pub enum ModelStreamChunk {
 ///         let echo = request.messages.last().and_then(|m| {
 ///             if let MessageContent::Text(t) = &m.content { Some(t.clone()) } else { None }
 ///         });
-///         Ok(ModelResponse { text: echo, tool_calls: vec![], thinking: None })
+///         Ok(ModelResponse { text: echo, tool_calls: vec![], thinking: None, token_usage: None })
 ///     }
 /// }
 /// ```
@@ -274,6 +326,9 @@ pub trait LlmModel: Send + Sync {
             }
             if let Some(text) = response.text {
                 yield Ok(ModelStreamChunk::TextDelta(text));
+            }
+            if let Some(token_usage) = response.token_usage {
+                yield Ok(ModelStreamChunk::Usage(token_usage));
             }
         })
     }

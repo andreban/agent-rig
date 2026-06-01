@@ -257,11 +257,16 @@ impl LlmModel for OllamaModel {
             }
         }
 
+        // TODO(rust-agent-kit#28): populate `token_usage` from
+        // `prompt_eval_count` / `eval_count` once `ollama-rs` exposes them
+        // on `ChatResponse` — tracked in
+        // https://github.com/andreban/ollama-rs/issues/11.
         if !tool_calls.is_empty() {
             return Ok(ModelResponse {
                 text: None,
                 tool_calls,
                 thinking: None,
+                token_usage: None,
             });
         }
 
@@ -269,6 +274,7 @@ impl LlmModel for OllamaModel {
             text: Some(output),
             tool_calls: vec![],
             thinking: None,
+            token_usage: None,
         })
     }
 

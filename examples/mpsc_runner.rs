@@ -111,6 +111,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ThinkingDelta(thinking) => {
                 print!("{thinking}")
             }
+            AgentEvent::Usage(usage) => {
+                println!("\n[runner[{run_id}]] usage:     {usage:?}");
+            }
             AgentEvent::Error(error) => {
                 eprintln!("\n[runner[{run_id}]] stream error: {error}");
             }

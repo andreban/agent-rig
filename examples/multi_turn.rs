@@ -81,6 +81,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     io::stdout().flush()?;
                     reply.push_str(&chunk);
                 }
+                AgentEvent::Usage(usage) => {
+                    println!("\n[runner] token usage: {usage:?}");
+                }
                 AgentEvent::Error(error) => {
                     eprintln!("\n[runner] stream error: {error}");
                 }

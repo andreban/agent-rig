@@ -136,6 +136,31 @@ async fn agent_tool_calling_returns_correct_result() {
 }
 
 #[tokio::test]
+async fn agent_run_reports_token_usage() {
+    let Some(api_key) = api_key() else { return };
+
+    let model = GeminiModel::new(api_key, MODEL);
+    let agent = Agent::builder()
+        .name("Greeter")
+        .instructions("Reply with exactly one sentence.")
+        .build();
+
+    let runner = AgentRunner::new(Arc::new(model));
+    let mut stream = runner.run(&agent, vec![Message::user("Say hello.")]);
+
+    let mut got_usage = None;
+    while let Some(event) = stream.next().await {
+        if let AgentEvent::Usage(usage) = event.agent_event {
+            got_usage = Some(usage);
+        }
+    }
+
+    let usage = got_usage.expect("Gemini must report token usage");
+    assert!(usage.input_tokens.unwrap_or(0) > 0);
+    assert!(usage.output_tokens.unwrap_or(0) > 0);
+}
+
+#[tokio::test]
 async fn agent_run_with_temperature_setting() {
     let Some(api_key) = api_key() else { return };
 

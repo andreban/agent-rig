@@ -113,6 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ToolCallResult::Denied => println!("[runner] tool call denied: {name}"),
                 ToolCallResult::Unknown => println!("[runner] tool call unknown: {name}"),
             },
+            AgentEvent::Usage(usage) => println!("[runner] token usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
         }
     }

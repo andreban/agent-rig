@@ -95,11 +95,12 @@ pub enum AgentEvent {
     ToolCallFinished { name: String, result: ToolCallResult },
     ThinkingDelta(String),
     TextDelta(String),
+    Usage(TokenUsage),
     Error(Error),
 }
 ```
 
-Concatenating every `TextDelta` reconstructs the final reply.
+Concatenating every `TextDelta` reconstructs the final reply. `Usage` fires at most once per model call — a run that issues several tool-calling turns yields one `Usage` event per turn; sum across them for a per-run total.
 
 ### Single-turn
 
@@ -205,6 +206,7 @@ while let Some(event) = stream.next().await {
         AgentEvent::ToolCallFinished { result: ToolCallResult::Unknown, .. } => {}
         AgentEvent::TextDelta(chunk) => print!("{chunk}"),
         AgentEvent::ThinkingDelta(_) => {}
+        AgentEvent::Usage(usage) => println!("[usage] {usage:?}"),
         AgentEvent::Error(e) => eprintln!("[runner error] {e}"),
     }
 }
@@ -420,7 +422,7 @@ struct MyModel;
 impl LlmModel for MyModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
         // Translate ModelRequest → your provider's API call
-        // Return ModelResponse { text, tool_calls, thinking }
+        // Return ModelResponse { text, tool_calls, thinking, token_usage }
         todo!()
     }
 }
