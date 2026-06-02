@@ -357,7 +357,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -460,7 +460,7 @@ dependencies = [
 [[package]]
 name = "geologia"
 version = "0.1.0"
-source = "git+https://github.com/andreban/geologia#08ad998601db705bda409a445a83251c462597d3"
+source = "git+https://github.com/andreban/geologia#4ab41697f890e45337f489636db6be93c522a0e2"
 dependencies = [
  "reqwest",
  "serde",
@@ -988,7 +988,7 @@ dependencies = [
 [[package]]
 name = "ollama-rs"
 version = "0.1.0"
-source = "git+https://github.com/andreban/ollama-rs#08c2dccbb4dbbda0d5f68aae0a47686e99459074"
+source = "git+https://github.com/andreban/ollama-rs#ca8d6bc74915f91566c50c964ec56393dfb26924"
 dependencies = [
  "async-stream",
  "futures-util",

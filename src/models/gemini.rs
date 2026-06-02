@@ -398,19 +398,16 @@ impl LlmModel for GeminiModel {
 
 /// Maps Gemini's [`UsageMetadata`] into [`TokenUsage`].
 ///
-/// `cached_input_tokens`, `thinking_tokens`, and `tool_use_prompt_tokens`
-/// are left `None` because `geologia` does not expose
-/// `cachedContentTokenCount`, `thoughtsTokenCount`, or
-/// `toolUsePromptTokenCount` on `UsageMetadata` today. See
-/// [geologia#11](https://github.com/andreban/geologia/issues/11).
+/// Per-modality breakdowns (`*_tokens_details`) and `service_tier` are
+/// intentionally not propagated — `TokenUsage` only carries totals.
 impl From<&UsageMetadata> for TokenUsage {
     fn from(meta: &UsageMetadata) -> Self {
         TokenUsage {
             input_tokens: meta.prompt_token_count,
             output_tokens: meta.candidates_token_count,
-            cached_input_tokens: None,
-            thinking_tokens: None,
-            tool_use_prompt_tokens: None,
+            cached_input_tokens: meta.cached_content_token_count,
+            thinking_tokens: meta.thoughts_token_count,
+            tool_use_prompt_tokens: meta.tool_use_prompt_token_count,
         }
     }
 }
@@ -520,15 +517,30 @@ mod tests {
     }
 
     #[test]
-    fn token_usage_from_usage_metadata_maps_known_fields() {
+    fn token_usage_from_usage_metadata_maps_all_fields() {
         let meta = UsageMetadata {
             prompt_token_count: Some(123),
             candidates_token_count: Some(45),
-            total_token_count: Some(168),
+            cached_content_token_count: Some(60),
+            thoughts_token_count: Some(15),
+            tool_use_prompt_token_count: Some(7),
+            total_token_count: Some(190),
+            ..Default::default()
         };
         let usage = TokenUsage::from(&meta);
         assert_eq!(usage.input_tokens, Some(123));
         assert_eq!(usage.output_tokens, Some(45));
+        assert_eq!(usage.cached_input_tokens, Some(60));
+        assert_eq!(usage.thinking_tokens, Some(15));
+        assert_eq!(usage.tool_use_prompt_tokens, Some(7));
+    }
+
+    #[test]
+    fn token_usage_from_usage_metadata_passes_through_none() {
+        let meta = UsageMetadata::default();
+        let usage = TokenUsage::from(&meta);
+        assert_eq!(usage.input_tokens, None);
+        assert_eq!(usage.output_tokens, None);
         assert_eq!(usage.cached_input_tokens, None);
         assert_eq!(usage.thinking_tokens, None);
         assert_eq!(usage.tool_use_prompt_tokens, None);
