@@ -83,6 +83,34 @@ async fn agent_run_returns_non_empty_output() {
 }
 
 #[tokio::test]
+async fn agent_run_reports_token_usage() {
+    let url = ollama_url();
+    if !ollama_available(&url).await {
+        return;
+    }
+
+    let model = OllamaModel::new(&url, ollama_model());
+    let agent = Agent::builder()
+        .name("Greeter")
+        .instructions("Reply with exactly one sentence.")
+        .build();
+
+    let runner = AgentRunner::new(Arc::new(model));
+    let mut stream = runner.run(&agent, vec![Message::user("Say hello.")]);
+
+    let mut got_usage = None;
+    while let Some(event) = stream.next().await {
+        if let AgentEvent::Usage(usage) = event.agent_event {
+            got_usage = Some(usage);
+        }
+    }
+
+    let usage = got_usage.expect("Ollama must report token usage on done chunk");
+    assert!(usage.input_tokens.unwrap_or(0) > 0);
+    assert!(usage.output_tokens.unwrap_or(0) > 0);
+}
+
+#[tokio::test]
 async fn agent_follows_system_instructions() {
     let url = ollama_url();
     if !ollama_available(&url).await {

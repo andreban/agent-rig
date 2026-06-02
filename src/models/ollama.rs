@@ -14,16 +14,19 @@ use futures_util::{Stream, StreamExt};
 use ollama_rs::{
     OllamaClient,
     types::chat::{
-        ChatRequest, Function, Message as OllamaMessage, Role as OllamaRole, Tool as OllamaTool,
-        ToolCall as OllamaToolCall, ToolCallFunction, ToolType,
+        ChatRequest, ChatResponse, Function, Message as OllamaMessage, Role as OllamaRole,
+        Tool as OllamaTool, ToolCall as OllamaToolCall, ToolCallFunction, ToolType,
     },
     types::common::{Options, Stop},
 };
 
+pub use ollama_rs::types::common::{Think, ThinkLevel};
+
 use crate::{
     error::Error,
     model::{
-        LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role, ToolCall,
+        LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role, TokenUsage,
+        ToolCall,
     },
     tools::ToolDefinition,
 };
@@ -51,6 +54,7 @@ pub struct OllamaModel {
     client: OllamaClient,
     model: String,
     options: Option<Options>,
+    think: Option<Think>,
 }
 
 impl OllamaModel {
@@ -63,6 +67,7 @@ impl OllamaModel {
             client: OllamaClient::new(server_address.into()),
             model: model.into(),
             options: None,
+            think: None,
         }
     }
 
@@ -78,6 +83,7 @@ impl OllamaModel {
             server_address: server_address.into(),
             model: model.into(),
             options: Options::builder(),
+            think: None,
         }
     }
 }
@@ -87,6 +93,7 @@ pub struct OllamaModelBuilder {
     server_address: String,
     model: String,
     options: ollama_rs::types::common::OptionsBuilder,
+    think: Option<Think>,
 }
 
 impl OllamaModelBuilder {
@@ -132,12 +139,33 @@ impl OllamaModelBuilder {
         self
     }
 
+    /// Configures extended-thinking (reasoning) mode for supported models.
+    ///
+    /// Accepts either a boolean toggle ([`Think::Bool`]) or a named
+    /// intensity level ([`Think::Level`]). Models that do not support
+    /// thinking ignore this setting.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use agent_rig::models::ollama::{OllamaModel, Think, ThinkLevel};
+    ///
+    /// let model = OllamaModel::builder("http://localhost:11434", "qwen3:8b")
+    ///     .think(Think::Level(ThinkLevel::High))
+    ///     .build();
+    /// ```
+    pub fn think(mut self, think: Think) -> Self {
+        self.think = Some(think);
+        self
+    }
+
     /// Builds the [`OllamaModel`].
     pub fn build(self) -> OllamaModel {
         OllamaModel {
             client: OllamaClient::new(self.server_address),
             model: self.model,
             options: Some(self.options.build()),
+            think: self.think,
         }
     }
 }
@@ -167,10 +195,40 @@ fn to_tool_call(tc: &OllamaToolCall) -> ToolCall {
     }
 }
 
+/// Extracts token usage from the final Ollama [`ChatResponse`] chunk.
+///
+/// Returns `None` when neither `prompt_eval_count` nor `eval_count` is
+/// set, so consumers see "the provider didn't report usage" rather
+/// than a [`TokenUsage`] of all-`None`. The Ollama API uses `u64` for
+/// counts; we cast to `u32` saturating because per-call token counts
+/// above `u32::MAX` (~4.2B) are implausible.
+///
+/// A `From<&ChatResponse> for Option<TokenUsage>` impl would be more
+/// idiomatic but the orphan rule rejects it — `&ChatResponse` is
+/// foreign and appears before the local `TokenUsage` in
+/// `Option<TokenUsage>`, so no local type is "uncovered" first.
+fn to_token_usage(response: &ChatResponse) -> Option<TokenUsage> {
+    if response.prompt_eval_count.is_none() && response.eval_count.is_none() {
+        return None;
+    }
+    Some(TokenUsage {
+        input_tokens: response.prompt_eval_count.map(saturating_u64_to_u32),
+        output_tokens: response.eval_count.map(saturating_u64_to_u32),
+        cached_input_tokens: None,
+        thinking_tokens: None,
+        tool_use_prompt_tokens: None,
+    })
+}
+
+fn saturating_u64_to_u32(v: u64) -> u32 {
+    u32::try_from(v).unwrap_or(u32::MAX)
+}
+
 /// Builds an Ollama [`ChatRequest`] from a [`ModelRequest`].
 fn build_chat_request(
     model: &str,
     options: Option<Options>,
+    think: Option<Think>,
     request: ModelRequest,
 ) -> Result<ChatRequest, Error> {
     let mut messages: Vec<OllamaMessage> = Vec::new();
@@ -186,12 +244,14 @@ fn build_chat_request(
                 Role::Assistant => OllamaMessage {
                     content: text,
                     role: OllamaRole::Assistant,
+                    thinking: None,
                     tool_calls: vec![],
                 },
             },
             MessageContent::ToolCalls(calls) => OllamaMessage {
                 content: String::new(),
                 role: OllamaRole::Assistant,
+                thinking: None,
                 tool_calls: calls
                     .iter()
                     .enumerate()
@@ -217,6 +277,10 @@ fn build_chat_request(
         builder = builder.options(opts);
     }
 
+    if let Some(think) = think {
+        builder = builder.think(think);
+    }
+
     if !request.tools.is_empty() {
         let ollama_tools: Vec<OllamaTool> = request.tools.iter().map(to_ollama_tool).collect();
         // Ollama requires streaming to be disabled when using tools.
@@ -233,10 +297,16 @@ fn build_chat_request(
 #[async_trait]
 impl LlmModel for OllamaModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
-        let chat_request = build_chat_request(&self.model, self.options.clone(), request)?;
+        let chat_request = build_chat_request(
+            &self.model,
+            self.options.clone(),
+            self.think.clone(),
+            request,
+        )?;
         let mut stream = self.client.chat(chat_request);
         let mut output = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut token_usage: Option<TokenUsage> = None;
 
         while let Some(chunk) = stream.next().await {
             let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
@@ -253,20 +323,17 @@ impl LlmModel for OllamaModel {
             output.push_str(&response.message.content);
 
             if response.done {
+                token_usage = to_token_usage(&response);
                 break;
             }
         }
 
-        // TODO(rust-agent-kit#28): populate `token_usage` from
-        // `prompt_eval_count` / `eval_count` once `ollama-rs` exposes them
-        // on `ChatResponse` — tracked in
-        // https://github.com/andreban/ollama-rs/issues/11.
         if !tool_calls.is_empty() {
             return Ok(ModelResponse {
                 text: None,
                 tool_calls,
                 thinking: None,
-                token_usage: None,
+                token_usage,
             });
         }
 
@@ -274,7 +341,7 @@ impl LlmModel for OllamaModel {
             text: Some(output),
             tool_calls: vec![],
             thinking: None,
-            token_usage: None,
+            token_usage,
         })
     }
 
@@ -290,26 +357,118 @@ impl LlmModel for OllamaModel {
         request: ModelRequest,
     ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
         Box::pin(async_stream::stream! {
-            let chat_request = build_chat_request(&self.model, self.options.clone(), request)?;
-            let mut stream = self.client.chat(chat_request);
+                let chat_request =
+        build_chat_request(&self.model, self.options.clone(), self.think.clone(), request)?;
+                let mut stream = self.client.chat(chat_request);
 
-            while let Some(chunk) = stream.next().await {
-                let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
+                while let Some(chunk) = stream.next().await {
+                    let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
 
-                // Tool calls come as a batch in non-streaming mode.
-                for tc in &response.message.tool_calls {
-                    yield Ok(ModelStreamChunk::ToolCall(to_tool_call(tc)));
+                    // Tool calls come as a batch in non-streaming mode.
+                    for tc in &response.message.tool_calls {
+                        yield Ok(ModelStreamChunk::ToolCall(to_tool_call(tc)));
+                    }
+
+                    // Emit text content as a delta (empty strings are skipped).
+                    if !response.message.content.is_empty() {
+                        yield Ok(ModelStreamChunk::TextDelta(response.message.content.clone()));
+                    }
+
+                    if response.done {
+                        if let Some(usage) = to_token_usage(&response) {
+                            yield Ok(ModelStreamChunk::Usage(usage));
+                        }
+                        break;
+                    }
                 }
+            })
+    }
+}
 
-                // Emit text content as a delta (empty strings are skipped).
-                if !response.message.content.is_empty() {
-                    yield Ok(ModelStreamChunk::TextDelta(response.message.content.clone()));
-                }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ollama_rs::types::chat::{Message as OllamaMessage, Role as OllamaRole};
 
-                if response.done {
-                    break;
-                }
-            }
-        })
+    fn chat_response(prompt: Option<u64>, eval: Option<u64>) -> ChatResponse {
+        ChatResponse {
+            model: "test-model".to_string(),
+            created_at: "2026-06-02T00:00:00Z".to_string(),
+            message: OllamaMessage {
+                content: String::new(),
+                role: OllamaRole::Assistant,
+                thinking: None,
+                tool_calls: vec![],
+            },
+            done: true,
+            done_reason: None,
+            total_duration: None,
+            load_duration: None,
+            prompt_eval_count: prompt,
+            prompt_eval_duration: None,
+            eval_count: eval,
+            eval_duration: None,
+        }
+    }
+
+    #[test]
+    fn to_token_usage_maps_prompt_and_eval_counts() {
+        let response = chat_response(Some(123), Some(45));
+        let usage = to_token_usage(&response).expect("usage present");
+        assert_eq!(usage.input_tokens, Some(123));
+        assert_eq!(usage.output_tokens, Some(45));
+        assert_eq!(usage.cached_input_tokens, None);
+        assert_eq!(usage.thinking_tokens, None);
+        assert_eq!(usage.tool_use_prompt_tokens, None);
+    }
+
+    #[test]
+    fn to_token_usage_returns_none_when_both_counts_absent() {
+        let response = chat_response(None, None);
+        assert!(to_token_usage(&response).is_none());
+    }
+
+    #[test]
+    fn to_token_usage_returns_some_when_only_one_count_present() {
+        let response = chat_response(Some(10), None);
+        let usage = to_token_usage(&response).expect("usage present");
+        assert_eq!(usage.input_tokens, Some(10));
+        assert_eq!(usage.output_tokens, None);
+    }
+
+    #[test]
+    fn saturating_u64_to_u32_caps_at_max() {
+        assert_eq!(saturating_u64_to_u32(0), 0);
+        assert_eq!(saturating_u64_to_u32(42), 42);
+        assert_eq!(saturating_u64_to_u32(u32::MAX as u64), u32::MAX);
+        assert_eq!(saturating_u64_to_u32(u32::MAX as u64 + 1), u32::MAX);
+        assert_eq!(saturating_u64_to_u32(u64::MAX), u32::MAX);
+    }
+
+    fn empty_request() -> ModelRequest {
+        ModelRequest {
+            messages: vec![],
+            system: None,
+            output_schema: None,
+            tools: vec![],
+        }
+    }
+
+    #[test]
+    fn build_chat_request_propagates_think_config() {
+        let req = build_chat_request(
+            "test-model",
+            None,
+            Some(Think::Level(ThinkLevel::High)),
+            empty_request(),
+        )
+        .unwrap();
+        assert!(matches!(req.think, Some(Think::Level(ThinkLevel::High))));
+    }
+
+    #[test]
+    fn build_chat_request_leaves_think_none_when_unset() {
+        let req = build_chat_request("test-model", None, None, empty_request()).unwrap();
+        assert!(req.think.is_none());
     }
 }

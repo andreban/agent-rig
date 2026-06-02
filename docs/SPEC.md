@@ -324,18 +324,18 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Structured output: when `ModelRequest::output_schema` is set, a `GenerationConfig` with `response_mime_type("application/json")` and the normalised schema is applied, overriding any model-level config (with `thinking_config` carried over). Schema normalisation (stripping `$schema`/`$defs`, inlining `$ref`) is performed internally.
 - Response parts are split by `thought` flag: parts where `thought == Some(true)` are concatenated into `ModelResponse::thinking`; remaining text parts form `ModelResponse::text`. This surfaces reasoning tokens as `AgentEvent::ThinkingDelta` via the runner.
 - `provider_metadata` carries Gemini's `thought_signature`, which the adapter echoes back on both the replayed `FunctionCall` parts and the matching `FunctionResponse` parts.
-- Token usage: `usage_metadata.prompt_token_count` → `TokenUsage::input_tokens`, `usage_metadata.candidates_token_count` → `TokenUsage::output_tokens`. `cached_input_tokens`, `thinking_tokens`, and `tool_use_prompt_tokens` are left `None` pending [geologia#11](https://github.com/andreban/geologia/issues/11).
+- Token usage: `usage_metadata` is mapped via `From<&UsageMetadata> for TokenUsage` — `prompt_token_count` → `input_tokens`, `candidates_token_count` → `output_tokens`, `cached_content_token_count` → `cached_input_tokens`, `thoughts_token_count` → `thinking_tokens`, `tool_use_prompt_token_count` → `tool_use_prompt_tokens`. Per-modality breakdowns (`*_tokens_details`) and `service_tier` are not propagated.
 - Uses the default `generate_stream` (wraps `generate`); text arrives as a single `TextDelta` after the full response is received. See Roadmap.
 
 ### `OllamaModel` (`src/models/ollama.rs`)
 
 - Wraps the `ollama-rs` crate (`OllamaClient`).
 - System prompt becomes a synthetic `OllamaMessage::system(…)` prepended to the message list.
-- Optional `Options` (temperature, seed, top_k, top_p, num_ctx, num_predict, stop) configurable via `OllamaModel::builder(…)`.
+- Optional `Options` (temperature, seed, top_k, top_p, num_ctx, num_predict, stop) and extended-thinking config (`think`, accepting a boolean toggle or a `ThinkLevel`) configurable via `OllamaModel::builder(…)`.
 - Structured output: when `ModelRequest::output_schema` is set, the schema is passed to the Ollama `format` field (requires Ollama ≥ 0.5 and a model that supports structured output).
 - Implements `generate_stream` natively: emits `TextDelta` chunks as they arrive (no-tools path); emits `ToolCall` chunks from the single-shot response when tools are present (Ollama requires `stream(false)` for tool calls).
 - Ollama has no call ID; the function name is currently reused as the `ToolCall::id` (sufficient because no part of the codebase keys on the id for Ollama).
-- Token usage: currently emits `token_usage: None`. The Ollama API returns `prompt_eval_count` and `eval_count` on the final chunk, but `ollama-rs` does not yet expose them on `ChatResponse` — pending [ollama-rs#11](https://github.com/andreban/ollama-rs/issues/11).
+- Token usage: `prompt_eval_count` → `input_tokens`, `eval_count` → `output_tokens` (saturating `u64` → `u32` cast). The Ollama API reports these on the final chunk (`done: true`) only — non-final chunks carry no usage. When neither field is populated the adapter emits `token_usage: None` rather than an all-`None` [`TokenUsage`]. Ollama does not report cache, thinking, or tool-use prompt tokens.
 
 ## Cargo Features
 
