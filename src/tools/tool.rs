@@ -81,4 +81,3 @@ pub trait Tool: Send + Sync {
     /// JSON value that is sent back to the model as the tool result.
     async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, Error>;
 }
-

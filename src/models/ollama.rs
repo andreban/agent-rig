@@ -357,31 +357,31 @@ impl LlmModel for OllamaModel {
         request: ModelRequest,
     ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
         Box::pin(async_stream::stream! {
-                let chat_request =
-        build_chat_request(&self.model, self.options.clone(), self.think.clone(), request)?;
-                let mut stream = self.client.chat(chat_request);
+            let chat_request = build_chat_request(
+                &self.model, self.options.clone(), self.think.clone(), request)?;
+            let mut stream = self.client.chat(chat_request);
 
-                while let Some(chunk) = stream.next().await {
-                    let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
+            while let Some(chunk) = stream.next().await {
+                let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
 
-                    // Tool calls come as a batch in non-streaming mode.
-                    for tc in &response.message.tool_calls {
-                        yield Ok(ModelStreamChunk::ToolCall(to_tool_call(tc)));
-                    }
-
-                    // Emit text content as a delta (empty strings are skipped).
-                    if !response.message.content.is_empty() {
-                        yield Ok(ModelStreamChunk::TextDelta(response.message.content.clone()));
-                    }
-
-                    if response.done {
-                        if let Some(usage) = to_token_usage(&response) {
-                            yield Ok(ModelStreamChunk::Usage(usage));
-                        }
-                        break;
-                    }
+                // Tool calls come as a batch in non-streaming mode.
+                for tc in &response.message.tool_calls {
+                    yield Ok(ModelStreamChunk::ToolCall(to_tool_call(tc)));
                 }
-            })
+
+                // Emit text content as a delta (empty strings are skipped).
+                if !response.message.content.is_empty() {
+                    yield Ok(ModelStreamChunk::TextDelta(response.message.content.clone()));
+                }
+
+                if response.done {
+                    if let Some(usage) = to_token_usage(&response) {
+                        yield Ok(ModelStreamChunk::Usage(usage));
+                    }
+                    break;
+                }
+            }
+        })
     }
 }
 

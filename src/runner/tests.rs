@@ -80,11 +80,7 @@ async fn collect(runner: &AgentRunner, agent: Agent, prompt: &str) -> Vec<AgentE
         .collect()
 }
 
-async fn collect_run_events(
-    runner: &AgentRunner,
-    agent: Agent,
-    prompt: &str,
-) -> Vec<RunEvent> {
+async fn collect_run_events(runner: &AgentRunner, agent: Agent, prompt: &str) -> Vec<RunEvent> {
     let mut stream = runner.run(&agent, vec![Message::user(prompt)]);
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {
