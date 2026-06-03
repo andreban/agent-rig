@@ -4,6 +4,7 @@
 use async_trait::async_trait;
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use crate::error::Error;
 
@@ -43,6 +44,7 @@ pub struct ToolDefinition {
 /// use agent_rig::error::Error;
 /// use agent_rig::tools::{Tool, ToolDefinition};
 /// use serde_json::{Value, json};
+/// use tokio_util::sync::CancellationToken;
 ///
 /// struct AddTool;
 ///
@@ -63,7 +65,7 @@ pub struct ToolDefinition {
 ///         }
 ///     }
 ///
-///     async fn call(&self, args: Value) -> Result<Value, Error> {
+///     async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
 ///         let a = args["a"].as_i64().unwrap_or(0);
 ///         let b = args["b"].as_i64().unwrap_or(0);
 ///         Ok(json!({ "result": a + b }))
@@ -79,5 +81,20 @@ pub trait Tool: Send + Sync {
     ///
     /// `args` is the raw JSON object from the model's tool call. Returns a
     /// JSON value that is sent back to the model as the tool result.
-    async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, Error>;
+    ///
+    /// `cancel` fires when the surrounding
+    /// [`AgentRunner`](crate::runner::AgentRunner) run is cancelled — either
+    /// because the consumer dropped the event stream or because an
+    /// externally supplied token fired. Long-running tools should
+    /// `select!` on `cancel.cancelled()` or pass the token down to the
+    /// libraries they call. Tools that ignore `cancel` still terminate
+    /// the run correctly (the runner races each call against `cancel` and
+    /// drops the future on cancellation), but any side effects already in
+    /// flight may continue in the background until they finish on their
+    /// own.
+    async fn call(
+        &self,
+        args: serde_json::Value,
+        cancel: CancellationToken,
+    ) -> Result<serde_json::Value, Error>;
 }

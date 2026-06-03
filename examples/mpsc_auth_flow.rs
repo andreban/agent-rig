@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
@@ -48,7 +49,7 @@ impl Tool for SendEmailTool {
         }
     }
 
-    async fn call(&self, args: Value) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let to = args["to"].as_str().unwrap_or("");
         let subject = args["subject"].as_str().unwrap_or("");
         println!("[tool]  pretending to send email to {to} (subject: {subject:?})");
@@ -155,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("\n[runner] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
+            AgentEvent::Cancelled => println!("\n[runner] cancelled"),
         }
     }
 

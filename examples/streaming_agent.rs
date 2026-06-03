@@ -29,6 +29,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
@@ -52,7 +53,7 @@ impl Tool for AddTool {
         }
     }
 
-    async fn call(&self, args: Value) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let a = args["a"].as_i64().unwrap_or(0);
         let b = args["b"].as_i64().unwrap_or(0);
         println!("[tool]  add({a}, {b}) = {}", a + b);
@@ -115,6 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             AgentEvent::Usage(usage) => println!("[runner] token usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
+            AgentEvent::Cancelled => println!("\n[runner] cancelled"),
         }
     }
 

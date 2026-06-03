@@ -27,6 +27,8 @@ The library is a single crate (`agent-rig`). Provider adapters live in `src/mode
 
 The runner streams: `AgentRunner::run` spawns the agentic loop on a background tokio task and returns a `Stream<Item = RunEvent>`. A `RunEvent` wraps an `AgentEvent` together with the `run_id` of the run that produced it and an optional `parent` run id (set when the event came from a sub-agent invoked via `AgentTool`). Provider errors are surfaced as `AgentEvent::Error(Error)` and terminate the stream; the stream item type is bare `RunEvent`, not `Result`.
 
+Cancellation is cooperative. Dropping the returned stream cancels the run — the in-flight provider call and any running tool futures are dropped at their next await point. Callers that need to share a cancel signal with a sibling task use `AgentRunner::run_with_cancellation(agent, thread, cancel)`; the runner derives an internal child token from `cancel`, so dropping the stream cancels the run without cancelling the caller's token. A cancelled run emits a terminal `AgentEvent::Cancelled` (best-effort under stream-drop) before the stream ends.
+
 ## Core Types
 
 ### `LlmModel` (`src/model.rs`)
@@ -76,6 +78,10 @@ pub enum AgentEvent {
     /// Token counts reported by the provider for one model call.
     /// A run that issues N model calls produces up to N `Usage` events.
     Usage(TokenUsage),
+    /// The run was cancelled via dropped stream or external token.
+    /// Terminal — the stream ends after this event. Delivery is
+    /// best-effort under stream-drop (the receiver may already be gone).
+    Cancelled,
     /// The provider returned an error. The stream ends after this event.
     Error(Error),
 }
@@ -180,7 +186,11 @@ pub struct ToolDefinition {
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
-    async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, Error>;
+    async fn call(
+        &self,
+        args: serde_json::Value,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value, Error>;
 }
 
 // src/tools/registry.rs
@@ -225,12 +235,21 @@ impl AgentRunner {
         agent: &Agent,
         thread: Vec<Message>,
     ) -> Pin<Box<dyn Stream<Item = RunEvent> + Send>>;
+
+    pub fn run_with_cancellation(
+        &self,
+        agent: &Agent,
+        thread: Vec<Message>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Pin<Box<dyn Stream<Item = RunEvent> + Send>>;
 }
 ```
 
 Owns the LLM model, a shared reference to a `ToolRegistry`, and an optional `AuthManager`. The runner is `Clone` (internals are `Arc`) so it can be shared across tasks. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
 
-`run` is the single entry point. It takes the agent by reference and the message thread by value, and returns a `Stream<Item = RunEvent>`. Internally, `run` clones the agent and `self` before spawning the agentic loop on a background tokio task — the spawned generator must be `'static`, so it cannot capture the `&Agent` or `&self` references directly. Events are delivered through an internal mpsc channel as they happen. The stream ends after the model produces a turn with no tool calls, or after an `AgentEvent::Error`.
+`run` is the simple entry point. It takes the agent by reference and the message thread by value, and returns a `Stream<Item = RunEvent>`. Internally, `run` clones the agent and `self` before spawning the agentic loop on a background tokio task — the spawned generator must be `'static`, so it cannot capture the `&Agent` or `&self` references directly. Events are delivered through an internal mpsc channel as they happen. The stream ends after the model produces a turn with no tool calls, or after a terminal `AgentEvent::Error` / `AgentEvent::Cancelled`.
+
+`run_with_cancellation` is the same as `run` but also fires when the supplied `cancel` token fires. The runner derives a child token from `cancel` and binds the drop-on-stream-drop guard to that child, so dropping the stream cancels the run without cancelling the caller's token (which may be shared with siblings). `run` is sugar for `run_with_cancellation(agent, thread, CancellationToken::new())`.
 
 The caller is responsible for maintaining conversation history across turns: each `run` call starts a fresh loop with the supplied `thread`. For multi-turn dialogue, append the user input to the thread before calling `run`, drive the stream to completion, then append a single `Message::assistant(reply)` constructed from the accumulated `TextDelta` chunks. See `examples/multi_turn.rs` for a complete REPL.
 
@@ -243,6 +262,8 @@ The caller is responsible for maintaining conversation history across turns: eac
 5. For each tool call, run a future that: looks up the tool in the registry; if missing, returns `Unknown` with no events. Otherwise consults the `AuthManager` (if any); on denial, emits `ToolCallFinished { Denied }`. On allow, emits `ToolCallStarted`, runs the tool (or sub-agent), then emits `ToolCallFinished` with the result.
 6. All tool futures run **concurrently** via `futures_util::future::join_all`. `join_all` preserves input order in its return value, so tool-result messages are appended in the same order the model issued them — even though events may interleave.
 7. Repeat from step 1.
+
+**Cancellation checkpoints.** The runner races against the cancel token at four points: (a) the top of the loop, before building the next `ModelRequest`; (b) `model_stream.next()` (a `tokio::select!` against `cancel.cancelled()` — winning the cancel arm drops the model stream, aborting the in-flight reqwest); (c) every per-tool future inside `handle_tool_calls`; and (d) `auth.authorize` when an `AuthManager` is configured. On cancellation the runner emits a single terminal `AgentEvent::Cancelled` and exits; no `ToolCallFinished` is emitted for in-flight tools (a trailing `ToolCallStarted` may be observed without its matching `Finished`). Each `Tool::call` and `AgentTool::call` receives a clone of the run's cancel token; cooperating tools select on it to abort cleanly. Tools that ignore the token do not block the runner from terminating — the runner drops the future on cancel — but their side effects may continue in the background until they finish on their own.
 
 ### `AgentTool` (`src/tools/agent_tool.rs`)
 
@@ -262,6 +283,7 @@ impl AgentTool {
         &self,
         tx: RunEmitter,
         args: serde_json::Value,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> Result<serde_json::Value, Error>;
 }
 ```
@@ -273,6 +295,8 @@ Registered via `ToolRegistry::register_agent`. `AgentTool` lives in `src/tools/a
 1. Serializes `args` to a JSON string and passes it as the user message of a fresh run on the inner `AgentRunner`.
 2. Drives the child's event stream internally: every event is forwarded through the parent's `RunEmitter` (a child emitter is created so events carry the child's `run_id` and the parent's `parent` link), and `TextDelta` chunks are accumulated into a string.
 3. Returns the accumulated text wrapped as `{"output": "..."}` — this JSON value becomes the tool result the parent model sees on its next turn.
+
+The `cancel` token is forwarded to the child via `run_with_cancellation`, so cancelling the parent (either by dropping its stream or by firing its external token) cancels every nested agent in the tree.
 
 **Design rationale:**
 
@@ -398,6 +422,7 @@ examples/
   long_term_memory.rs     — memory via tools
   mpsc_auth_flow.rs       — AuthManager CLI prompt
   mpsc_runner.rs          — runner basics
+  cancellation.rs         — drop-the-stream, external CancellationToken, deadline
 tests/
   integration_gemini.rs   — live Gemini integration tests
   integration_ollama.rs   — live Ollama integration tests

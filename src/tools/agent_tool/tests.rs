@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 /// Minimal scripted [`LlmModel`] returning queued responses and recording
 /// every [`ModelRequest`] it received. Kept local to this test module so
@@ -93,7 +94,11 @@ async fn call_wraps_accumulated_text_in_output_object() {
     let (emitter, rx) = fresh_emitter();
 
     let result = tool
-        .call(emitter, json!({"text": "anything"}))
+        .call(
+            emitter,
+            json!({"text": "anything"}),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert_eq!(result, json!({ "output": "hello world" }));
@@ -109,7 +114,11 @@ async fn call_passes_args_as_serialized_json_user_message() {
     let (emitter, rx) = fresh_emitter();
 
     let _ = tool
-        .call(emitter, json!({"text": "hello", "n": 42}))
+        .call(
+            emitter,
+            json!({"text": "hello", "n": 42}),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     let _ = drain(rx).await;
@@ -137,7 +146,10 @@ async fn call_forwards_child_events_through_parent_emitter() {
     let (emitter, rx) = fresh_emitter();
     let parent_run_id = emitter.run_id;
 
-    let _ = tool.call(emitter, json!({})).await.unwrap();
+    let _ = tool
+        .call(emitter, json!({}), CancellationToken::new())
+        .await
+        .unwrap();
     let events = drain(rx).await;
 
     let text: String = events
