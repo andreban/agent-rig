@@ -169,7 +169,11 @@ impl Tool for GetWeatherTool {
         }
     }
 
-    async fn call(&self, args: Value) -> Result<Value, Error> {
+    async fn call(
+        &self,
+        args: Value,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");
         Ok(json!({ "city": city, "celsius": 22.0 }))
     }

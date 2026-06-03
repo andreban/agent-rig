@@ -22,6 +22,7 @@ use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
@@ -48,7 +49,7 @@ impl Tool for GetTemperatureTool {
         }
     }
 
-    async fn call(&self, args: Value) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");
         let celsius = match city.to_lowercase().as_str() {
             "london" => 15.0,
@@ -82,7 +83,7 @@ impl Tool for CelsiusToFahrenheitTool {
         }
     }
 
-    async fn call(&self, args: Value) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let celsius = args["celsius"].as_f64().unwrap_or(0.0);
         let fahrenheit = celsius * 9.0 / 5.0 + 32.0;
         println!("[tool] celsius_to_fahrenheit({celsius}) → {fahrenheit}°F");
@@ -137,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("[runner] usage:     {usage:?}"),
+            AgentEvent::Cancelled => println!("[runner] cancelled"),
         }
     }
 

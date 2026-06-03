@@ -19,8 +19,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-tracing = "0.1.44"
-async-stream = "0.3.6"
+tracing = "0.1"
+async-stream = "0.3"
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
 schemars = "1.2.1"
@@ -78,4 +79,8 @@ required-features = ["gemini"]
 
 [[example]]
 name = "mpsc_auth_flow"
+required-features = ["gemini"]
+
+[[example]]
+name = "cancellation"
 required-features = ["gemini"]

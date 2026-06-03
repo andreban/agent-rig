@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 /// Model that returns scripted [`ModelResponse`]s in order and records the
 /// request it was called with each turn. Used to drive the runner without
@@ -128,7 +129,11 @@ impl Tool for EchoTool {
         }
     }
 
-    async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, Error> {
+    async fn call(
+        &self,
+        args: serde_json::Value,
+        _cancel: CancellationToken,
+    ) -> Result<serde_json::Value, Error> {
         self.calls.lock().unwrap().push(args);
         self.result.clone()
     }
@@ -344,6 +349,7 @@ async fn thinking_chunks_are_forwarded() {
             AgentEvent::ToolCallStarted { .. } => "started",
             AgentEvent::ToolCallFinished { .. } => "finished",
             AgentEvent::Usage(_) => "usage",
+            AgentEvent::Cancelled => "cancelled",
             AgentEvent::Error(_) => "error",
         })
         .collect();
@@ -479,6 +485,266 @@ async fn parallel_tool_results_are_paired_in_request_order() {
         })
         .collect();
     assert_eq!(ids, vec!["c1", "c2", "c3"]);
+}
+
+/// Parks forever in `generate`, notifying `dropped` when the generate
+/// future is dropped. Used to verify that cancellation actually drops the
+/// in-flight model future rather than just stopping at the next checkpoint.
+struct PendingModel {
+    dropped: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl LlmModel for PendingModel {
+    async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, Error> {
+        struct NotifyOnDrop(Arc<tokio::sync::Notify>);
+        impl Drop for NotifyOnDrop {
+            fn drop(&mut self) {
+                // `notify_one` stores a permit when no waiter is registered,
+                // so the test's later `.notified().await` is robust to the
+                // ordering of when the future is first polled.
+                self.0.notify_one();
+            }
+        }
+        let _guard = NotifyOnDrop(self.dropped.clone());
+        std::future::pending::<Result<ModelResponse, Error>>().await
+    }
+}
+
+/// Tool that captures its `cancel` token (so the test can inspect it),
+/// signals it has started, then parks on `cancel.cancelled().await`.
+struct CancellableTool {
+    name: &'static str,
+    started: Arc<tokio::sync::Notify>,
+    captured: Arc<Mutex<Option<CancellationToken>>>,
+}
+
+#[async_trait]
+impl Tool for CancellableTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.to_string(),
+            description: "cancellable".to_string(),
+            parameters: json!({"type": "object"}),
+        }
+    }
+
+    async fn call(&self, _args: Value, cancel: CancellationToken) -> Result<Value, Error> {
+        *self.captured.lock().unwrap() = Some(cancel.clone());
+        self.started.notify_one();
+        cancel.cancelled().await;
+        Ok(json!({"ran": true}))
+    }
+}
+
+#[tokio::test]
+async fn dropping_stream_drops_inflight_model_future() {
+    let dropped = Arc::new(tokio::sync::Notify::new());
+    let model = Arc::new(PendingModel {
+        dropped: dropped.clone(),
+    });
+    let runner = AgentRunner::new(model);
+
+    let notified = dropped.notified();
+    let stream = runner.run(&agent("a"), vec![Message::user("hi")]);
+
+    // Give the spawned task a moment to enter `generate`.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    drop(stream);
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), notified)
+        .await
+        .expect("dropping the stream must drop the in-flight model future");
+}
+
+#[tokio::test]
+async fn external_cancellation_emits_cancelled_and_ends_stream() {
+    let dropped = Arc::new(tokio::sync::Notify::new());
+    let model = Arc::new(PendingModel {
+        dropped: dropped.clone(),
+    });
+    let runner = AgentRunner::new(model);
+    let cancel = CancellationToken::new();
+
+    let mut stream =
+        runner.run_with_cancellation(&agent("a"), vec![Message::user("hi")], cancel.clone());
+
+    let consumer = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e.agent_event);
+        }
+        events
+    });
+
+    // Park briefly so the runner is awaiting `model_stream.next()` before
+    // we cancel — otherwise the top-of-loop check might short-circuit
+    // without ever exercising the in-flight cancel path.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    cancel.cancel();
+
+    let events = tokio::time::timeout(std::time::Duration::from_secs(1), consumer)
+        .await
+        .expect("stream should end after cancellation")
+        .expect("consumer task should not panic");
+
+    assert!(
+        matches!(events.last(), Some(AgentEvent::Cancelled)),
+        "expected terminal Cancelled, got {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn external_token_is_not_cancelled_when_stream_is_dropped() {
+    let dropped = Arc::new(tokio::sync::Notify::new());
+    let model = Arc::new(PendingModel {
+        dropped: dropped.clone(),
+    });
+    let runner = AgentRunner::new(model);
+    let external = CancellationToken::new();
+
+    let stream =
+        runner.run_with_cancellation(&agent("a"), vec![Message::user("hi")], external.clone());
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    drop(stream);
+
+    // The spawned task's child token fires (the model future was dropped),
+    // but the caller's token must not — they may be sharing it with other
+    // tasks.
+    tokio::time::timeout(std::time::Duration::from_secs(1), dropped.notified())
+        .await
+        .expect("the model future is dropped via the internal child token");
+    assert!(
+        !external.is_cancelled(),
+        "external token must not be cancelled when the stream is dropped"
+    );
+}
+
+#[tokio::test]
+async fn cancellation_during_tool_phase_skips_finished_and_emits_cancelled() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let captured: Arc<Mutex<Option<CancellationToken>>> = Arc::new(Mutex::new(None));
+    let tool = CancellableTool {
+        name: "slow",
+        started: started.clone(),
+        captured: captured.clone(),
+    };
+    let registry = Arc::new(ToolRegistry::new().register(Box::new(tool)));
+    let model = ScriptedModel::new(vec![
+        tool_call_response("c1", "slow", json!({})),
+        final_response("never reached"),
+    ]);
+    let runner = AgentRunner::with_registry(model, registry);
+    let cancel = CancellationToken::new();
+
+    let mut stream =
+        runner.run_with_cancellation(&agent("a"), vec![Message::user("go")], cancel.clone());
+
+    let notified = started.notified();
+    let consumer = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e.agent_event);
+        }
+        events
+    });
+
+    // Wait until the tool has captured the token and is parked.
+    tokio::time::timeout(std::time::Duration::from_secs(1), notified)
+        .await
+        .expect("tool should reach its parked state");
+    cancel.cancel();
+
+    let events = tokio::time::timeout(std::time::Duration::from_secs(1), consumer)
+        .await
+        .expect("stream should end")
+        .expect("consumer task should not panic");
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolCallStarted { name, .. } if name == "slow")),
+        "Started must have fired before cancellation: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolCallFinished { .. })),
+        "Finished must NOT fire on cancellation: {events:?}"
+    );
+    assert!(
+        matches!(events.last(), Some(AgentEvent::Cancelled)),
+        "terminal event must be Cancelled: {events:?}"
+    );
+
+    let captured = captured.lock().unwrap();
+    let token = captured
+        .as_ref()
+        .expect("tool must have captured its cancel token");
+    assert!(
+        token.is_cancelled(),
+        "tool's CancellationToken must fire when the run is cancelled"
+    );
+}
+
+#[tokio::test]
+async fn nested_agent_tool_propagates_cancellation() {
+    use crate::tools::AgentTool;
+
+    // Child runs against a PendingModel — it will park indefinitely
+    // unless cancelled.
+    let child_dropped = Arc::new(tokio::sync::Notify::new());
+    let child_model: Arc<dyn LlmModel> = Arc::new(PendingModel {
+        dropped: child_dropped.clone(),
+    });
+    let child_runner = AgentRunner::new(child_model);
+    let child_agent = Agent::builder()
+        .name("Child")
+        .instructions("test instructions")
+        .build();
+    let agent_tool = AgentTool::new(
+        ToolDefinition {
+            name: "delegate".to_string(),
+            description: "delegate".to_string(),
+            parameters: json!({"type": "object"}),
+        },
+        child_agent,
+        child_runner,
+    );
+
+    let parent_registry = Arc::new(ToolRegistry::new().register_agent(agent_tool));
+    let parent_model = ScriptedModel::new(vec![tool_call_response(
+        "c1",
+        "delegate",
+        json!({"task": "anything"}),
+    )]);
+    let parent_runner = AgentRunner::with_registry(parent_model, parent_registry);
+    let cancel = CancellationToken::new();
+
+    let child_notified = child_dropped.notified();
+    let mut stream = parent_runner.run_with_cancellation(
+        &agent("Parent"),
+        vec![Message::user("delegate")],
+        cancel.clone(),
+    );
+
+    let consumer = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e.agent_event);
+        }
+        events
+    });
+
+    // Park briefly so the child's model future is in flight, then cancel
+    // from the parent's external token.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    cancel.cancel();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), child_notified)
+        .await
+        .expect("cancelling the parent must drop the child's in-flight model future");
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), consumer).await;
 }
 
 #[tokio::test]

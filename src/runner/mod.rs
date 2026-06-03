@@ -17,11 +17,13 @@ use std::{
 
 use futures_util::{Stream, StreamExt, future::join_all};
 use tokio::sync::mpsc::{self, Sender, error::SendError};
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
     Agent,
     auth::AuthManager,
+    error::Error,
     model::{LlmModel, Message, ModelRequest, ModelStreamChunk, ToolCall},
     tools::{ToolDefinition, ToolRegistry, ToolRegistryEntry},
 };
@@ -120,17 +122,48 @@ impl AgentRunner {
     ///
     /// The agentic loop runs on a background tokio task; events are delivered
     /// through an mpsc channel as they happen. The stream ends after the
-    /// model produces a turn with no tool calls, or after an
-    /// [`AgentEvent::Error`].
+    /// model produces a turn with no tool calls, or after a terminal
+    /// [`AgentEvent::Error`] / [`AgentEvent::Cancelled`].
     ///
     /// `thread` is the conversation so far — typically a single
     /// [`Message::user`](crate::model::Message::user) for the first turn, or a
     /// previously accumulated history for follow-ups. The thread is consumed;
     /// the resulting thread is not returned (each call starts a fresh loop).
+    ///
+    /// **Dropping the returned stream cancels the run.** The in-flight
+    /// provider HTTP call and any concurrently running tool futures are
+    /// dropped at their next await point. Consumers that need to share a
+    /// cancel token with a sibling task (deadline timer, multi-run
+    /// coordination) should use [`AgentRunner::run_with_cancellation`]
+    /// instead.
     pub fn run(
         &self,
         agent: &Agent,
         thread: Vec<Message>,
+    ) -> Pin<Box<dyn Stream<Item = RunEvent> + Send>> {
+        self.run_with_cancellation(agent, thread, CancellationToken::new())
+    }
+
+    /// Runs `agent` like [`run`](Self::run), but also cancels when `cancel`
+    /// fires.
+    ///
+    /// The supplied token is the caller's; the runner does not cancel it.
+    /// Internally the runner derives a child token from `cancel` and binds
+    /// the drop-on-stream-drop guard to that child, so dropping the returned
+    /// stream cancels the run without cancelling the caller's token (which
+    /// may be shared with siblings). Either trigger — external cancel or
+    /// stream drop — terminates the run; whichever fires first wins.
+    ///
+    /// When cancellation is triggered while the consumer is still draining
+    /// the stream, the runner emits a terminal [`AgentEvent::Cancelled`]
+    /// before the stream ends. When cancellation is triggered by dropping
+    /// the stream, the `Cancelled` event is best-effort and typically not
+    /// observed (the receiver is already gone).
+    pub fn run_with_cancellation(
+        &self,
+        agent: &Agent,
+        thread: Vec<Message>,
+        cancel: CancellationToken,
     ) -> Pin<Box<dyn Stream<Item = RunEvent> + Send>> {
         debug!(agent = agent.name(), "starting run");
         // Clone `self` and `agent` outside the `stream!` macro block: the
@@ -140,10 +173,27 @@ impl AgentRunner {
         let cloned = self.clone();
         let agent = agent.clone();
 
+        // Child of the caller's token: external `cancel` firing still
+        // propagates, but dropping the stream (which fires the DropGuard
+        // below) only cancels the child, leaving the caller's token alone.
+        let internal = cancel.child_token();
+        let token_for_loop = internal.clone();
+
+        // Spawn and bind the DropGuard eagerly — not inside the
+        // `async_stream::stream!` body — so that dropping the returned
+        // stream before it is ever polled still fires the guard and
+        // cancels the spawned loop.
+        let (tx, mut rx) = mpsc::channel::<RunEvent>(EVENT_CHANNEL_CAPACITY);
+        let tx = RunEmitter::new(tx, None);
+        tokio::spawn(cloned.main_loop(tx, agent, thread, token_for_loop));
+        let guard = internal.drop_guard();
+
         let stream = async_stream::stream! {
-          let (tx, mut rx) = mpsc::channel::<RunEvent>(EVENT_CHANNEL_CAPACITY);
-          let tx = RunEmitter::new(tx, None);
-          tokio::spawn(cloned.main_loop(tx, agent, thread));
+          // Reference `guard` inside the generator so the macro captures
+          // it by move into the generator's state. The guard then lives
+          // for the lifetime of the returned stream; dropping the stream
+          // drops the guard and cancels the internal token.
+          let _guard = guard;
 
           while let Some(message) = rx.recv().await {
             yield message;
@@ -152,10 +202,24 @@ impl AgentRunner {
         Box::pin(stream)
     }
 
-    async fn main_loop(self, tx: RunEmitter, agent: Agent, mut thread: Vec<Message>) {
+    async fn main_loop(
+        self,
+        tx: RunEmitter,
+        agent: Agent,
+        mut thread: Vec<Message>,
+        cancel: CancellationToken,
+    ) {
         let tools: Vec<ToolDefinition> = self.registry.definitions();
 
         loop {
+            // Top-of-loop checkpoint: short-circuit before building the
+            // next request if cancellation already fired (e.g. during the
+            // previous tool-call phase).
+            if cancel.is_cancelled() {
+                let _ = tx.send(AgentEvent::Cancelled).await;
+                return;
+            }
+
             let request = ModelRequest {
                 messages: thread.clone(),
                 system: Some(agent.instructions().to_string()),
@@ -165,23 +229,37 @@ impl AgentRunner {
 
             let mut model_stream = self.model.generate_stream(request);
             let mut tool_calls: Vec<ToolCall> = Vec::new();
-            while let Some(chunk) = model_stream.next().await {
-                match chunk {
-                    Ok(ModelStreamChunk::Thinking(t)) => {
-                        let _ = tx.send(AgentEvent::ThinkingDelta(t)).await;
-                    }
-                    Ok(ModelStreamChunk::TextDelta(t)) => {
-                        let _ = tx.send(AgentEvent::TextDelta(t)).await;
-                    }
-                    Ok(ModelStreamChunk::ToolCall(call)) => {
-                        tool_calls.push(call);
-                    }
-                    Ok(ModelStreamChunk::Usage(usage)) => {
-                        let _ = tx.send(AgentEvent::Usage(usage)).await;
-                    }
-                    Err(error) => {
-                        let _ = tx.send(AgentEvent::Error(error)).await;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        // Drop the model stream — this drops the
+                        // underlying reqwest future and aborts the
+                        // in-flight HTTP call.
+                        drop(model_stream);
+                        let _ = tx.send(AgentEvent::Cancelled).await;
                         return;
+                    }
+                    next = model_stream.next() => {
+                        let Some(chunk) = next else { break };
+                        match chunk {
+                            Ok(ModelStreamChunk::Thinking(t)) => {
+                                let _ = tx.send(AgentEvent::ThinkingDelta(t)).await;
+                            }
+                            Ok(ModelStreamChunk::TextDelta(t)) => {
+                                let _ = tx.send(AgentEvent::TextDelta(t)).await;
+                            }
+                            Ok(ModelStreamChunk::ToolCall(call)) => {
+                                tool_calls.push(call);
+                            }
+                            Ok(ModelStreamChunk::Usage(usage)) => {
+                                let _ = tx.send(AgentEvent::Usage(usage)).await;
+                            }
+                            Err(error) => {
+                                let _ = tx.send(AgentEvent::Error(error)).await;
+                                return;
+                            }
+                        }
                     }
                 }
             }
@@ -190,7 +268,18 @@ impl AgentRunner {
                 break;
             }
 
-            self.handle_tool_calls(&tx, tool_calls, &mut thread).await;
+            self.handle_tool_calls(&tx, tool_calls, &mut thread, &cancel)
+                .await;
+
+            // The tool-call phase races every per-call future against
+            // `cancel`; if cancellation fired during that phase, emit the
+            // terminal event here (rather than waiting for the next
+            // top-of-loop check, which would build a request we'd
+            // immediately throw away).
+            if cancel.is_cancelled() {
+                let _ = tx.send(AgentEvent::Cancelled).await;
+                return;
+            }
         }
     }
 
@@ -199,6 +288,7 @@ impl AgentRunner {
         tx: &RunEmitter,
         tool_calls: Vec<ToolCall>,
         thread: &mut Vec<Message>,
+        cancel: &CancellationToken,
     ) {
         // Append the tool calls as a single assistant turn.
         thread.push(Message::tool_calls(tool_calls.clone()));
@@ -206,50 +296,83 @@ impl AgentRunner {
         // Each future runs the full lifecycle for one call: authorization check
         // (if required), emit Started, execute, emit Finished / Error / Denied.
         // Hallucinated calls skip Started but still produce a synthetic result
-        // so the assistant turn and tool-result messages remain paired.
-        let tool_futures = tool_calls.into_iter().map(|call| async move {
-            // Hallucinated tool: produce a synthetic message, no events.
-            let Some(tool) = self.registry.get(&call.name) else {
-                return (call, ToolCallResult::Unknown);
-            };
+        // so the assistant turn and tool-result messages remain paired. Each
+        // call also races against `cancel`; on cancellation the future
+        // resolves to a synthetic `Err("cancelled")` result without emitting
+        // `Finished`, keeping the assistant-turn / tool-result pairing intact.
+        let tool_futures = tool_calls.into_iter().map(|call| {
+            let cancel = cancel.clone();
+            async move {
+                // Hallucinated tool: produce a synthetic message, no events.
+                let Some(tool) = self.registry.get(&call.name) else {
+                    return (call, ToolCallResult::Unknown);
+                };
 
-            // Authorization gate: the sync check decides whether to consult
-            // the async decision path. If no manager is configured, no gating.
-            if let Some(auth) = &self.auth_manager
-                && auth.requires_authorization(&call.name, &call.args)
-                && !auth.authorize(&call.name, &call.args).await
-            {
-                let result = ToolCallResult::Denied;
+                // Authorization gate: the sync check decides whether to consult
+                // the async decision path. If no manager is configured, no gating.
+                if let Some(auth) = &self.auth_manager
+                    && auth.requires_authorization(&call.name, &call.args)
+                {
+                    let allowed = tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => {
+                            return (
+                                call,
+                                ToolCallResult::Err(Error::Agent("cancelled".into())),
+                            );
+                        }
+                        decision = auth.authorize(&call.name, &call.args) => decision,
+                    };
+                    if !allowed {
+                        let result = ToolCallResult::Denied;
+                        let _ = tx
+                            .send(AgentEvent::ToolCallFinished {
+                                name: call.name.clone(),
+                                result: result.clone(),
+                            })
+                            .await;
+                        return (call, result);
+                    }
+                }
+
+                let _ = tx
+                    .send(AgentEvent::ToolCallStarted {
+                        name: call.name.clone(),
+                        args: call.args.clone(),
+                    })
+                    .await;
+
+                let event: ToolCallResult = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        // No Finished — the run is about to terminate with
+                        // a single Cancelled event.
+                        return (
+                            call,
+                            ToolCallResult::Err(Error::Agent("cancelled".into())),
+                        );
+                    }
+                    result = async {
+                        match tool {
+                            ToolRegistryEntry::Tool(t) => {
+                                t.call(call.args.clone(), cancel.clone()).await
+                            }
+                            ToolRegistryEntry::Agent(a) => {
+                                a.call(tx.child(), call.args.clone(), cancel.clone()).await
+                            }
+                        }
+                    } => result.into(),
+                };
+
+                debug!(tool = call.name, "tool call complete");
                 let _ = tx
                     .send(AgentEvent::ToolCallFinished {
                         name: call.name.clone(),
-                        result: result.clone(),
+                        result: event.clone(),
                     })
                     .await;
-                return (call, result);
+                (call, event)
             }
-
-            let _ = tx
-                .send(AgentEvent::ToolCallStarted {
-                    name: call.name.clone(),
-                    args: call.args.clone(),
-                })
-                .await;
-
-            let event: ToolCallResult = match tool {
-                ToolRegistryEntry::Tool(t) => t.call(call.args.clone()).await,
-                ToolRegistryEntry::Agent(a) => a.call(tx.child(), call.args.clone()).await,
-            }
-            .into();
-
-            debug!(tool = call.name, "tool call complete");
-            let _ = tx
-                .send(AgentEvent::ToolCallFinished {
-                    name: call.name.clone(),
-                    result: event.clone(),
-                })
-                .await;
-            (call, event)
         });
 
         // Run all calls concurrently. `join_all` preserves input order in the

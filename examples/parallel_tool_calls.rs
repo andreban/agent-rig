@@ -32,6 +32,7 @@ use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
@@ -58,7 +59,7 @@ impl Tool for GetTemperatureTool {
         }
     }
 
-    async fn call(&self, args: Value) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown").to_string();
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -121,6 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("\n[runner] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
+            AgentEvent::Cancelled => println!("\n[runner] cancelled"),
         }
     }
 

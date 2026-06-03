@@ -49,7 +49,8 @@ impl ToolRegistryEntry {
 /// # #[async_trait]
 /// # impl Tool for MyTool {
 /// #     fn definition(&self) -> ToolDefinition { unimplemented!() }
-/// #     async fn call(&self, _: serde_json::Value) -> Result<serde_json::Value, Error> { unimplemented!() }
+/// #     async fn call(&self, _: serde_json::Value, _: tokio_util::sync::CancellationToken)
+/// #         -> Result<serde_json::Value, Error> { unimplemented!() }
 /// # }
 /// let registry = Arc::new(
 ///     ToolRegistry::new()
@@ -129,7 +130,11 @@ mod tests {
             }
         }
 
-        async fn call(&self, _args: Value) -> Result<Value, Error> {
+        async fn call(
+            &self,
+            _args: Value,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<Value, Error> {
             Ok(json!({}))
         }
     }

@@ -3,6 +3,7 @@
 
 use futures_util::StreamExt;
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::{
@@ -51,13 +52,24 @@ impl AgentTool {
     /// `args` is serialized to JSON and passed as the user message of the new
     /// run. The caller (the parent runner) consumes the stream, forwards each
     /// event, and uses the accumulated text as the tool result.
-    #[instrument(skip(self, args), fields(tool = self.definition.name))]
-    pub async fn call(&self, tx: RunEmitter, args: serde_json::Value) -> Result<Value, Error> {
+    ///
+    /// `cancel` is propagated into the child run via
+    /// [`AgentRunner::run_with_cancellation`], so cancelling the parent run
+    /// cancels every nested agent in the tree.
+    #[instrument(skip(self, args, cancel), fields(tool = self.definition.name))]
+    pub async fn call(
+        &self,
+        tx: RunEmitter,
+        args: serde_json::Value,
+        cancel: CancellationToken,
+    ) -> Result<Value, Error> {
         let input = serde_json::to_string(&args)
             .map_err(|e| Error::Agent(format!("failed to serialize args: {e}")))?;
 
         let mut result = String::new();
-        let mut stream = self.runner.run(&self.agent, vec![Message::user(input)]);
+        let mut stream =
+            self.runner
+                .run_with_cancellation(&self.agent, vec![Message::user(input)], cancel);
         while let Some(next) = stream.next().await {
             if let AgentEvent::TextDelta(text) = &next.agent_event {
                 result += text;

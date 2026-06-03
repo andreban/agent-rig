@@ -13,6 +13,7 @@ use futures_util::StreamExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 
 struct AddTool;
 
@@ -33,7 +34,7 @@ impl Tool for AddTool {
         }
     }
 
-    async fn call(&self, args: Value) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let a = args["a"].as_i64().unwrap_or(0);
         let b = args["b"].as_i64().unwrap_or(0);
         Ok(json!({ "result": a + b }))

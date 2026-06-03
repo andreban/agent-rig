@@ -182,7 +182,11 @@ impl Tool for GetWeatherTool {
         }
     }
 
-    async fn call(&self, args: Value) -> Result<Value, Error> {
+    async fn call(
+        &self,
+        args: Value,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");
         Ok(json!({ "city": city, "celsius": 22.0 }))
     }
@@ -257,6 +261,8 @@ while let Some(event) = stream.next().await {
         AgentEvent::TextDelta(chunk) => print!("{chunk}"),
         AgentEvent::ToolCallStarted { name, .. } => println!("[calling {name}]"),
         AgentEvent::ToolCallFinished { name, .. } => println!("[{name} done]"),
+        AgentEvent::Usage(u) => println!("[usage {u:?}]"),
+        AgentEvent::Cancelled => println!("[cancelled]"),
         AgentEvent::Error(e) => eprintln!("[error] {e}"),
     }
 }
@@ -317,6 +323,46 @@ with a `tokio::sync::Mutex` held inside `authorize`. Do not hold a lock in
 `requires_authorization`; it must stay cheap and non-blocking.
 
 See `examples/mpsc_auth_flow.rs` for a working CLI prompt.
+
+---
+
+## Cancellation
+
+Cancellation is cooperative. The simplest pattern: **drop the returned stream**. The runner
+aborts the in-flight provider call and any running tool futures at their next await point.
+
+```rust
+let stream = runner.run(&agent, vec![Message::user(input)]);
+// drop(stream) anywhere — typically on Ctrl-C, client disconnect, or
+// when a wrapping task is aborted — cancels everything.
+```
+
+For deadlines or sharing a cancel signal across sibling tasks, use
+`run_with_cancellation`:
+
+```rust
+use tokio_util::sync::CancellationToken;
+
+let cancel = CancellationToken::new();
+let mut stream = runner.run_with_cancellation(&agent, thread, cancel.clone());
+
+// Cancel from anywhere:
+//   cancel.cancel();
+// — or compose with a deadline:
+//   tokio::spawn(async move {
+//       tokio::time::sleep(Duration::from_secs(30)).await;
+//       cancel.cancel();
+//   });
+```
+
+`Tool::call` receives the cancel token; long-running tools should `select!` on it
+or pass it down to the libraries they call. Tools that ignore it still terminate
+the run correctly — the runner races each call against `cancel` — but their
+side effects may continue in the background until they finish on their own.
+
+A cancelled run emits a terminal `AgentEvent::Cancelled` before the stream ends.
+Under drop-the-stream cancellation the event is best-effort (the receiver may
+already be gone). See `examples/cancellation.rs`.
 
 ---
 

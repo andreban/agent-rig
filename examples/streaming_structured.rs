@@ -35,6 +35,7 @@ use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
@@ -74,7 +75,7 @@ impl Tool for GetTemperatureTool {
         }
     }
 
-    async fn call(&self, args: Value) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");
         let celsius = match city.to_lowercase().as_str() {
             "london" => 12.0,
@@ -159,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             AgentEvent::Usage(usage) => println!("[usage] {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
+            AgentEvent::Cancelled => println!("\n[runner] cancelled"),
         }
     }
 

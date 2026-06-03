@@ -130,6 +130,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             AgentEvent::Error(error) => {
                 eprintln!("{prefix} error:    {error}")
             }
+            AgentEvent::Cancelled => {
+                println!("{prefix} cancelled")
+            }
         }
     }
     println!("\n--- final answer ---\n{answer}");

@@ -71,8 +71,10 @@ impl From<Result<Value, Error>> for ToolCallResult {
 /// - [`Usage`](AgentEvent::Usage) reports token counts for one model call.
 ///   A run that performs `N` model calls produces up to `N` `Usage`
 ///   events; consumers sum across them to derive per-run totals.
-/// - [`Error`](AgentEvent::Error) terminates the stream early when the
-///   underlying provider fails.
+/// - [`Cancelled`](AgentEvent::Cancelled) and [`Error`](AgentEvent::Error)
+///   are terminal: the stream ends after either of them, and they are
+///   mutually exclusive with the loop's normal completion (no tool calls
+///   in the final model turn).
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
     /// A registered tool is about to run with these arguments.
@@ -101,6 +103,18 @@ pub enum AgentEvent {
     /// tool-calling turns produces multiple `Usage` events). Provider
     /// adapters that do not report usage never produce this event.
     Usage(TokenUsage),
+    /// The run was cancelled — either because the consumer dropped the
+    /// returned stream, or because an externally supplied
+    /// [`CancellationToken`](tokio_util::sync::CancellationToken) fired.
+    /// The stream ends after this event.
+    ///
+    /// Delivery is best-effort: when cancellation is triggered by the
+    /// consumer dropping the stream, the receiver is already gone and
+    /// the event is silently discarded. Consumers that supply their own
+    /// token via
+    /// [`AgentRunner::run_with_cancellation`](super::AgentRunner::run_with_cancellation)
+    /// and keep draining the stream will observe this event.
+    Cancelled,
     /// The provider returned an error. The stream ends after this event.
     Error(crate::error::Error),
 }
