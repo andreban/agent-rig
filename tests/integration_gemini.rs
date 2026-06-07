@@ -10,7 +10,7 @@ use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use schemars::JsonSchema;
+use schemars::{JsonSchema, json_schema};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -18,12 +18,12 @@ use tokio_util::sync::CancellationToken;
 struct AddTool;
 
 #[async_trait]
-impl Tool for AddTool {
+impl Tool<Value, Value> for AddTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "add".to_string(),
             description: "Adds two integers and returns their sum.".to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "a": { "type": "integer", "description": "First operand" },
@@ -120,7 +120,7 @@ async fn agent_tool_calling_returns_correct_result() {
     let Some(api_key) = api_key() else { return };
 
     let model = GeminiModel::new(api_key, MODEL);
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(AddTool)));
+    let registry = Arc::new(ToolRegistry::new().register(AddTool));
     let agent = Agent::builder()
         .name("Calculator")
         .instructions("You are a calculator. Use the add tool to compute sums. When asked to add numbers, call the tool and report the result.")

@@ -177,7 +177,7 @@ fn to_ollama_tool(def: &ToolDefinition) -> OllamaTool {
         function: Function {
             name: def.name.clone(),
             description: def.description.clone(),
-            parameters: def.parameters.clone(),
+            parameters: def.parameters.clone().into(),
         },
     }
 }

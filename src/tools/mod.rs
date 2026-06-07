@@ -14,3 +14,5 @@ mod tool;
 pub use agent_tool::AgentTool;
 pub use registry::{ToolRegistry, ToolRegistryEntry};
 pub use tool::{Tool, ToolDefinition};
+#[doc(hidden)]
+pub use tool::ErasedTool;

@@ -28,6 +28,7 @@ use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use geologia::prelude::{ThinkingConfig, ThinkingLevel};
+use schemars::json_schema;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -37,12 +38,12 @@ const MODEL: &str = "gemini-3.1-flash-lite";
 struct AddTool;
 
 #[async_trait]
-impl Tool for AddTool {
+impl Tool<Value, Value> for AddTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "add".to_string(),
             description: "Adds two integers and returns their sum.".to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "a": { "type": "integer", "description": "First operand" },
@@ -77,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         })
         .build();
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(AddTool)));
+    let registry = Arc::new(ToolRegistry::new().register(AddTool));
 
     let agent = Agent::builder()
         .name("Calculator")

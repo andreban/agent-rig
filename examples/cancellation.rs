@@ -27,6 +27,7 @@ use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use schemars::json_schema;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -39,12 +40,12 @@ const MODEL: &str = "gemini-3.1-flash-lite";
 struct SlowUploadTool;
 
 #[async_trait]
-impl Tool for SlowUploadTool {
+impl Tool<Value, Value> for SlowUploadTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "upload".to_string(),
             description: "Uploads a file. Takes about 5 seconds.".to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string" }
@@ -72,7 +73,7 @@ impl Tool for SlowUploadTool {
 
 fn build_runner(api_key: String) -> (AgentRunner, Agent) {
     let model = GeminiModel::new(api_key, MODEL);
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(SlowUploadTool)));
+    let registry = Arc::new(ToolRegistry::new().register(SlowUploadTool));
     let runner = AgentRunner::with_registry(Arc::new(model), registry);
     let agent = Agent::builder()
         .name("Uploader")

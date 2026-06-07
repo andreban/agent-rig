@@ -18,7 +18,7 @@ use agent_rig::models::gemini::GeminiModel;
 use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
 use agent_rig::tools::{AgentTool, ToolDefinition, ToolRegistry};
 use futures_util::StreamExt;
-use serde_json::json;
+use schemars::json_schema;
 use std::error::Error;
 use tracing_subscriber::EnvFilter;
 
@@ -40,7 +40,7 @@ fn summariser_tool(api_key: &str) -> AgentTool {
             description: "Summarises a long piece of text into two sentences or fewer. \
                           Pass the text in the `text` field."
                 .to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "text": { "type": "string", "description": "The text to summarise." }

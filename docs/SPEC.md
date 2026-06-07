@@ -180,11 +180,29 @@ Constructed via `Agent::builder()`. A pure data blueprint: holds the system inst
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
-    pub parameters: serde_json::Value,   // JSON Schema
+    pub parameters: schemars::Schema,    // JSON Schema, typed
 }
 
 #[async_trait]
-pub trait Tool: Send + Sync {
+pub trait Tool<I, O>: Send + Sync
+where
+    I: DeserializeOwned + Send,
+    O: Serialize + Send,
+{
+    fn definition(&self) -> ToolDefinition;
+    async fn call(
+        &self,
+        args: I,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<O, Error>;
+}
+
+// Object-safe view used internally by the registry. Tool authors implement
+// `Tool<I, O>`; the registry wraps each concrete tool in a `ToolBridge`
+// that converts JSON ↔ `I`/`O` at the boundary, so a single registry can
+// hold tools with different argument and result types.
+#[doc(hidden)]
+pub trait ErasedTool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
     async fn call(
         &self,
@@ -195,21 +213,29 @@ pub trait Tool: Send + Sync {
 
 // src/tools/registry.rs
 pub enum ToolRegistryEntry {
-    Tool(Box<dyn Tool>),
-    Agent(Box<AgentTool>),    // boxed: AgentTool is much larger than Box<dyn Tool>
+    Tool(Box<dyn ErasedTool>),
+    Agent(Box<AgentTool>),    // boxed: AgentTool is much larger than Box<dyn ErasedTool>
 }
 
 pub struct ToolRegistry { ... }
 
 impl ToolRegistry {
     pub fn new() -> Self;
-    pub fn register(self, tool: Box<dyn Tool>) -> Self;          // builder-style
-    pub fn register_agent(self, agent: AgentTool) -> Self;       // builder-style
+    pub fn register<T, I, O>(self, tool: T) -> Self                // builder-style
+    where
+        T: Tool<I, O> + 'static,
+        I: DeserializeOwned + Send + 'static,
+        O: Serialize + Send + 'static;
+    pub fn register_agent(self, agent: AgentTool) -> Self;         // builder-style
     pub fn definitions(&self) -> Vec<ToolDefinition>;
 }
 ```
 
-`ToolDefinition` is the runtime-only contract between agent and model. It is never stored in `Agent` — it lives in the `ToolRegistry` alongside its implementation and is resolved at run time.
+`ToolDefinition` is the runtime-only contract between agent and model. It is never stored in `Agent` — it lives in the `ToolRegistry` alongside its implementation and is resolved at run time. `parameters` is a `schemars::Schema`, typically built with the `schemars::json_schema!` macro.
+
+`Tool<I, O>` is generic over the argument type `I` (deserialized from the model's tool-call JSON before `call` is invoked) and the result type `O` (serialized back to JSON for the model). Tools that don't need typed arguments can use `Tool<serde_json::Value, serde_json::Value>` and operate on raw JSON.
+
+The registry stores tools behind an object-safe `ErasedTool` wrapper so a single registry can hold tools with different `I`/`O` types. Tool authors never name `ErasedTool` directly — `ToolRegistry::register` takes a concrete `Tool<I, O>` by value and wraps it internally.
 
 The registry holds two kinds of callables: plain [`Tool`] implementations and sub-agents wrapped in [`AgentTool`]. The runner dispatches each variant differently — plain tools resolve to a single JSON value, while agents produce a stream of events that the parent forwards.
 

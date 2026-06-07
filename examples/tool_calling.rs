@@ -21,6 +21,7 @@ use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use schemars::json_schema;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -30,13 +31,13 @@ const MODEL: &str = "gemini-3.1-flash-lite";
 struct GetTemperatureTool;
 
 #[async_trait]
-impl Tool for GetTemperatureTool {
+impl Tool<Value, Value> for GetTemperatureTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "get_temperature".to_string(),
             description: "Returns the current temperature in Celsius for the given city."
                 .to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "city": {
@@ -65,12 +66,12 @@ impl Tool for GetTemperatureTool {
 struct CelsiusToFahrenheitTool;
 
 #[async_trait]
-impl Tool for CelsiusToFahrenheitTool {
+impl Tool<Value, Value> for CelsiusToFahrenheitTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "celsius_to_fahrenheit".to_string(),
             description: "Converts a temperature from Celsius to Fahrenheit.".to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "celsius": {
@@ -101,8 +102,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let registry = Arc::new(
         ToolRegistry::new()
-            .register(Box::new(GetTemperatureTool))
-            .register(Box::new(CelsiusToFahrenheitTool)),
+            .register(GetTemperatureTool)
+            .register(CelsiusToFahrenheitTool),
     );
 
     let agent = Agent::builder()

@@ -2,6 +2,7 @@ use super::*;
 use crate::model::{LlmModel, MessageContent, ModelRequest, ModelResponse};
 use crate::runner::RunEvent;
 use async_trait::async_trait;
+use schemars::json_schema;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -59,7 +60,7 @@ fn build_agent_tool(model: Arc<ScriptedModel>) -> AgentTool {
         ToolDefinition {
             name: "child_tool".to_string(),
             description: "test child".to_string(),
-            parameters: json!({"type": "object"}),
+            parameters: json_schema!({"type": "object"}),
         },
         agent,
         runner,

@@ -4,6 +4,7 @@ use crate::model::{MessageContent, ModelResponse, Role, TokenUsage};
 use crate::tools::Tool;
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use schemars::json_schema;
 use serde_json::{Value, json};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -120,12 +121,12 @@ impl EchoTool {
 }
 
 #[async_trait]
-impl Tool for EchoTool {
+impl Tool<Value, Value> for EchoTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name.to_string(),
             description: "echo".to_string(),
-            parameters: json!({"type": "object"}),
+            parameters: json_schema!({"type": "object"}),
         }
     }
 
@@ -160,7 +161,7 @@ async fn text_only_response_emits_text_delta_and_stops() {
 #[tokio::test]
 async fn tool_call_then_text_completes_the_loop() {
     let (tool, calls) = EchoTool::ok("echo");
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(tool)));
+    let registry = Arc::new(ToolRegistry::new().register(tool));
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "echo", json!({"x": 1})),
         final_response("done"),
@@ -222,7 +223,7 @@ async fn unknown_tool_produces_synthetic_result_with_no_events() {
 #[tokio::test]
 async fn tool_error_is_reported_via_finished_event() {
     let tool = EchoTool::failing("boom", "kaboom");
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(tool)));
+    let registry = Arc::new(ToolRegistry::new().register(tool));
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "boom", json!({})),
         final_response("ok"),
@@ -280,7 +281,7 @@ impl AuthManager for ScriptedAuth {
 #[tokio::test]
 async fn auth_denial_skips_tool_execution() {
     let (tool, calls) = EchoTool::ok("echo");
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(tool)));
+    let registry = Arc::new(ToolRegistry::new().register(tool));
     let auth = ScriptedAuth::new(true, vec![false]);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "echo", json!({})),
@@ -315,7 +316,7 @@ async fn auth_denial_skips_tool_execution() {
 #[tokio::test]
 async fn auth_fast_path_skips_authorize() {
     let (tool, calls) = EchoTool::ok("echo");
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(tool)));
+    let registry = Arc::new(ToolRegistry::new().register(tool));
     // requires_authorization returns false — authorize must never run.
     let auth = ScriptedAuth::new(false, vec![]);
     let model = ScriptedModel::new(vec![
@@ -389,7 +390,7 @@ async fn token_usage_is_forwarded_as_agent_event() {
 #[tokio::test]
 async fn one_usage_event_per_model_call() {
     let (tool, _) = EchoTool::ok("echo");
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(tool)));
+    let registry = Arc::new(ToolRegistry::new().register(tool));
     let first_usage = TokenUsage {
         input_tokens: Some(10),
         output_tokens: Some(5),
@@ -455,7 +456,7 @@ async fn model_error_is_emitted_and_stops_the_loop() {
 #[tokio::test]
 async fn parallel_tool_results_are_paired_in_request_order() {
     let (tool, _) = EchoTool::ok("echo");
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(tool)));
+    let registry = Arc::new(ToolRegistry::new().register(tool));
     let model = ScriptedModel::new(vec![
         Ok(ModelResponse {
             text: None,
@@ -520,12 +521,12 @@ struct CancellableTool {
 }
 
 #[async_trait]
-impl Tool for CancellableTool {
+impl Tool<Value, Value> for CancellableTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name.to_string(),
             description: "cancellable".to_string(),
-            parameters: json!({"type": "object"}),
+            parameters: json_schema!({"type": "object"}),
         }
     }
 
@@ -629,7 +630,7 @@ async fn cancellation_during_tool_phase_skips_finished_and_emits_cancelled() {
         started: started.clone(),
         captured: captured.clone(),
     };
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(tool)));
+    let registry = Arc::new(ToolRegistry::new().register(tool));
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "slow", json!({})),
         final_response("never reached"),
@@ -706,7 +707,7 @@ async fn nested_agent_tool_propagates_cancellation() {
         ToolDefinition {
             name: "delegate".to_string(),
             description: "delegate".to_string(),
-            parameters: json!({"type": "object"}),
+            parameters: json_schema!({"type": "object"}),
         },
         child_agent,
         child_runner,

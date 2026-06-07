@@ -33,6 +33,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use schemars::JsonSchema;
+use schemars::json_schema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -56,13 +57,13 @@ struct WeatherReport {
 struct GetTemperatureTool;
 
 #[async_trait]
-impl Tool for GetTemperatureTool {
+impl Tool<Value, Value> for GetTemperatureTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "get_temperature".to_string(),
             description: "Returns the current temperature in Celsius for the given city."
                 .to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "city": {
@@ -105,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .build();
 
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(GetTemperatureTool)));
+    let registry = Arc::new(ToolRegistry::new().register(GetTemperatureTool));
 
     let agent = Agent::builder()
         .name("Weather Reporter")
