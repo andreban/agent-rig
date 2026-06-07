@@ -9,6 +9,7 @@ use agent_rig::tools::{Tool, ToolDefinition};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use schemars::json_schema;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -18,13 +19,13 @@ const MODEL: &str = "gemini-3.1-flash-lite";
 struct GetTemperatureTool;
 
 #[async_trait]
-impl Tool for GetTemperatureTool {
+impl Tool<Value, Value> for GetTemperatureTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "get_temperature".to_string(),
             description: "Returns the current temperature in Celsius for the given city."
                 .to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "city": {
@@ -64,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_key = std::env::var("GEMINI_API_KEY")?;
     let model = GeminiModel::new(api_key, MODEL);
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(GetTemperatureTool)));
+    let registry = Arc::new(ToolRegistry::new().register(GetTemperatureTool));
 
     let agent = Agent::builder()
         .name("Weather Assistant")

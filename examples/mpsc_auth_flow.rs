@@ -22,6 +22,7 @@ use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use schemars::json_schema;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_util::sync::CancellationToken;
@@ -32,12 +33,12 @@ const MODEL: &str = "gemini-3.1-flash-lite";
 struct SendEmailTool;
 
 #[async_trait]
-impl Tool for SendEmailTool {
+impl Tool<Value, Value> for SendEmailTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "send_email".to_string(),
             description: "Sends an email to the given recipient.".to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "to":      { "type": "string", "description": "Recipient email address" },
@@ -118,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_key = std::env::var("GEMINI_API_KEY")?;
     let model = GeminiModel::new(api_key, MODEL);
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(SendEmailTool)));
+    let registry = Arc::new(ToolRegistry::new().register(SendEmailTool));
 
     let agent = Agent::builder()
         .name("Email Assistant")

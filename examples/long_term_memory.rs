@@ -29,6 +29,7 @@ use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use schemars::json_schema;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -42,13 +43,13 @@ struct RememberFactTool {
 }
 
 #[async_trait]
-impl Tool for RememberFactTool {
+impl Tool<Value, Value> for RememberFactTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "remember_fact".to_string(),
             description: "Saves an important fact about the user or the world for later recall."
                 .to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "fact": {
@@ -80,7 +81,7 @@ struct RecallFactTool {
 }
 
 #[async_trait]
-impl Tool for RecallFactTool {
+impl Tool<Value, Value> for RecallFactTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "recall_fact".to_string(),
@@ -89,7 +90,7 @@ impl Tool for RecallFactTool {
                           Each word is matched independently — a fact is returned if it contains \
                           any of the supplied words."
                 .to_string(),
-            parameters: json!({
+            parameters: json_schema!({
                 "type": "object",
                 "properties": {
                     "query": {
@@ -151,12 +152,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let registry = Arc::new(
         ToolRegistry::new()
-            .register(Box::new(RememberFactTool {
+            .register(RememberFactTool {
                 store: store.clone(),
-            }))
-            .register(Box::new(RecallFactTool {
+            })
+            .register(RecallFactTool {
                 store: store.clone(),
-            })),
+            }),
     );
 
     let agent = Agent::builder()

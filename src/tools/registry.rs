@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
+use serde::{Serialize, de::DeserializeOwned};
+
 use crate::tools::{
     agent_tool::AgentTool,
-    tool::{Tool, ToolDefinition},
+    tool::{ErasedTool, Tool, ToolBridge, ToolDefinition},
 };
 /// One entry stored in a [`ToolRegistry`].
 ///
@@ -11,10 +13,12 @@ use crate::tools::{
 /// variant differently: plain tools resolve to a single JSON value, while
 /// agents produce a stream of events that the parent forwards.
 pub enum ToolRegistryEntry {
-    /// A plain tool implementation.
-    Tool(Box<dyn Tool>),
+    /// A plain tool implementation. Stored behind an object-safe wrapper so
+    /// the registry can hold tools with different typed `I`/`O` parameters
+    /// in the same map.
+    Tool(Box<dyn ErasedTool>),
     /// A sub-agent registered as a tool. Boxed to keep the enum compact —
-    /// `AgentTool` is much larger than `Box<dyn Tool>`.
+    /// `AgentTool` is much larger than `Box<dyn ErasedTool>`.
     Agent(Box<AgentTool>),
 }
 
@@ -46,15 +50,22 @@ impl ToolRegistryEntry {
 /// # use async_trait::async_trait;
 /// # use agent_rig::tools::{Tool, ToolDefinition};
 /// # use agent_rig::error::Error;
+/// # use schemars::json_schema;
 /// # #[async_trait]
-/// # impl Tool for MyTool {
-/// #     fn definition(&self) -> ToolDefinition { unimplemented!() }
+/// # impl Tool<serde_json::Value, serde_json::Value> for MyTool {
+/// #     fn definition(&self) -> ToolDefinition {
+/// #         ToolDefinition {
+/// #             name: "noop".into(),
+/// #             description: "noop".into(),
+/// #             parameters: json_schema!({"type": "object"}),
+/// #         }
+/// #     }
 /// #     async fn call(&self, _: serde_json::Value, _: tokio_util::sync::CancellationToken)
-/// #         -> Result<serde_json::Value, Error> { unimplemented!() }
+/// #         -> Result<serde_json::Value, Error> { Ok(serde_json::json!({})) }
 /// # }
 /// let registry = Arc::new(
 ///     ToolRegistry::new()
-///         .register(Box::new(MyTool))
+///         .register(MyTool)
 /// );
 /// ```
 pub struct ToolRegistry {
@@ -71,11 +82,20 @@ impl ToolRegistry {
 
     /// Registers a [`Tool`], keyed by its [`ToolDefinition::name`].
     ///
-    /// Consumes and returns `self` for builder-style chaining. If a tool with
-    /// the same name is already registered, it is overwritten.
-    pub fn register(mut self, tool: Box<dyn Tool>) -> Self {
-        let name = tool.definition().name.clone();
-        self.tools.insert(name, ToolRegistryEntry::Tool(tool));
+    /// Takes the tool by value and stores it behind an internal object-safe
+    /// wrapper, which is what lets a single registry hold tools with
+    /// different `I`/`O` types. Consumes and returns `self` for builder-style
+    /// chaining. If a tool with the same name is already registered, it is
+    /// overwritten.
+    pub fn register<T, I, O>(mut self, tool: T) -> Self
+    where
+        T: Tool<I, O> + 'static,
+        I: DeserializeOwned + Send + 'static,
+        O: Serialize + Send + 'static,
+    {
+        let entry: Box<dyn ErasedTool> = Box::new(ToolBridge::new(tool));
+        let name = entry.definition().name.clone();
+        self.tools.insert(name, ToolRegistryEntry::Tool(entry));
         self
     }
 
@@ -114,6 +134,7 @@ mod tests {
     use super::*;
     use crate::error::Error;
     use async_trait::async_trait;
+    use schemars::json_schema;
     use serde_json::{Value, json};
 
     struct StubTool {
@@ -121,12 +142,12 @@ mod tests {
     }
 
     #[async_trait]
-    impl Tool for StubTool {
+    impl Tool<Value, Value> for StubTool {
         fn definition(&self) -> ToolDefinition {
             ToolDefinition {
                 name: self.name.to_string(),
                 description: "stub".to_string(),
-                parameters: json!({"type": "object"}),
+                parameters: json_schema!({"type": "object"}),
             }
         }
 
@@ -148,15 +169,15 @@ mod tests {
 
     #[test]
     fn register_keys_by_definition_name() {
-        let reg = ToolRegistry::new().register(Box::new(StubTool { name: "alpha" }));
+        let reg = ToolRegistry::new().register(StubTool { name: "alpha" });
         assert!(matches!(reg.get("alpha"), Some(ToolRegistryEntry::Tool(_))));
     }
 
     #[test]
     fn definitions_lists_every_registered_tool() {
         let reg = ToolRegistry::new()
-            .register(Box::new(StubTool { name: "alpha" }))
-            .register(Box::new(StubTool { name: "beta" }));
+            .register(StubTool { name: "alpha" })
+            .register(StubTool { name: "beta" });
         let mut names: Vec<String> = reg.definitions().into_iter().map(|d| d.name).collect();
         names.sort();
         assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
@@ -165,8 +186,8 @@ mod tests {
     #[test]
     fn last_registration_wins_on_name_collision() {
         let reg = ToolRegistry::new()
-            .register(Box::new(StubTool { name: "alpha" }))
-            .register(Box::new(StubTool { name: "alpha" }));
+            .register(StubTool { name: "alpha" })
+            .register(StubTool { name: "alpha" });
         // The registry is keyed by name; a second `register` with the same
         // name overwrites the first. Verifying via count so a future change
         // (e.g. rejecting duplicates) surfaces here.
@@ -200,7 +221,7 @@ mod tests {
             ToolDefinition {
                 name: "delegate".to_string(),
                 description: "delegate to child".to_string(),
-                parameters: json!({"type": "object"}),
+                parameters: json_schema!({"type": "object"}),
             },
             agent,
             runner,

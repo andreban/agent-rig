@@ -204,7 +204,7 @@ fn to_function_declaration(def: &ToolDefinition) -> FunctionDeclaration {
         name: def.name.clone(),
         description: def.description.clone(),
         parameters: None,
-        parameters_json_schema: Some(def.parameters.clone()),
+        parameters_json_schema: Some(def.parameters.clone().into()),
         response: None,
         response_json_schema: None,
     }
