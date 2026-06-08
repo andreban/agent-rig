@@ -198,18 +198,6 @@ fn resolve_refs(value: &mut Value, definitions: &Value) {
     }
 }
 
-/// Translates a [`ToolDefinition`] into a Gemini [`FunctionDeclaration`].
-fn to_function_declaration(def: &ToolDefinition) -> FunctionDeclaration {
-    FunctionDeclaration {
-        name: def.name.clone(),
-        description: def.description.clone(),
-        parameters: None,
-        parameters_json_schema: Some(def.parameters.clone().into()),
-        response: None,
-        response_json_schema: None,
-    }
-}
-
 #[async_trait]
 impl LlmModel for GeminiModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
@@ -293,8 +281,11 @@ impl LlmModel for GeminiModel {
 
         // Attach tool declarations when the request includes tools.
         if !request.tools.is_empty() {
-            let declarations: Vec<FunctionDeclaration> =
-                request.tools.iter().map(to_function_declaration).collect();
+            let declarations: Vec<FunctionDeclaration> = request
+                .tools
+                .iter()
+                .map(FunctionDeclaration::from)
+                .collect();
             let tools = Tools {
                 function_declarations: Some(declarations),
                 ..Default::default()
@@ -408,6 +399,20 @@ impl From<&UsageMetadata> for TokenUsage {
             cached_input_tokens: meta.cached_content_token_count,
             thinking_tokens: meta.thoughts_token_count,
             tool_use_prompt_tokens: meta.tool_use_prompt_token_count,
+        }
+    }
+}
+
+/// Translates a [`ToolDefinition`] into a Gemini [`FunctionDeclaration`].
+impl From<&ToolDefinition> for FunctionDeclaration {
+    fn from(def: &ToolDefinition) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: def.name.clone(),
+            description: def.description.clone(),
+            parameters: None,
+            parameters_json_schema: Some(def.parameters.clone().into()),
+            response: None,
+            response_json_schema: None,
         }
     }
 }
