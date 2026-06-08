@@ -7,7 +7,10 @@
 //! [`geologia`](https://github.com/andreban/geologia) client. Requires the
 //! `gemini` Cargo feature.
 
+use std::pin::Pin;
+
 use async_trait::async_trait;
+use futures_util::{Stream, StreamExt};
 use geologia::prelude::{
     Candidate, Content, FunctionDeclaration, FunctionResponse, GeminiClient,
     GenerateContentRequest, GenerationConfig, Part, PartData, Role, ThinkingConfig, Tools,
@@ -18,8 +21,8 @@ use serde_json::Value;
 use crate::{
     error::Error,
     model::{
-        LlmModel, MessageContent, ModelRequest, ModelResponse, Role as AgentRole, TokenUsage,
-        ToolCall,
+        LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk,
+        Role as AgentRole, TokenUsage, ToolCall,
     },
     tools::ToolDefinition,
 };
@@ -198,9 +201,12 @@ fn resolve_refs(value: &mut Value, definitions: &Value) {
     }
 }
 
-#[async_trait]
-impl LlmModel for GeminiModel {
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
+impl GeminiModel {
+    /// Translates a [`ModelRequest`] into a Gemini [`GenerateContentRequest`].
+    ///
+    /// Shared by [`LlmModel::generate`] and [`LlmModel::generate_stream`] so the
+    /// streaming and non-streaming endpoints see identical request bodies.
+    fn build_gemini_request(&self, request: ModelRequest) -> GenerateContentRequest {
         let contents: Vec<Content> = request
             .messages
             .iter()
@@ -319,7 +325,14 @@ impl LlmModel for GeminiModel {
             builder = builder.generation_config(config);
         }
 
-        let gemini_request = builder.build();
+        builder.build()
+    }
+}
+
+#[async_trait]
+impl LlmModel for GeminiModel {
+    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
+        let gemini_request = self.build_gemini_request(request);
 
         let response = self
             .client
@@ -385,6 +398,90 @@ impl LlmModel for GeminiModel {
             token_usage,
         })
     }
+
+    /// Streams the Gemini response as [`ModelStreamChunk`] values.
+    ///
+    /// Consumes the SSE stream returned by `stream_generate_content` and emits
+    /// one chunk per part: [`ModelStreamChunk::Thinking`] for thought parts,
+    /// [`ModelStreamChunk::TextDelta`] for regular text parts, and
+    /// [`ModelStreamChunk::ToolCall`] for function calls. A trailing
+    /// [`ModelStreamChunk::Usage`] chunk carries the final [`UsageMetadata`]
+    /// reported by the provider, if any.
+    fn generate_stream(
+        &self,
+        request: ModelRequest,
+    ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
+        Box::pin(async_stream::stream! {
+            let gemini_request = self.build_gemini_request(request);
+            let stream = self
+                .client
+                .stream_generate_content(&gemini_request, &self.model)
+                .await
+                .map_err(|e| Error::Provider(e.to_string()))?;
+            let mut stream = Box::pin(stream);
+
+            // Gemini reports usage cumulatively on each chunk; keep the latest
+            // and emit it once after the stream ends.
+            let mut latest_usage: Option<UsageMetadata> = None;
+
+            while let Some(chunk) = stream.next().await {
+                let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
+
+                if let Some(usage) = &response.usage_metadata {
+                    latest_usage = Some(usage.clone());
+                }
+
+                if let Some(candidate) = response.candidates.first() {
+                    for chunk in stream_chunks_from_candidate(candidate) {
+                        yield Ok(chunk);
+                    }
+                }
+            }
+
+            if let Some(usage) = latest_usage {
+                yield Ok(ModelStreamChunk::Usage(TokenUsage::from(&usage)));
+            }
+        })
+    }
+}
+
+/// Converts a single streamed [`Candidate`] into per-part [`ModelStreamChunk`]s.
+///
+/// Iterates the candidate's parts in order, emitting [`ModelStreamChunk::Thinking`]
+/// for thought text parts, [`ModelStreamChunk::TextDelta`] for regular text parts,
+/// and [`ModelStreamChunk::ToolCall`] for function calls (with `thought_signature`
+/// preserved in `provider_metadata`). Empty text parts are skipped.
+fn stream_chunks_from_candidate(candidate: &Candidate) -> Vec<ModelStreamChunk> {
+    let Some(parts) = candidate.content.as_ref().and_then(|c| c.parts.as_ref()) else {
+        return Vec::new();
+    };
+
+    let mut chunks = Vec::with_capacity(parts.len());
+    for part in parts {
+        match &part.data {
+            PartData::Text(text) if !text.is_empty() => {
+                if part.thought == Some(true) {
+                    chunks.push(ModelStreamChunk::Thinking(text.clone()));
+                } else {
+                    chunks.push(ModelStreamChunk::TextDelta(text.clone()));
+                }
+            }
+            PartData::FunctionCall { id, name, args } => {
+                let provider_metadata = part
+                    .thought_signature
+                    .as_ref()
+                    .map(|ts| serde_json::json!({ "thought_signature": ts }));
+                chunks.push(ModelStreamChunk::ToolCall(ToolCall {
+                    id: id.clone().unwrap_or_default(),
+                    name: name.clone(),
+                    args: args.clone().unwrap_or(serde_json::Value::Null),
+                    provider_metadata,
+                }));
+            }
+            _ => {}
+        }
+    }
+    chunks
 }
 
 /// Maps Gemini's [`UsageMetadata`] into [`TokenUsage`].
