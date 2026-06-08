@@ -171,14 +171,16 @@ impl OllamaModelBuilder {
 }
 
 /// Translates a [`ToolDefinition`] into an Ollama [`OllamaTool`].
-fn to_ollama_tool(def: &ToolDefinition) -> OllamaTool {
-    OllamaTool {
-        tool_type: ToolType::Function,
-        function: Function {
-            name: def.name.clone(),
-            description: def.description.clone(),
-            parameters: def.parameters.clone().into(),
-        },
+impl From<&ToolDefinition> for OllamaTool {
+    fn from(def: &ToolDefinition) -> OllamaTool {
+        OllamaTool {
+            tool_type: ToolType::Function,
+            function: Function {
+                name: def.name.clone(),
+                description: def.description.clone(),
+                parameters: def.parameters.clone().into(),
+            },
+        }
     }
 }
 
@@ -186,12 +188,14 @@ fn to_ollama_tool(def: &ToolDefinition) -> OllamaTool {
 ///
 /// Ollama has no call ID; the function name is used as a stable identifier
 /// (sufficient since we don't need to echo an ID back to Ollama).
-fn to_tool_call(tc: &OllamaToolCall) -> ToolCall {
-    ToolCall {
-        id: tc.function.name.clone(),
-        name: tc.function.name.clone(),
-        args: tc.function.arguments.clone(),
-        provider_metadata: None,
+impl From<&OllamaToolCall> for ToolCall {
+    fn from(tc: &OllamaToolCall) -> ToolCall {
+        ToolCall {
+            id: tc.function.name.clone(),
+            name: tc.function.name.clone(),
+            args: tc.function.arguments.clone(),
+            provider_metadata: None,
+        }
     }
 }
 
@@ -282,7 +286,7 @@ fn build_chat_request(
     }
 
     if !request.tools.is_empty() {
-        let ollama_tools: Vec<OllamaTool> = request.tools.iter().map(to_ollama_tool).collect();
+        let ollama_tools: Vec<OllamaTool> = request.tools.iter().map(OllamaTool::from).collect();
         // Ollama requires streaming to be disabled when using tools.
         builder = builder.tools(ollama_tools).stream(false);
     }
@@ -312,12 +316,7 @@ impl LlmModel for OllamaModel {
             let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
 
             if !response.message.tool_calls.is_empty() {
-                tool_calls = response
-                    .message
-                    .tool_calls
-                    .iter()
-                    .map(to_tool_call)
-                    .collect();
+                tool_calls = response.message.tool_calls.iter().map(From::from).collect();
             }
 
             output.push_str(&response.message.content);
@@ -366,7 +365,7 @@ impl LlmModel for OllamaModel {
 
                 // Tool calls come as a batch in non-streaming mode.
                 for tc in &response.message.tool_calls {
-                    yield Ok(ModelStreamChunk::ToolCall(to_tool_call(tc)));
+                    yield Ok(ModelStreamChunk::ToolCall(ToolCall::from(tc)));
                 }
 
                 // Emit text content as a delta (empty strings are skipped).
