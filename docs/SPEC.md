@@ -375,7 +375,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Response parts are split by `thought` flag: parts where `thought == Some(true)` are concatenated into `ModelResponse::thinking`; remaining text parts form `ModelResponse::text`. This surfaces reasoning tokens as `AgentEvent::ThinkingDelta` via the runner.
 - `provider_metadata` carries Gemini's `thought_signature`, which the adapter echoes back on both the replayed `FunctionCall` parts and the matching `FunctionResponse` parts.
 - Token usage: `usage_metadata` is mapped via `From<&UsageMetadata> for TokenUsage` — `prompt_token_count` → `input_tokens`, `candidates_token_count` → `output_tokens`, `cached_content_token_count` → `cached_input_tokens`, `thoughts_token_count` → `thinking_tokens`, `tool_use_prompt_token_count` → `tool_use_prompt_tokens`. Per-modality breakdowns (`*_tokens_details`) and `service_tier` are not propagated.
-- Uses the default `generate_stream` (wraps `generate`); text arrives as a single `TextDelta` after the full response is received. See Roadmap.
+- Implements `generate_stream` natively on top of `GeminiClient::stream_generate_content`. Each streamed `Candidate` part is converted to a chunk in order: thought `Text` parts become `Thinking`, regular `Text` parts become `TextDelta`, and `FunctionCall` parts become `ToolCall` (with `thought_signature` preserved in `provider_metadata`). The final `UsageMetadata` reported by the provider is emitted as a trailing `Usage` chunk.
 
 ### `OllamaModel` (`src/models/ollama.rs`)
 
@@ -471,5 +471,4 @@ skills/
 The following capabilities are planned but not yet implemented:
 
 1. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.
-2. **True token-by-token Gemini streaming.** `GeminiModel` currently uses the default `generate_stream` (wraps `generate`), so text arrives as a single `TextDelta` after the full response is received. A native implementation using `generate_content_stream` would emit tokens incrementally as they are generated. Thinking tokens and tool calls are already correctly separated and emitted.
-3. **Automatic conversation history.** All multi-turn flows today require the caller to maintain `Vec<Message>` and pass it on each `run`. A higher-level `Conversation` wrapper that records the thread automatically (with explicit access for trimming/compression) is sketched in `docs/PLAN-conversation.md` but not yet implemented.
+2. **Automatic conversation history.** All multi-turn flows today require the caller to maintain `Vec<Message>` and pass it on each `run`. A higher-level `Conversation` wrapper that records the thread automatically (with explicit access for trimming/compression) is sketched in `docs/PLAN-conversation.md` but not yet implemented.
