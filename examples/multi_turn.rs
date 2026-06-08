@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A streaming REPL demonstrating multi-turn conversation on top of
-//! [`MpscRunner`].
+//! [`AgentRunner`].
 //!
-//! `MpscRunner::run` takes ownership of the message thread for one run, so this
-//! example keeps the running history locally: each turn appends the user input
-//! to the thread, runs the agent, accumulates the assistant's reply from
-//! `TextDelta` events, and finally pushes a single
-//! `Message::assistant(reply)` so the next turn sees the full context.
+//! Each turn appends the user input to the thread and passes it to the runner.
+//! When the run completes, [`AgentEvent::EndTurn`] delivers the full updated
+//! thread — including any tool-call / tool-result pairs and the final assistant
+//! message — ready to pass straight back on the next turn. No manual message
+//! reconstruction needed.
 //!
 //! Run with:
 //!   GEMINI_API_KEY=... cargo run --example multi_turn
@@ -68,8 +68,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         print!("Assistant: ");
         io::stdout().flush()?;
 
-        let mut reply = String::new();
-        let mut stream = runner.run(&agent, thread.clone());
+        let mut stream = runner.run(&agent, thread);
+        thread = Vec::new();
         while let Some(event) = stream.next().await {
             match event.agent_event {
                 AgentEvent::ThinkingDelta(token) => {
@@ -79,7 +79,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 AgentEvent::TextDelta(chunk) => {
                     print!("{chunk}");
                     io::stdout().flush()?;
-                    reply.push_str(&chunk);
+                }
+                AgentEvent::EndTurn { thread: updated } => {
+                    thread = updated;
                 }
                 AgentEvent::Usage(usage) => {
                     println!("\n[runner] token usage: {usage:?}");
@@ -90,7 +92,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 _ => {}
             }
         }
-        thread.push(Message::assistant(reply));
         println!("\n");
 
         print!("You: ");

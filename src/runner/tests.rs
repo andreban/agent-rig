@@ -352,10 +352,11 @@ async fn thinking_chunks_are_forwarded() {
             AgentEvent::Usage(_) => "usage",
             AgentEvent::Cancelled => "cancelled",
             AgentEvent::Error(_) => "error",
+            AgentEvent::EndTurn { .. } => "end_turn",
         })
         .collect();
-    // Default `generate_stream` yields thinking before text.
-    assert_eq!(kinds, vec!["thinking", "text"]);
+    // Default `generate_stream` yields thinking before text, then end_turn.
+    assert_eq!(kinds, vec!["thinking", "text", "end_turn"]);
 }
 
 #[tokio::test]
