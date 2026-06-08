@@ -11,7 +11,7 @@
 use serde_json::Value;
 
 use crate::error::Error;
-use crate::model::TokenUsage;
+use crate::model::{Message, TokenUsage};
 
 /// Outcome of executing a single tool call.
 ///
@@ -71,6 +71,11 @@ impl From<Result<Value, Error>> for ToolCallResult {
 /// - [`Usage`](AgentEvent::Usage) reports token counts for one model call.
 ///   A run that performs `N` model calls produces up to `N` `Usage`
 ///   events; consumers sum across them to derive per-run totals.
+/// - [`EndTurn`](AgentEvent::EndTurn) is emitted as the last event on normal
+///   completion and carries the full conversation thread (including any
+///   [`ToolCalls`](crate::model::MessageContent::ToolCalls) and tool-result
+///   messages appended during the run). Use it to carry state forward into
+///   the next multi-turn prompt.
 /// - [`Cancelled`](AgentEvent::Cancelled) and [`Error`](AgentEvent::Error)
 ///   are terminal: the stream ends after either of them, and they are
 ///   mutually exclusive with the loop's normal completion (no tool calls
@@ -103,6 +108,21 @@ pub enum AgentEvent {
     /// tool-calling turns produces multiple `Usage` events). Provider
     /// adapters that do not report usage never produce this event.
     Usage(TokenUsage),
+    /// The run completed normally (no tool calls in the final model turn).
+    ///
+    /// Carries the full conversation thread as it stood when the loop exited,
+    /// including any tool-call and tool-result messages appended during the
+    /// run. Callers that maintain multi-turn state should capture this to
+    /// pass as the initial `thread` for the next [`AgentRunner::run`] call.
+    ///
+    /// Not emitted on [`Cancelled`](AgentEvent::Cancelled) or
+    /// [`Error`](AgentEvent::Error) paths.
+    ///
+    /// [`AgentRunner::run`]: super::AgentRunner::run
+    EndTurn {
+        /// The conversation thread at the point the loop exited.
+        thread: Vec<Message>,
+    },
     /// The run was cancelled — either because the consumer dropped the
     /// returned stream, or because an externally supplied
     /// [`CancellationToken`](tokio_util::sync::CancellationToken) fired.

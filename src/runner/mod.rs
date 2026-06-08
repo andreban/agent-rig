@@ -229,6 +229,7 @@ impl AgentRunner {
 
             let mut model_stream = self.model.generate_stream(request);
             let mut tool_calls: Vec<ToolCall> = Vec::new();
+            let mut reply = String::new();
             loop {
                 tokio::select! {
                     biased;
@@ -247,6 +248,7 @@ impl AgentRunner {
                                 let _ = tx.send(AgentEvent::ThinkingDelta(t)).await;
                             }
                             Ok(ModelStreamChunk::TextDelta(t)) => {
+                                reply.push_str(&t);
                                 let _ = tx.send(AgentEvent::TextDelta(t)).await;
                             }
                             Ok(ModelStreamChunk::ToolCall(call)) => {
@@ -265,7 +267,11 @@ impl AgentRunner {
             }
 
             if tool_calls.is_empty() {
-                break;
+                if !reply.is_empty() {
+                    thread.push(Message::assistant(reply));
+                }
+                let _ = tx.send(AgentEvent::EndTurn { thread }).await;
+                return;
             }
 
             self.handle_tool_calls(&tx, tool_calls, &mut thread, &cancel)
