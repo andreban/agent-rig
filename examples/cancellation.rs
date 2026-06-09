@@ -92,10 +92,10 @@ where
 {
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted { name, args } => {
+            AgentEvent::ToolCallStarted { name, args, .. } => {
                 println!("[{label}] started:   {name}({args})");
             }
-            AgentEvent::ToolCallFinished { name, result } => match result {
+            AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => println!("[{label}] finished:  {name} → {value}"),
                 ToolCallResult::Err(error) => println!("[{label}] error:     {name} → {error:?}"),
                 ToolCallResult::Denied => println!("[{label}] denied:    {name}"),
@@ -106,6 +106,7 @@ where
             AgentEvent::Usage(usage) => println!("\n[{label}] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[{label}] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[{label}] cancelled"),
+            AgentEvent::EndTurn { .. } => {}
         }
     }
 }

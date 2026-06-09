@@ -68,9 +68,13 @@ Emitted by [`LlmModel::generate_stream`]. The runner wraps these into [`AgentEve
 pub enum AgentEvent {
     /// Emitted before a tool executes (after authorization, if any).
     /// Hallucinated tool calls (no matching registry entry) do not emit this.
-    ToolCallStarted { name: String, args: serde_json::Value },
-    /// Emitted after a tool resolves, errors, or is denied.
-    ToolCallFinished { name: String, result: ToolCallResult },
+    /// `id` is the provider-assigned call identifier (matching `ToolCall::id`);
+    /// use it to correlate with the matching `ToolCallFinished`, since events
+    /// from parallel calls in a turn may interleave.
+    ToolCallStarted { id: String, name: String, args: serde_json::Value },
+    /// Emitted after a tool resolves, errors, or is denied. `id` matches the
+    /// corresponding `ToolCallStarted`.
+    ToolCallFinished { id: String, name: String, result: ToolCallResult },
     /// Reasoning token forwarded from the model stream.
     ThinkingDelta(String),
     /// Incremental text chunk forwarded from the model stream.

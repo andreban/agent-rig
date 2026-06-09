@@ -91,8 +91,8 @@ pub struct RunEvent {
 }
 
 pub enum AgentEvent {
-    ToolCallStarted { name: String, args: serde_json::Value },
-    ToolCallFinished { name: String, result: ToolCallResult },
+    ToolCallStarted { id: String, name: String, args: serde_json::Value },
+    ToolCallFinished { id: String, name: String, result: ToolCallResult },
     ThinkingDelta(String),
     TextDelta(String),
     Usage(TokenUsage),
@@ -199,11 +199,11 @@ use agent_rig::runner::{AgentEvent, ToolCallResult};
 
 while let Some(event) = stream.next().await {
     match event.agent_event {
-        AgentEvent::ToolCallStarted { name, args } => println!("[start] {name}({args})"),
-        AgentEvent::ToolCallFinished { name, result: ToolCallResult::Ok(value) } => {
+        AgentEvent::ToolCallStarted { name, args, .. } => println!("[start] {name}({args})"),
+        AgentEvent::ToolCallFinished { name, result: ToolCallResult::Ok(value), .. } => {
             println!("[done]  {name} → {value}");
         }
-        AgentEvent::ToolCallFinished { name, result: ToolCallResult::Err(e) } => {
+        AgentEvent::ToolCallFinished { name, result: ToolCallResult::Err(e), .. } => {
             println!("[err]   {name}: {e}");
         }
         AgentEvent::ToolCallFinished { result: ToolCallResult::Denied, .. } => {}

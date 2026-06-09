@@ -84,6 +84,11 @@ impl From<Result<Value, Error>> for ToolCallResult {
 pub enum AgentEvent {
     /// A registered tool is about to run with these arguments.
     ToolCallStarted {
+        /// Provider-assigned call identifier, matching
+        /// [`ToolCall::id`](crate::model::ToolCall::id). Use it to correlate
+        /// this event with its [`ToolCallFinished`](AgentEvent::ToolCallFinished)
+        /// — events from parallel calls in the same turn may interleave.
+        id: String,
         /// Name of the tool being invoked.
         name: String,
         /// The JSON arguments the model passed.
@@ -92,6 +97,12 @@ pub enum AgentEvent {
     /// A tool call resolved with [`ToolCallResult`]. Fires after the tool
     /// returns, errors, or is denied.
     ToolCallFinished {
+        /// Provider-assigned call identifier, matching the
+        /// [`ToolCallStarted`](AgentEvent::ToolCallStarted) `id` (and
+        /// [`ToolCall::id`](crate::model::ToolCall::id)). Use it to pair this
+        /// event with its `Started` — events from parallel calls in the same
+        /// turn may interleave.
+        id: String,
         /// Name of the tool that resolved.
         name: String,
         /// Outcome of the call.

@@ -333,6 +333,7 @@ impl AgentRunner {
                         let result = ToolCallResult::Denied;
                         let _ = tx
                             .send(AgentEvent::ToolCallFinished {
+                                id: call.id.clone(),
                                 name: call.name.clone(),
                                 result: result.clone(),
                             })
@@ -343,6 +344,7 @@ impl AgentRunner {
 
                 let _ = tx
                     .send(AgentEvent::ToolCallStarted {
+                        id: call.id.clone(),
                         name: call.name.clone(),
                         args: call.args.clone(),
                     })
@@ -373,6 +375,7 @@ impl AgentRunner {
                 debug!(tool = call.name, "tool call complete");
                 let _ = tx
                     .send(AgentEvent::ToolCallFinished {
+                        id: call.id.clone(),
                         name: call.name.clone(),
                         result: event.clone(),
                     })
