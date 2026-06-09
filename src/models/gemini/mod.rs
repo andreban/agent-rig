@@ -167,6 +167,21 @@ fn normalise_for_gemini(mut root: Value) -> Value {
     root
 }
 
+/// Ensures a tool result is a JSON object, as required by Gemini's
+/// `functionResponse.response` field (a protobuf `Struct`).
+///
+/// Tool results that already serialize to an object pass through unchanged.
+/// Scalar, array, or null results — which the Gemini API rejects with a
+/// `400 Bad Request` — are wrapped in `{ "output": <value> }`. This covers
+/// the synthesized string results for denied / errored / unknown tool calls
+/// as well as any tool whose `Ok` value is not an object.
+fn ensure_object_response(result: Value) -> Value {
+    match result {
+        Value::Object(_) => result,
+        other => serde_json::json!({ "output": other }),
+    }
+}
+
 fn resolve_refs(value: &mut Value, definitions: &Value) {
     match value {
         Value::Object(obj) => {
@@ -262,7 +277,7 @@ impl GeminiModel {
                                 data: PartData::FunctionResponse(FunctionResponse {
                                     id: Some(id.clone()),
                                     name: name.clone(),
-                                    response: result.clone(),
+                                    response: ensure_object_response(result.clone()),
                                     parts: None,
                                     will_continue: None,
                                     scheduling: None,

@@ -196,6 +196,36 @@ fn stream_chunks_returns_empty_for_candidate_without_content() {
 }
 
 #[test]
+fn ensure_object_response_passes_objects_through() {
+    let obj = json!({"temperature": 21, "unit": "C"});
+    assert_eq!(ensure_object_response(obj.clone()), obj);
+}
+
+#[test]
+fn ensure_object_response_wraps_strings() {
+    // Synthesized results for denied / errored / unknown tool calls are bare
+    // strings, which Gemini rejects unless wrapped in an object.
+    assert_eq!(
+        ensure_object_response(json!("Tool call denied")),
+        json!({"output": "Tool call denied"})
+    );
+}
+
+#[test]
+fn ensure_object_response_wraps_non_object_scalars_and_arrays() {
+    assert_eq!(ensure_object_response(json!(42)), json!({"output": 42}));
+    assert_eq!(ensure_object_response(json!(true)), json!({"output": true}));
+    assert_eq!(
+        ensure_object_response(json!([1, 2, 3])),
+        json!({"output": [1, 2, 3]})
+    );
+    assert_eq!(
+        ensure_object_response(Value::Null),
+        json!({"output": null})
+    );
+}
+
+#[test]
 fn stream_chunks_interleaves_thinking_text_and_tool_calls() {
     let candidate = make_candidate(vec![
         thought_part("planning"),
