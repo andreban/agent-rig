@@ -21,8 +21,8 @@ use serde_json::Value;
 use crate::{
     error::Error,
     model::{
-        LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk,
-        Role as AgentRole, TokenUsage, ToolCall,
+        LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role as AgentRole,
+        TokenUsage, ToolCall,
     },
     tools::ToolDefinition,
 };

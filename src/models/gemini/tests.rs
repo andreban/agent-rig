@@ -124,10 +124,7 @@ fn extract_returns_none_for_empty_content() {
 
 #[test]
 fn stream_chunks_emits_thinking_then_text_in_part_order() {
-    let candidate = make_candidate(vec![
-        thought_part("reasoning..."),
-        text_part("answer"),
-    ]);
+    let candidate = make_candidate(vec![thought_part("reasoning..."), text_part("answer")]);
     let chunks = stream_chunks_from_candidate(&candidate);
     assert_eq!(chunks.len(), 2);
     assert!(matches!(&chunks[0], ModelStreamChunk::Thinking(t) if t == "reasoning..."));
@@ -136,10 +133,7 @@ fn stream_chunks_emits_thinking_then_text_in_part_order() {
 
 #[test]
 fn stream_chunks_emits_one_chunk_per_part() {
-    let candidate = make_candidate(vec![
-        text_part("hello "),
-        text_part("world"),
-    ]);
+    let candidate = make_candidate(vec![text_part("hello "), text_part("world")]);
     let chunks = stream_chunks_from_candidate(&candidate);
     assert_eq!(chunks.len(), 2);
     assert!(matches!(&chunks[0], ModelStreamChunk::TextDelta(t) if t == "hello "));
