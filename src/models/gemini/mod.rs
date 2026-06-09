@@ -459,7 +459,14 @@ impl LlmModel for GeminiModel {
                 }
 
                 if let Some(candidate) = response.candidates.first() {
-                    for chunk in stream_chunks_from_candidate(candidate) {
+                    // Yield text_chunks first so message and thoughts related to the tool
+                    // call are made available before the tool call happens, giving more
+                    // context to the too usage/permission.
+                    let (text_chunks, tool_calls) = stream_chunks_from_candidate(candidate);
+                    for chunk in text_chunks {
+                        yield Ok(chunk);
+                    }
+                    for chunk in tool_calls {
                         yield Ok(chunk);
                     }
                 }
@@ -477,20 +484,28 @@ impl LlmModel for GeminiModel {
 /// Iterates the candidate's parts in order, emitting [`ModelStreamChunk::Thinking`]
 /// for thought text parts, [`ModelStreamChunk::TextDelta`] for regular text parts,
 /// and [`ModelStreamChunk::ToolCall`] for function calls (with `thought_signature`
-/// preserved in `provider_metadata`). Empty text parts are skipped.
-fn stream_chunks_from_candidate(candidate: &Candidate) -> Vec<ModelStreamChunk> {
+/// preserved in `provider_metadata`). Empty text parts and any other part kinds
+/// are skipped.
+///
+/// Returns `(text_chunks, tool_calls)`, keeping text/thinking chunks separate
+/// from tool-call chunks so callers can emit text before dispatching tools.
+/// Both vectors are empty when the candidate has no content or parts.
+fn stream_chunks_from_candidate(
+    candidate: &Candidate,
+) -> (Vec<ModelStreamChunk>, Vec<ModelStreamChunk>) {
     let Some(parts) = candidate.content.as_ref().and_then(|c| c.parts.as_ref()) else {
-        return Vec::new();
+        return (vec![], vec![]);
     };
 
-    let mut chunks = Vec::with_capacity(parts.len());
+    let mut text_chunks = vec![];
+    let mut tool_calls = vec![];
     for part in parts {
         match &part.data {
             PartData::Text(text) if !text.is_empty() => {
                 if part.thought == Some(true) {
-                    chunks.push(ModelStreamChunk::Thinking(text.clone()));
+                    text_chunks.push(ModelStreamChunk::Thinking(text.clone()));
                 } else {
-                    chunks.push(ModelStreamChunk::TextDelta(text.clone()));
+                    text_chunks.push(ModelStreamChunk::TextDelta(text.clone()));
                 }
             }
             PartData::FunctionCall { id, name, args } => {
@@ -498,7 +513,7 @@ fn stream_chunks_from_candidate(candidate: &Candidate) -> Vec<ModelStreamChunk> 
                     .thought_signature
                     .as_ref()
                     .map(|ts| serde_json::json!({ "thought_signature": ts }));
-                chunks.push(ModelStreamChunk::ToolCall(ToolCall {
+                tool_calls.push(ModelStreamChunk::ToolCall(ToolCall {
                     id: id.clone().unwrap_or_default(),
                     name: name.clone(),
                     args: args.clone().unwrap_or(serde_json::Value::Null),
@@ -508,7 +523,7 @@ fn stream_chunks_from_candidate(candidate: &Candidate) -> Vec<ModelStreamChunk> 
             _ => {}
         }
     }
-    chunks
+    (text_chunks, tool_calls)
 }
 
 /// Maps Gemini's [`UsageMetadata`] into [`TokenUsage`].

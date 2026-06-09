@@ -125,27 +125,30 @@ fn extract_returns_none_for_empty_content() {
 #[test]
 fn stream_chunks_emits_thinking_then_text_in_part_order() {
     let candidate = make_candidate(vec![thought_part("reasoning..."), text_part("answer")]);
-    let chunks = stream_chunks_from_candidate(&candidate);
-    assert_eq!(chunks.len(), 2);
-    assert!(matches!(&chunks[0], ModelStreamChunk::Thinking(t) if t == "reasoning..."));
-    assert!(matches!(&chunks[1], ModelStreamChunk::TextDelta(t) if t == "answer"));
+    let (text_chunks, tool_calls) = stream_chunks_from_candidate(&candidate);
+    assert_eq!(text_chunks.len(), 2);
+    assert!(tool_calls.is_empty());
+    assert!(matches!(&text_chunks[0], ModelStreamChunk::Thinking(t) if t == "reasoning..."));
+    assert!(matches!(&text_chunks[1], ModelStreamChunk::TextDelta(t) if t == "answer"));
 }
 
 #[test]
 fn stream_chunks_emits_one_chunk_per_part() {
     let candidate = make_candidate(vec![text_part("hello "), text_part("world")]);
-    let chunks = stream_chunks_from_candidate(&candidate);
-    assert_eq!(chunks.len(), 2);
-    assert!(matches!(&chunks[0], ModelStreamChunk::TextDelta(t) if t == "hello "));
-    assert!(matches!(&chunks[1], ModelStreamChunk::TextDelta(t) if t == "world"));
+    let (text_chunks, tool_calls) = stream_chunks_from_candidate(&candidate);
+    assert_eq!(text_chunks.len(), 2);
+    assert!(tool_calls.is_empty());
+    assert!(matches!(&text_chunks[0], ModelStreamChunk::TextDelta(t) if t == "hello "));
+    assert!(matches!(&text_chunks[1], ModelStreamChunk::TextDelta(t) if t == "world"));
 }
 
 #[test]
 fn stream_chunks_skips_empty_text_parts() {
     let candidate = make_candidate(vec![text_part(""), text_part("hi")]);
-    let chunks = stream_chunks_from_candidate(&candidate);
-    assert_eq!(chunks.len(), 1);
-    assert!(matches!(&chunks[0], ModelStreamChunk::TextDelta(t) if t == "hi"));
+    let (text_chunks, tool_calls) = stream_chunks_from_candidate(&candidate);
+    assert_eq!(text_chunks.len(), 1);
+    assert!(tool_calls.is_empty());
+    assert!(matches!(&text_chunks[0], ModelStreamChunk::TextDelta(t) if t == "hi"));
 }
 
 #[test]
@@ -155,9 +158,10 @@ fn stream_chunks_emits_function_calls() {
         "lookup",
         json!({"q": "rust"}),
     )]);
-    let chunks = stream_chunks_from_candidate(&candidate);
-    assert_eq!(chunks.len(), 1);
-    match &chunks[0] {
+    let (text_chunks, tool_calls) = stream_chunks_from_candidate(&candidate);
+    assert!(text_chunks.is_empty());
+    assert_eq!(tool_calls.len(), 1);
+    match &tool_calls[0] {
         ModelStreamChunk::ToolCall(tc) => {
             assert_eq!(tc.id, "call-1");
             assert_eq!(tc.name, "lookup");
@@ -173,8 +177,8 @@ fn stream_chunks_preserves_thought_signature_on_tool_calls() {
     let mut part = function_call_part("call-1", "lookup", json!({}));
     part.thought_signature = Some("sig-abc".to_string());
     let candidate = make_candidate(vec![part]);
-    let chunks = stream_chunks_from_candidate(&candidate);
-    match &chunks[0] {
+    let (_text_chunks, tool_calls) = stream_chunks_from_candidate(&candidate);
+    match &tool_calls[0] {
         ModelStreamChunk::ToolCall(tc) => {
             let meta = tc.provider_metadata.as_ref().expect("provider_metadata");
             assert_eq!(meta["thought_signature"], "sig-abc");
@@ -192,7 +196,9 @@ fn stream_chunks_returns_empty_for_candidate_without_content() {
         safety_ratings: None,
         index: 0,
     };
-    assert!(stream_chunks_from_candidate(&candidate).is_empty());
+    let (text_chunks, tool_calls) = stream_chunks_from_candidate(&candidate);
+    assert!(text_chunks.is_empty());
+    assert!(tool_calls.is_empty());
 }
 
 #[test]
@@ -226,15 +232,16 @@ fn ensure_object_response_wraps_non_object_scalars_and_arrays() {
 }
 
 #[test]
-fn stream_chunks_interleaves_thinking_text_and_tool_calls() {
+fn stream_chunks_separates_thinking_text_and_tool_calls() {
     let candidate = make_candidate(vec![
         thought_part("planning"),
         text_part("Calling tool now"),
         function_call_part("c1", "fetch", json!({"url": "x"})),
     ]);
-    let chunks = stream_chunks_from_candidate(&candidate);
-    assert_eq!(chunks.len(), 3);
-    assert!(matches!(&chunks[0], ModelStreamChunk::Thinking(_)));
-    assert!(matches!(&chunks[1], ModelStreamChunk::TextDelta(_)));
-    assert!(matches!(&chunks[2], ModelStreamChunk::ToolCall(_)));
+    let (text_chunks, tool_calls) = stream_chunks_from_candidate(&candidate);
+    assert_eq!(text_chunks.len(), 2);
+    assert!(matches!(&text_chunks[0], ModelStreamChunk::Thinking(_)));
+    assert!(matches!(&text_chunks[1], ModelStreamChunk::TextDelta(_)));
+    assert_eq!(tool_calls.len(), 1);
+    assert!(matches!(&tool_calls[0], ModelStreamChunk::ToolCall(_)));
 }
