@@ -356,12 +356,24 @@ impl LlmModel for OllamaModel {
         request: ModelRequest,
     ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
         Box::pin(async_stream::stream! {
-            let chat_request = build_chat_request(
-                &self.model, self.options.clone(), self.think.clone(), request)?;
+            let chat_request = match build_chat_request(
+                &self.model, self.options.clone(), self.think.clone(), request) {
+                    Ok(chat_request) => chat_request,
+                    Err(e) => {
+                        yield Err(Error::Provider(e.to_string()));
+                        return;
+                    }
+                };
             let mut stream = self.client.chat(chat_request);
 
             while let Some(chunk) = stream.next().await {
-                let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
+                let response = match chunk {
+                    Ok(response) => response,
+                    Err(e) => {
+                        yield Err(Error::Provider(e.to_string()));
+                        return;
+                    }
+                };
 
                 // Tool calls come as a batch in non-streaming mode.
                 for tc in &response.message.tool_calls {

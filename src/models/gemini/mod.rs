@@ -413,11 +413,17 @@ impl LlmModel for GeminiModel {
     ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
         Box::pin(async_stream::stream! {
             let gemini_request = self.build_gemini_request(request);
-            let stream = self
+            let stream = match self
                 .client
                 .stream_generate_content(&gemini_request, &self.model)
-                .await
-                .map_err(|e| Error::Provider(e.to_string()))?;
+                .await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        yield Err(Error::Provider(e.to_string()));
+                        return;
+                    }
+                };
+
             let mut stream = Box::pin(stream);
 
             // Gemini reports usage cumulatively on each chunk; keep the latest
@@ -425,7 +431,13 @@ impl LlmModel for GeminiModel {
             let mut latest_usage: Option<UsageMetadata> = None;
 
             while let Some(chunk) = stream.next().await {
-                let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
+                let response = match chunk {
+                    Ok(response) => response,
+                    Err(e) => {
+                        yield Err(Error::Provider(e.to_string()));
+                        return;
+                    }
+                };
 
                 if let Some(usage) = &response.usage_metadata {
                     latest_usage = Some(usage.clone());

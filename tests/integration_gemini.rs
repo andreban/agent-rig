@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use agent_rig::error::Error;
-use agent_rig::model::Message;
+use agent_rig::model::{LlmModel, Message, ModelRequest};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
@@ -159,6 +159,57 @@ async fn agent_run_reports_token_usage() {
     let usage = got_usage.expect("Gemini must report token usage");
     assert!(usage.input_tokens.unwrap_or(0) > 0);
     assert!(usage.output_tokens.unwrap_or(0) > 0);
+}
+
+/// Regression test for #43: when the provider rejects a streaming request, the
+/// failure must surface as an `Err` stream item — never a silently-empty stream
+/// that the runner reads as a normal empty turn.
+///
+/// This reproduces the exact scenario from the issue: a function-response turn
+/// with no preceding function-call turn (what a denied/replayed tool call
+/// produces). Gemini rejects it with `400 INVALID_ARGUMENT`. The contract under
+/// test is that `generate_stream` yields a [`Error::Provider`] rather than
+/// ending with zero items.
+///
+/// Gated on a real `GEMINI_API_KEY` because the rejection comes from the live
+/// API; it is a no-op pass when no key is configured, matching the other tests
+/// in this file.
+#[tokio::test]
+async fn generate_stream_surfaces_rejected_request() {
+    let Some(api_key) = api_key() else { return };
+
+    let model = GeminiModel::new(api_key, MODEL);
+    // A tool result with no preceding tool-call turn — the malformed replay
+    // thread described in #43. Gemini responds 400 INVALID_ARGUMENT:
+    // "function response turn must come immediately after a function call turn".
+    let request = ModelRequest {
+        messages: vec![Message::tool_result(
+            "ghost-call".to_string(),
+            "ghost".to_string(),
+            json!({ "ok": true }),
+            None,
+        )],
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    };
+
+    let mut stream = model.generate_stream(request);
+    let mut items = Vec::new();
+    while let Some(item) = stream.next().await {
+        items.push(item);
+    }
+
+    assert!(
+        !items.is_empty(),
+        "stream ended silently with zero items; the rejected request was \
+         swallowed and is indistinguishable from a successful empty turn (#43)"
+    );
+    assert!(
+        items.iter().any(|i| matches!(i, Err(Error::Provider(_)))),
+        "expected a Provider error to be yielded for the rejected request, \
+         got: {items:?}"
+    );
 }
 
 #[tokio::test]
