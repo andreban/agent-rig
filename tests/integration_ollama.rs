@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use agent_rig::error::Error;
-use agent_rig::model::Message;
+use agent_rig::model::{LlmModel, Message, ModelRequest};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::ollama::OllamaModel};
@@ -198,6 +198,41 @@ async fn agent_tool_calling_returns_correct_result() {
     assert!(
         output.contains("42"),
         "expected '42' in output, got: {output}"
+    );
+}
+
+/// Regression test for #43: a provider failure in the streaming path must
+/// surface as an `Err` stream item, not a silently-empty stream.
+///
+/// Pointing the model at a port with nothing listening makes the underlying
+/// `chat` request fail with a connection error. This needs no live Ollama
+/// server and is fully deterministic. Before the fix the `?` inside the
+/// `async_stream::stream!` block dropped the error and ended the generator
+/// with zero items; now the error is yielded.
+#[tokio::test]
+async fn generate_stream_surfaces_provider_error() {
+    // Port 1 has nothing listening, so the connection is refused immediately.
+    let model = OllamaModel::new("http://127.0.0.1:1", "no-such-model");
+    let request = ModelRequest {
+        messages: vec![Message::user("hello")],
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    };
+
+    let mut stream = model.generate_stream(request);
+    let mut items = Vec::new();
+    while let Some(item) = stream.next().await {
+        items.push(item);
+    }
+
+    assert!(
+        !items.is_empty(),
+        "stream ended silently with no items; the provider error was swallowed (#43)"
+    );
+    assert!(
+        items.iter().any(|i| matches!(i, Err(Error::Provider(_)))),
+        "expected a Provider error to be yielded, got: {items:?}"
     );
 }
 
