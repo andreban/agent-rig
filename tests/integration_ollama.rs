@@ -50,8 +50,28 @@ fn ollama_model() -> String {
     std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".to_string())
 }
 
+/// Returns `true` only when the Ollama server is reachable *and* the model
+/// returned by [`ollama_model`] is actually pulled. When either is missing the
+/// tests skip (return early as a pass), so the suite is a clean no-op on a
+/// machine without Ollama or without the configured model — instead of failing
+/// with confusing empty-output assertions. Set `OLLAMA_MODEL` to a model you
+/// have pulled (e.g. `OLLAMA_MODEL=gemma4:e2b`) to actually exercise them.
 async fn ollama_available(url: &str) -> bool {
-    reqwest::get(format!("{url}/api/version")).await.is_ok()
+    let Ok(resp) = reqwest::get(format!("{url}/api/tags")).await else {
+        return false;
+    };
+    let Ok(body) = resp.json::<Value>().await else {
+        return false;
+    };
+    let want = ollama_model();
+    body["models"].as_array().is_some_and(|models| {
+        models.iter().any(|m| {
+            m["name"].as_str().is_some_and(|name| {
+                // Match the full tag (`qwen3:8b`) or a bare name (`qwen3`).
+                name == want.as_str() || name.split(':').next() == Some(want.as_str())
+            })
+        })
+    })
 }
 
 async fn collect_text(runner: AgentRunner, agent: Agent, prompt: &str) -> String {

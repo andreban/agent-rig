@@ -146,14 +146,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print!("{chunk}");
                 output.push_str(&chunk);
             }
-            AgentEvent::ToolCallStarted { name, args } => {
+            AgentEvent::ToolCallStarted { name, args, .. } => {
                 if in_thinking {
                     println!("\x1b[0m");
                     in_thinking = false;
                 }
                 println!("[tool →] {name}({args})");
             }
-            AgentEvent::ToolCallFinished { name, result } => match result {
+            AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => println!("[tool ←] {name} = {value}"),
                 ToolCallResult::Err(error) => println!("[tool ✗] {name} → {error:?}"),
                 ToolCallResult::Denied => println!("[tool ⨯] {name} denied"),
@@ -162,6 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Usage(usage) => println!("[usage] {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
+            AgentEvent::EndTurn { .. } => {}
         }
     }
 

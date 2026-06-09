@@ -144,10 +144,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted { name, args } => {
+            AgentEvent::ToolCallStarted { name, args, .. } => {
                 println!("\n[runner] started:   {name}({args})");
             }
-            AgentEvent::ToolCallFinished { name, result } => match result {
+            AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
                 ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
                 ToolCallResult::Denied => println!("[runner] denied:    {name}"),
@@ -158,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Usage(usage) => println!("\n[runner] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
+            AgentEvent::EndTurn { .. } => {}
         }
     }
 

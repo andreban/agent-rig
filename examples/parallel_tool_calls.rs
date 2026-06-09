@@ -110,20 +110,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted { name, args } => {
-                println!("[runner] started:   {name}({args})");
+            AgentEvent::ToolCallStarted { id, name, args } => {
+                println!("[runner] started:   #{id} {name}({args})");
             }
-            AgentEvent::ToolCallFinished { name, result } => match result {
-                ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
-                ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
-                ToolCallResult::Denied => println!("[runner] denied:    {name}"),
-                ToolCallResult::Unknown => println!("[runner] unknown:   {name}"),
+            // Events from parallel calls interleave, so pair finished with
+            // started by `id` rather than by `name`.
+            AgentEvent::ToolCallFinished { id, name, result } => match result {
+                ToolCallResult::Ok(value) => println!("[runner] finished:  #{id} {name} → {value}"),
+                ToolCallResult::Err(error) => {
+                    println!("[runner] error:     #{id} {name} → {error:?}")
+                }
+                ToolCallResult::Denied => println!("[runner] denied:    #{id} {name}"),
+                ToolCallResult::Unknown => println!("[runner] unknown:   #{id} {name}"),
             },
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("\n[runner] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
+            AgentEvent::EndTurn { .. } => {}
         }
     }
 

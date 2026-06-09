@@ -102,10 +102,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::TextDelta(chunk) => {
                 print!("{chunk}");
             }
-            AgentEvent::ToolCallStarted { name, args } => {
+            AgentEvent::ToolCallStarted { name, args, .. } => {
                 println!("[runner] tool call started: {name}({args})");
             }
-            AgentEvent::ToolCallFinished { name, result } => match result {
+            AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => {
                     println!("[runner] tool call finished: {name} → {value}")
                 }
@@ -118,6 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Usage(usage) => println!("[runner] token usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
+            AgentEvent::EndTurn { .. } => {}
         }
     }
 

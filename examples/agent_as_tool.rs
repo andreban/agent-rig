@@ -107,10 +107,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     answer.push_str(&chunk);
                 }
             }
-            AgentEvent::ToolCallStarted { name, args } => {
+            AgentEvent::ToolCallStarted { name, args, .. } => {
                 println!("{prefix} started:  {name}({args})");
             }
-            AgentEvent::ToolCallFinished { name, result } => match result {
+            AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => {
                     println!("{prefix} ok:       {name} → {value}")
                 }
@@ -133,6 +133,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             AgentEvent::Cancelled => {
                 println!("{prefix} cancelled")
             }
+            AgentEvent::EndTurn { .. } => {}
         }
     }
     println!("\n--- final answer ---\n{answer}");
