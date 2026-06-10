@@ -90,10 +90,10 @@ impl AuthManager for StdinPromptAuthManager {
         self.protected.contains(name)
     }
 
-    async fn authorize(&self, name: &str, args: &Value) -> bool {
+    async fn authorize(&self, id: &str, name: &str, args: &Value) -> bool {
         let _guard = self.prompt_lock.lock().await;
 
-        println!("\n[auth]  Tool '{name}' wants to run with args:");
+        println!("\n[auth]  Tool '{name}' (id {id}) wants to run with args:");
         println!("[auth]    {args}");
         print!("[auth]  Approve? [y/N]: ");
         use std::io::Write;

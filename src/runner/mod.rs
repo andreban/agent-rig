@@ -327,7 +327,7 @@ impl AgentRunner {
                                 ToolCallResult::Err(Error::Agent("cancelled".into())),
                             );
                         }
-                        decision = auth.authorize(&call.name, &call.args) => decision,
+                        decision = auth.authorize(&call.id, &call.name, &call.args) => decision,
                     };
                     if !allowed {
                         let result = ToolCallResult::Denied;

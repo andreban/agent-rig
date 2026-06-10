@@ -270,7 +270,7 @@ impl AuthManager for ScriptedAuth {
         self.required
     }
 
-    async fn authorize(&self, name: &str, _args: &Value) -> bool {
+    async fn authorize(&self, _id: &str, name: &str, _args: &Value) -> bool {
         self.calls.lock().unwrap().push(name.to_string());
         self.decisions
             .lock()

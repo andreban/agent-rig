@@ -340,7 +340,7 @@ The `cancel` token is forwarded to the child via `run_with_cancellation`, so can
 #[async_trait]
 pub trait AuthManager: Send + Sync {
     fn requires_authorization(&self, name: &str, args: &Value) -> bool { true }
-    async fn authorize(&self, name: &str, args: &Value) -> bool;
+    async fn authorize(&self, id: &str, name: &str, args: &Value) -> bool;
 }
 ```
 
@@ -349,7 +349,7 @@ Optional hook on `AgentRunner` (set via `with_auth_manager`). With no manager se
 The trait has two methods so the cheap filter and the async decision can live apart:
 
 - `requires_authorization` — sync, must be cheap. The runner calls it first; if it returns `false`, `authorize` is skipped entirely. No I/O, no locks, no awaits.
-- `authorize` — async; may block on user input, RPC, dialogs, etc. Returns `true` to allow, `false` to deny. Denial is binary — the runner reports it via `ToolCallResult::Denied` with no accompanying reason. (This matches a user-facing accept/decline approval prompt.)
+- `authorize` — async; may block on user input, RPC, dialogs, etc. Returns `true` to allow, `false` to deny. Denial is binary — the runner reports it via `ToolCallResult::Denied` with no accompanying reason. (This matches a user-facing accept/decline approval prompt.) `id` is the tool call's identifier — the same id the runner later reports on `ToolCallStarted`/`ToolCallFinished` — so an out-of-process approver (editor permission request, GUI dialog, remote service) can correlate the prompt with the call.
 
 `authorize` may be called concurrently when the model returns multiple tool calls in one turn. Implementations sharing UI resources (stdin, a modal dialog) must serialize internally — typically with a `tokio::sync::Mutex`. The lock belongs in `authorize`, not in `requires_authorization`.
 
