@@ -303,9 +303,9 @@ impl AuthManager for ProtectedTools {
         self.names.contains(name)
     }
 
-    async fn authorize(&self, name: &str, args: &Value) -> bool {
+    async fn authorize(&self, id: &str, name: &str, args: &Value) -> bool {
         // Async. Prompt the user, call a policy service, etc.
-        prompt_user(name, args).await
+        prompt_user(id, name, args).await
     }
 }
 
