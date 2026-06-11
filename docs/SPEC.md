@@ -66,7 +66,8 @@ Emitted by [`LlmModel::generate_stream`]. The runner wraps these into [`AgentEve
 
 ```rust
 pub enum AgentEvent {
-    /// Emitted before a tool executes (after authorization, if any).
+    /// Emitted before authorization and execution. A denied call therefore
+    /// still emits this, followed by `ToolCallFinished { Denied }`.
     /// Hallucinated tool calls (no matching registry entry) do not emit this.
     /// `id` is the provider-assigned call identifier (matching `ToolCall::id`);
     /// use it to correlate with the matching `ToolCallFinished`, since events
@@ -115,7 +116,7 @@ pub enum ToolCallResult {
 }
 ```
 
-The outcome carried by `AgentEvent::ToolCallFinished`. `Unknown` is a special case: hallucinated tool calls emit *no* `ToolCallStarted` event, but the runner still appends a synthetic tool-result message to the thread so the assistant turn and tool-result messages stay paired. `Denied` similarly emits no `ToolCallStarted`.
+The outcome carried by `AgentEvent::ToolCallFinished`. `Unknown` is a special case: hallucinated tool calls emit *no* `ToolCallStarted` event, but the runner still appends a synthetic tool-result message to the thread so the assistant turn and tool-result messages stay paired. A `Denied` call, by contrast, *does* emit `ToolCallStarted` (emitted before the authorization gate) followed by `ToolCallFinished { Denied }`.
 
 ### `ModelRequest` / `ModelResponse` / `ToolCall` (`src/model.rs`)
 
@@ -289,7 +290,7 @@ The caller is responsible for maintaining conversation history across turns: eac
 2. Drive `model.generate_stream(request)` — forward `ThinkingDelta`/`TextDelta` events; collect any tool calls.
 3. If no tool calls were issued, the loop ends.
 4. Append the tool calls as a single assistant turn (`Message::tool_calls`).
-5. For each tool call, run a future that: looks up the tool in the registry; if missing, returns `Unknown` with no events. Otherwise consults the `AuthManager` (if any); on denial, emits `ToolCallFinished { Denied }`. On allow, emits `ToolCallStarted`, runs the tool (or sub-agent), then emits `ToolCallFinished` with the result.
+5. For each tool call, run a future that: looks up the tool in the registry; if missing, returns `Unknown` with no events. Otherwise emits `ToolCallStarted`, then consults the `AuthManager` (if any); on denial, emits `ToolCallFinished { Denied }`. On allow, runs the tool (or sub-agent), then emits `ToolCallFinished` with the result.
 6. All tool futures run **concurrently** via `futures_util::future::join_all`. `join_all` preserves input order in its return value, so tool-result messages are appended in the same order the model issued them — even though events may interleave.
 7. Repeat from step 1.
 
