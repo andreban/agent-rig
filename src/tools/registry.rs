@@ -3,9 +3,12 @@ use std::collections::HashMap;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::tools::{
-    agent_tool::AgentTool,
-    tool::{ErasedTool, Tool, ToolBridge, ToolDefinition},
+use crate::{
+    error::Error,
+    tools::{
+        agent_tool::AgentTool,
+        tool::{ErasedTool, Tool, ToolBridge, ToolDefinition},
+    },
 };
 /// One entry stored in a [`ToolRegistry`].
 ///
@@ -33,10 +36,10 @@ impl ToolRegistryEntry {
         }
     }
 
-    pub fn title(&self, args: &Value) -> String {
+    pub fn title(&self, args: &Value) -> Result<String, Error> {
         match self {
-            ToolRegistryEntry::Tool(t) => t.title(args).to_string(),
-            ToolRegistryEntry::Agent(a) => a.name().to_string(),
+            ToolRegistryEntry::Tool(t) => t.title(args),
+            ToolRegistryEntry::Agent(a) => Ok(a.name().to_string()),
         }
     }
 }

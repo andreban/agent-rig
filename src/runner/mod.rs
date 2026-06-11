@@ -319,7 +319,7 @@ impl AgentRunner {
                         id: call.id.clone(),
                         name: call.name.clone(),
                         args: call.args.clone(),
-                        title: tool.title(&call.args),
+                        title: tool.title(&call.args).unwrap_or(call.name.clone()),
                     })
                     .await;
 
