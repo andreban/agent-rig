@@ -108,7 +108,15 @@ where
     I: DeserializeOwned + Send,
     O: Serialize + Send,
 {
-    fn title(&self, _args: &Value) -> String {
+    /// Returns a short, human-readable title for a specific invocation,
+    /// surfaced on [`AgentEvent::ToolCallStarted`].
+    ///
+    /// The default returns the tool's name. Override it to derive a more
+    /// descriptive label from the decoded `args` (for example,
+    /// `"Read foo.rs"` instead of `"read_file"`).
+    ///
+    /// [`AgentEvent::ToolCallStarted`]: crate::runner::AgentEvent::ToolCallStarted
+    fn title(&self, _args: &I) -> String {
         self.definition().name.clone()
     }
 
@@ -147,7 +155,7 @@ where
 #[async_trait]
 pub trait ErasedTool: Send + Sync {
     fn definition(&self) -> &ToolDefinition;
-    fn title(&self, args: &Value) -> String;
+    fn title(&self, args: &Value) -> Result<String, Error>;
     async fn call(
         &self,
         args: serde_json::Value,
@@ -181,8 +189,11 @@ where
     O: Serialize + Send,
 {
     // Returns the name of this tool.
-    fn title(&self, args: &Value) -> String {
-        self.tool.title(args)
+    fn title(&self, args: &Value) -> Result<String, Error> {
+        let typed: I = serde_json::from_value(args.clone())
+            .map_err(|e| Error::Agent(format!("invalid tool arguments: {e}")))?;
+        let result = self.tool.title(&typed);
+        Ok(result)
     }
 
     fn definition(&self) -> &ToolDefinition {
