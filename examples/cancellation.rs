@@ -37,22 +37,32 @@ const MODEL: &str = "gemini-3.1-flash-lite";
 /// Tool that "uploads" a file by sleeping. Cooperates with cancellation:
 /// the `tokio::select!` against `cancel.cancelled()` aborts the upload
 /// cleanly instead of running to completion.
-struct SlowUploadTool;
+struct SlowUploadTool {
+    definition: ToolDefinition,
+}
+
+impl Default for SlowUploadTool {
+    fn default() -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "upload".to_string(),
+                description: "Uploads a file. Takes about 5 seconds.".to_string(),
+                parameters: json_schema!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl Tool<Value, Value> for SlowUploadTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "upload".to_string(),
-            description: "Uploads a file. Takes about 5 seconds.".to_string(),
-            parameters: json_schema!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string" }
-                },
-                "required": ["path"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, args: Value, cancel: CancellationToken) -> Result<Value, Error> {
@@ -73,7 +83,7 @@ impl Tool<Value, Value> for SlowUploadTool {
 
 fn build_runner(api_key: String) -> (AgentRunner, Agent) {
     let model = GeminiModel::new(api_key, MODEL);
-    let registry = Arc::new(ToolRegistry::new().register(SlowUploadTool));
+    let registry = Arc::new(ToolRegistry::new().register(SlowUploadTool::default()));
     let runner = AgentRunner::with_registry(Arc::new(model), registry);
     let agent = Agent::builder()
         .name("Uploader")

@@ -71,8 +71,10 @@ pub enum AgentEvent {
     /// Hallucinated tool calls (no matching registry entry) do not emit this.
     /// `id` is the provider-assigned call identifier (matching `ToolCall::id`);
     /// use it to correlate with the matching `ToolCallFinished`, since events
-    /// from parallel calls in a turn may interleave.
-    ToolCallStarted { id: String, name: String, args: serde_json::Value },
+    /// from parallel calls in a turn may interleave. `title` is a
+    /// human-readable display label for the call, derived from the tool's
+    /// `Tool::title(&args)` (defaulting to the tool name).
+    ToolCallStarted { id: String, name: String, args: serde_json::Value, title: String },
     /// Emitted after a tool resolves, errors, or is denied. `id` matches the
     /// corresponding `ToolCallStarted`.
     ToolCallFinished { id: String, name: String, result: ToolCallResult },
@@ -194,7 +196,12 @@ where
     I: DeserializeOwned + Send,
     O: Serialize + Send,
 {
-    fn definition(&self) -> ToolDefinition;
+    /// Borrows the tool's definition; tools own a `ToolDefinition` and return
+    /// a reference to it rather than rebuilding one per call.
+    fn definition(&self) -> &ToolDefinition;
+    /// Human-readable display label for a specific invocation. Defaults to the
+    /// tool name; override to surface argument-dependent labels.
+    fn title(&self, args: &serde_json::Value) -> String { self.definition().name.clone() }
     async fn call(
         &self,
         args: I,
@@ -208,7 +215,8 @@ where
 // hold tools with different argument and result types.
 #[doc(hidden)]
 pub trait ErasedTool: Send + Sync {
-    fn definition(&self) -> ToolDefinition;
+    fn definition(&self) -> &ToolDefinition;
+    fn title(&self, args: &serde_json::Value) -> String;
     async fn call(
         &self,
         args: serde_json::Value,
@@ -309,7 +317,8 @@ pub struct AgentTool {
 
 impl AgentTool {
     pub fn new(definition: ToolDefinition, agent: Agent, runner: AgentRunner) -> Self;
-    pub fn definition(&self) -> ToolDefinition;
+    pub fn definition(&self) -> &ToolDefinition;
+    pub fn name(&self) -> &str;
     pub async fn call(
         &self,
         tx: RunEmitter,

@@ -28,26 +28,36 @@ use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
 
-struct GetTemperatureTool;
+struct GetTemperatureTool {
+    definition: ToolDefinition,
+}
+
+impl Default for GetTemperatureTool {
+    fn default() -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "get_temperature".to_string(),
+                description: "Returns the current temperature in Celsius for the given city."
+                    .to_string(),
+                parameters: json_schema!({
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "The name of the city"
+                        }
+                    },
+                    "required": ["city"]
+                }),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl Tool<Value, Value> for GetTemperatureTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "get_temperature".to_string(),
-            description: "Returns the current temperature in Celsius for the given city."
-                .to_string(),
-            parameters: json_schema!({
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "The name of the city"
-                    }
-                },
-                "required": ["city"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
@@ -63,25 +73,35 @@ impl Tool<Value, Value> for GetTemperatureTool {
     }
 }
 
-struct CelsiusToFahrenheitTool;
+struct CelsiusToFahrenheitTool {
+    definition: ToolDefinition,
+}
+
+impl Default for CelsiusToFahrenheitTool {
+    fn default() -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "celsius_to_fahrenheit".to_string(),
+                description: "Converts a temperature from Celsius to Fahrenheit.".to_string(),
+                parameters: json_schema!({
+                    "type": "object",
+                    "properties": {
+                        "celsius": {
+                            "type": "number",
+                            "description": "Temperature in Celsius"
+                        }
+                    },
+                    "required": ["celsius"]
+                }),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl Tool<Value, Value> for CelsiusToFahrenheitTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "celsius_to_fahrenheit".to_string(),
-            description: "Converts a temperature from Celsius to Fahrenheit.".to_string(),
-            parameters: json_schema!({
-                "type": "object",
-                "properties": {
-                    "celsius": {
-                        "type": "number",
-                        "description": "Temperature in Celsius"
-                    }
-                },
-                "required": ["celsius"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
@@ -102,8 +122,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let registry = Arc::new(
         ToolRegistry::new()
-            .register(GetTemperatureTool)
-            .register(CelsiusToFahrenheitTool),
+            .register(GetTemperatureTool::default())
+            .register(CelsiusToFahrenheitTool::default()),
     );
 
     let agent = Agent::builder()

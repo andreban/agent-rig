@@ -7,6 +7,7 @@ use async_trait::async_trait;
 
 use schemars::Schema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::Error;
@@ -65,23 +66,33 @@ pub struct ToolDefinition {
 /// #[derive(Serialize)]
 /// struct AddResult { result: i64 }
 ///
-/// struct AddTool;
+/// struct AddTool {
+///     definition: ToolDefinition,
+/// }
+///
+/// impl Default for AddTool {
+///     fn default() -> Self {
+///         Self {
+///             definition: ToolDefinition {
+///                 name: "add".to_string(),
+///                 description: "Adds two integers and returns the sum.".to_string(),
+///                 parameters: json_schema!({
+///                     "type": "object",
+///                     "properties": {
+///                         "a": { "type": "integer" },
+///                         "b": { "type": "integer" }
+///                     },
+///                     "required": ["a", "b"]
+///                 }),
+///             },
+///         }
+///     }
+/// }
 ///
 /// #[async_trait]
 /// impl Tool<AddArgs, AddResult> for AddTool {
-///     fn definition(&self) -> ToolDefinition {
-///         ToolDefinition {
-///             name: "add".to_string(),
-///             description: "Adds two integers and returns the sum.".to_string(),
-///             parameters: json_schema!({
-///                 "type": "object",
-///                 "properties": {
-///                     "a": { "type": "integer" },
-///                     "b": { "type": "integer" }
-///                 },
-///                 "required": ["a", "b"]
-///             }),
-///         }
+///     fn definition(&self) -> &ToolDefinition {
+///         &self.definition
 ///     }
 ///
 ///     async fn call(&self, args: AddArgs, _cancel: CancellationToken)
@@ -97,8 +108,12 @@ where
     I: DeserializeOwned + Send,
     O: Serialize + Send,
 {
+    fn title(&self, _args: &Value) -> String {
+        self.definition().name.clone()
+    }
+
     /// Returns the definition that describes this tool to the model.
-    fn definition(&self) -> ToolDefinition;
+    fn definition(&self) -> &ToolDefinition;
 
     /// Executes the tool with the arguments the model provided.
     ///
@@ -131,7 +146,8 @@ where
 #[doc(hidden)]
 #[async_trait]
 pub trait ErasedTool: Send + Sync {
-    fn definition(&self) -> ToolDefinition;
+    fn definition(&self) -> &ToolDefinition;
+    fn title(&self, args: &Value) -> String;
     async fn call(
         &self,
         args: serde_json::Value,
@@ -164,7 +180,12 @@ where
     I: DeserializeOwned + Send,
     O: Serialize + Send,
 {
-    fn definition(&self) -> ToolDefinition {
+    // Returns the name of this tool.
+    fn title(&self, args: &Value) -> String {
+        self.tool.title(args)
+    }
+
+    fn definition(&self) -> &ToolDefinition {
         Tool::definition(&self.tool)
     }
 

@@ -93,6 +93,8 @@ pub enum AgentEvent {
         name: String,
         /// The JSON arguments the model passed.
         args: serde_json::Value,
+        /// The display information for the tool being invoked.
+        title: String,
     },
     /// A tool call resolved with [`ToolCallResult`]. Fires after the tool
     /// returns, errors, or is denied.

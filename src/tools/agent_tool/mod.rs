@@ -39,12 +39,16 @@ impl AgentTool {
             runner,
         }
     }
+
+    pub fn name(&self) -> &str {
+        self.agent.name()
+    }
 }
 
 impl AgentTool {
     /// The [`ToolDefinition`] this child agent exposes to the parent model.
-    pub fn definition(&self) -> ToolDefinition {
-        self.definition.clone()
+    pub fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     /// Invokes the child agent with `args` and returns the child's event stream.

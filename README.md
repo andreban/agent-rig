@@ -91,7 +91,7 @@ pub struct RunEvent {
 }
 
 pub enum AgentEvent {
-    ToolCallStarted { id: String, name: String, args: serde_json::Value },
+    ToolCallStarted { id: String, name: String, args: serde_json::Value, title: String },
     ToolCallFinished { id: String, name: String, result: ToolCallResult },
     ThinkingDelta(String),
     TextDelta(String),
@@ -153,20 +153,30 @@ use agent_rig::error::Error;
 use agent_rig::runner::AgentRunner;
 use serde_json::{json, Value};
 
-struct GetWeatherTool;
+struct GetWeatherTool {
+    definition: ToolDefinition,
+}
+
+impl Default for GetWeatherTool {
+    fn default() -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "get_weather".to_string(),
+                description: "Returns the current temperature for a city.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"]
+                }),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl Tool for GetWeatherTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "get_weather".to_string(),
-            description: "Returns the current temperature for a city.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": { "city": { "type": "string" } },
-                "required": ["city"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(
@@ -180,7 +190,7 @@ impl Tool for GetWeatherTool {
 }
 
 let registry = Arc::new(
-    ToolRegistry::new().register(Box::new(GetWeatherTool))
+    ToolRegistry::new().register(GetWeatherTool::default())
 );
 
 let agent = Agent::builder()
