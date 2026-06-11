@@ -293,10 +293,11 @@ async fn auth_denial_skips_tool_execution() {
 
     let events = collect(&runner, agent("a"), "go").await;
 
-    // Denial skips Started and the underlying tool, but still emits
-    // Finished so the consumer sees the outcome.
+    // Started is emitted before the authorization gate, so a denied call
+    // still produces Started followed by Finished(Denied); only the
+    // underlying tool is skipped.
     assert!(
-        !events
+        events
             .iter()
             .any(|e| matches!(e, AgentEvent::ToolCallStarted { .. }))
     );

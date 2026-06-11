@@ -299,8 +299,8 @@ impl AgentRunner {
         // Append the tool calls as a single assistant turn.
         thread.push(Message::tool_calls(tool_calls.clone()));
 
-        // Each future runs the full lifecycle for one call: authorization check
-        // (if required), emit Started, execute, emit Finished / Error / Denied.
+        // Each future runs the full lifecycle for one call: emit Started,
+        // authorization check (if required), execute, emit Finished / Denied.
         // Hallucinated calls skip Started but still produce a synthetic result
         // so the assistant turn and tool-result messages remain paired. Each
         // call also races against `cancel`; on cancellation the future
@@ -313,6 +313,14 @@ impl AgentRunner {
                 let Some(tool) = self.registry.get(&call.name) else {
                     return (call, ToolCallResult::Unknown);
                 };
+
+                let _ = tx
+                    .send(AgentEvent::ToolCallStarted {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        args: call.args.clone(),
+                    })
+                    .await;
 
                 // Authorization gate: the sync check decides whether to consult
                 // the async decision path. If no manager is configured, no gating.
@@ -341,14 +349,6 @@ impl AgentRunner {
                         return (call, result);
                     }
                 }
-
-                let _ = tx
-                    .send(AgentEvent::ToolCallStarted {
-                        id: call.id.clone(),
-                        name: call.name.clone(),
-                        args: call.args.clone(),
-                    })
-                    .await;
 
                 let event: ToolCallResult = tokio::select! {
                     biased;
