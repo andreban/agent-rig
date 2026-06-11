@@ -30,24 +30,34 @@ use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
 
-struct SendEmailTool;
+struct SendEmailTool {
+    definition: ToolDefinition,
+}
+
+impl Default for SendEmailTool {
+    fn default() -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "send_email".to_string(),
+                description: "Sends an email to the given recipient.".to_string(),
+                parameters: json_schema!({
+                    "type": "object",
+                    "properties": {
+                        "to":      { "type": "string", "description": "Recipient email address" },
+                        "subject": { "type": "string" },
+                        "body":    { "type": "string" }
+                    },
+                    "required": ["to", "subject", "body"]
+                }),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl Tool<Value, Value> for SendEmailTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "send_email".to_string(),
-            description: "Sends an email to the given recipient.".to_string(),
-            parameters: json_schema!({
-                "type": "object",
-                "properties": {
-                    "to":      { "type": "string", "description": "Recipient email address" },
-                    "subject": { "type": "string" },
-                    "body":    { "type": "string" }
-                },
-                "required": ["to", "subject", "body"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
@@ -119,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_key = std::env::var("GEMINI_API_KEY")?;
     let model = GeminiModel::new(api_key, MODEL);
-    let registry = Arc::new(ToolRegistry::new().register(SendEmailTool));
+    let registry = Arc::new(ToolRegistry::new().register(SendEmailTool::default()));
 
     let agent = Agent::builder()
         .name("Email Assistant")

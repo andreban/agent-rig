@@ -54,26 +54,36 @@ struct WeatherReport {
     summary: String,
 }
 
-struct GetTemperatureTool;
+struct GetTemperatureTool {
+    definition: ToolDefinition,
+}
+
+impl Default for GetTemperatureTool {
+    fn default() -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "get_temperature".to_string(),
+                description: "Returns the current temperature in Celsius for the given city."
+                    .to_string(),
+                parameters: json_schema!({
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "The name of the city"
+                        }
+                    },
+                    "required": ["city"]
+                }),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl Tool<Value, Value> for GetTemperatureTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "get_temperature".to_string(),
-            description: "Returns the current temperature in Celsius for the given city."
-                .to_string(),
-            parameters: json_schema!({
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "The name of the city"
-                    }
-                },
-                "required": ["city"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
@@ -106,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .build();
 
-    let registry = Arc::new(ToolRegistry::new().register(GetTemperatureTool));
+    let registry = Arc::new(ToolRegistry::new().register(GetTemperatureTool::default()));
 
     let agent = Agent::builder()
         .name("Weather Reporter")

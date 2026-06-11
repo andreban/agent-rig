@@ -35,23 +35,33 @@ use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
 
-struct AddTool;
+struct AddTool {
+    definition: ToolDefinition,
+}
+
+impl Default for AddTool {
+    fn default() -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "add".to_string(),
+                description: "Adds two integers and returns their sum.".to_string(),
+                parameters: json_schema!({
+                    "type": "object",
+                    "properties": {
+                        "a": { "type": "integer", "description": "First operand" },
+                        "b": { "type": "integer", "description": "Second operand" }
+                    },
+                    "required": ["a", "b"]
+                }),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl Tool<Value, Value> for AddTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "add".to_string(),
-            description: "Adds two integers and returns their sum.".to_string(),
-            parameters: json_schema!({
-                "type": "object",
-                "properties": {
-                    "a": { "type": "integer", "description": "First operand" },
-                    "b": { "type": "integer", "description": "Second operand" }
-                },
-                "required": ["a", "b"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
@@ -78,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         })
         .build();
-    let registry = Arc::new(ToolRegistry::new().register(AddTool));
+    let registry = Arc::new(ToolRegistry::new().register(AddTool::default()));
 
     let agent = Agent::builder()
         .name("Calculator")

@@ -39,27 +39,38 @@ const MODEL: &str = "gemini-3.1-flash-lite";
 type MemoryStore = Arc<Mutex<Vec<String>>>;
 
 struct RememberFactTool {
+    definition: ToolDefinition,
     store: MemoryStore,
+}
+
+impl RememberFactTool {
+    fn new(store: MemoryStore) -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "remember_fact".to_string(),
+                description:
+                    "Saves an important fact about the user or the world for later recall."
+                        .to_string(),
+                parameters: json_schema!({
+                    "type": "object",
+                    "properties": {
+                        "fact": {
+                            "type": "string",
+                            "description": "The self-contained fact to remember"
+                        }
+                    },
+                    "required": ["fact"]
+                }),
+            },
+            store,
+        }
+    }
 }
 
 #[async_trait]
 impl Tool<Value, Value> for RememberFactTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "remember_fact".to_string(),
-            description: "Saves an important fact about the user or the world for later recall."
-                .to_string(),
-            parameters: json_schema!({
-                "type": "object",
-                "properties": {
-                    "fact": {
-                        "type": "string",
-                        "description": "The self-contained fact to remember"
-                    }
-                },
-                "required": ["fact"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
@@ -77,30 +88,40 @@ impl Tool<Value, Value> for RememberFactTool {
 }
 
 struct RecallFactTool {
+    definition: ToolDefinition,
     store: MemoryStore,
+}
+
+impl RecallFactTool {
+    fn new(store: MemoryStore) -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "recall_fact".to_string(),
+                description: "Searches long-term memory for relevant facts. \
+                          Pass one or more specific keywords (e.g. 'dog name' or 'favourite colour'). \
+                          Each word is matched independently — a fact is returned if it contains \
+                          any of the supplied words."
+                    .to_string(),
+                parameters: json_schema!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "One or more space-separated keywords to search for (e.g. 'dog name')"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+            store,
+        }
+    }
 }
 
 #[async_trait]
 impl Tool<Value, Value> for RecallFactTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "recall_fact".to_string(),
-            description: "Searches long-term memory for relevant facts. \
-                          Pass one or more specific keywords (e.g. 'dog name' or 'favourite colour'). \
-                          Each word is matched independently — a fact is returned if it contains \
-                          any of the supplied words."
-                .to_string(),
-            parameters: json_schema!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "One or more space-separated keywords to search for (e.g. 'dog name')"
-                    }
-                },
-                "required": ["query"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
@@ -152,12 +173,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let registry = Arc::new(
         ToolRegistry::new()
-            .register(RememberFactTool {
-                store: store.clone(),
-            })
-            .register(RecallFactTool {
-                store: store.clone(),
-            }),
+            .register(RememberFactTool::new(store.clone()))
+            .register(RecallFactTool::new(store.clone())),
     );
 
     let agent = Agent::builder()

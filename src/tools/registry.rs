@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
 
 use crate::tools::{
     agent_tool::AgentTool,
@@ -25,10 +26,17 @@ pub enum ToolRegistryEntry {
 impl ToolRegistryEntry {
     /// Returns the public [`ToolDefinition`] for this entry regardless of
     /// variant.
-    pub fn definition(&self) -> ToolDefinition {
+    pub fn definition(&self) -> &ToolDefinition {
         match self {
             ToolRegistryEntry::Tool(t) => t.definition(),
             ToolRegistryEntry::Agent(a) => a.definition(),
+        }
+    }
+
+    pub fn title(&self, args: &Value) -> String {
+        match self {
+            ToolRegistryEntry::Tool(t) => t.title(args).to_string(),
+            ToolRegistryEntry::Agent(a) => a.name().to_string(),
         }
     }
 }
@@ -46,26 +54,35 @@ impl ToolRegistryEntry {
 /// use std::sync::Arc;
 /// use agent_rig::tools::ToolRegistry;
 ///
-/// # struct MyTool;
 /// # use async_trait::async_trait;
 /// # use agent_rig::tools::{Tool, ToolDefinition};
 /// # use agent_rig::error::Error;
 /// # use schemars::json_schema;
+/// # struct MyTool {
+/// #     definition: ToolDefinition,
+/// # }
+/// # impl Default for MyTool {
+/// #     fn default() -> Self {
+/// #         Self {
+/// #             definition: ToolDefinition {
+/// #                 name: "noop".into(),
+/// #                 description: "noop".into(),
+/// #                 parameters: json_schema!({"type": "object"}),
+/// #             },
+/// #         }
+/// #     }
+/// # }
 /// # #[async_trait]
 /// # impl Tool<serde_json::Value, serde_json::Value> for MyTool {
-/// #     fn definition(&self) -> ToolDefinition {
-/// #         ToolDefinition {
-/// #             name: "noop".into(),
-/// #             description: "noop".into(),
-/// #             parameters: json_schema!({"type": "object"}),
-/// #         }
+/// #     fn definition(&self) -> &ToolDefinition {
+/// #         &self.definition
 /// #     }
 /// #     async fn call(&self, _: serde_json::Value, _: tokio_util::sync::CancellationToken)
 /// #         -> Result<serde_json::Value, Error> { Ok(serde_json::json!({})) }
 /// # }
 /// let registry = Arc::new(
 ///     ToolRegistry::new()
-///         .register(MyTool)
+///         .register(MyTool::default())
 /// );
 /// ```
 pub struct ToolRegistry {
@@ -114,7 +131,10 @@ impl ToolRegistry {
     ///
     /// The order is unspecified.
     pub fn definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.values().map(|t| t.definition()).collect()
+        self.tools
+            .values()
+            .map(|t| t.definition().clone())
+            .collect()
     }
 
     /// Returns the tool registered under `name`, or `None` if not found.
@@ -138,17 +158,13 @@ mod tests {
     use serde_json::{Value, json};
 
     struct StubTool {
-        name: &'static str,
+        definition: ToolDefinition,
     }
 
     #[async_trait]
     impl Tool<Value, Value> for StubTool {
-        fn definition(&self) -> ToolDefinition {
-            ToolDefinition {
-                name: self.name.to_string(),
-                description: "stub".to_string(),
-                parameters: json_schema!({"type": "object"}),
-            }
+        fn definition(&self) -> &ToolDefinition {
+            &self.definition
         }
 
         async fn call(
@@ -169,15 +185,33 @@ mod tests {
 
     #[test]
     fn register_keys_by_definition_name() {
-        let reg = ToolRegistry::new().register(StubTool { name: "alpha" });
+        let reg = ToolRegistry::new().register(StubTool {
+            definition: ToolDefinition {
+                name: "alpha".to_string(),
+                description: "stub".to_string(),
+                parameters: json_schema!({"type": "object"}),
+            },
+        });
         assert!(matches!(reg.get("alpha"), Some(ToolRegistryEntry::Tool(_))));
     }
 
     #[test]
     fn definitions_lists_every_registered_tool() {
         let reg = ToolRegistry::new()
-            .register(StubTool { name: "alpha" })
-            .register(StubTool { name: "beta" });
+            .register(StubTool {
+                definition: ToolDefinition {
+                    name: "alpha".to_string(),
+                    description: "stub".to_string(),
+                    parameters: json_schema!({"type": "object"}),
+                },
+            })
+            .register(StubTool {
+                definition: ToolDefinition {
+                    name: "beta".to_string(),
+                    description: "stub".to_string(),
+                    parameters: json_schema!({"type": "object"}),
+                },
+            });
         let mut names: Vec<String> = reg.definitions().into_iter().map(|d| d.name).collect();
         names.sort();
         assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
@@ -186,8 +220,20 @@ mod tests {
     #[test]
     fn last_registration_wins_on_name_collision() {
         let reg = ToolRegistry::new()
-            .register(StubTool { name: "alpha" })
-            .register(StubTool { name: "alpha" });
+            .register(StubTool {
+                definition: ToolDefinition {
+                    name: "alpha".to_string(),
+                    description: "stub".to_string(),
+                    parameters: json_schema!({"type": "object"}),
+                },
+            })
+            .register(StubTool {
+                definition: ToolDefinition {
+                    name: "alpha".to_string(),
+                    description: "stub".to_string(),
+                    parameters: json_schema!({"type": "object"}),
+                },
+            });
         // The registry is keyed by name; a second `register` with the same
         // name overwrites the first. Verifying via count so a future change
         // (e.g. rejecting duplicates) surfaces here.

@@ -164,22 +164,32 @@ use agent_rig::{Agent, error::Error, model::Message, models::gemini::GeminiModel
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 
-struct GetWeatherTool;
+struct GetWeatherTool {
+    definition: ToolDefinition,
+}
+
+impl Default for GetWeatherTool {
+    fn default() -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "get_weather".to_string(),
+                description: "Returns the current temperature in Celsius for a city.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "city": { "type": "string", "description": "The city name." }
+                    },
+                    "required": ["city"]
+                }),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl Tool for GetWeatherTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "get_weather".to_string(),
-            description: "Returns the current temperature in Celsius for a city.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "city": { "type": "string", "description": "The city name." }
-                },
-                "required": ["city"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(
@@ -197,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
-    let registry = Arc::new(ToolRegistry::new().register(Box::new(GetWeatherTool)));
+    let registry = Arc::new(ToolRegistry::new().register(GetWeatherTool::default()));
 
     let agent = Agent::builder()
         .name("Weather Bot")
@@ -212,7 +222,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = runner.run(&agent, vec![Message::user("What is the temperature in Tokyo?")]);
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted { name, args } => println!("[start] {name}({args})"),
+            AgentEvent::ToolCallStarted { name, args, .. } => println!("[start] {name}({args})"),
             AgentEvent::ToolCallFinished { name, result: ToolCallResult::Ok(value) } => {
                 println!("[done]  {name} → {value}");
             }

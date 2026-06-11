@@ -93,17 +93,25 @@ async fn collect_run_events(runner: &AgentRunner, agent: Agent, prompt: &str) ->
 
 /// Tool that records every invocation and returns a configurable result.
 struct EchoTool {
-    name: &'static str,
+    definition: ToolDefinition,
     result: Result<serde_json::Value, Error>,
     calls: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 impl EchoTool {
+    fn definition(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: "echo".to_string(),
+            parameters: json_schema!({"type": "object"}),
+        }
+    }
+
     fn ok(name: &'static str) -> (Self, Arc<Mutex<Vec<serde_json::Value>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
-                name,
+                definition: Self::definition(name),
                 result: Ok(json!({"ok": true})),
                 calls: calls.clone(),
             },
@@ -113,7 +121,7 @@ impl EchoTool {
 
     fn failing(name: &'static str, msg: &str) -> Self {
         Self {
-            name,
+            definition: Self::definition(name),
             result: Err(Error::Agent(msg.to_string())),
             calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -122,12 +130,8 @@ impl EchoTool {
 
 #[async_trait]
 impl Tool<Value, Value> for EchoTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name.to_string(),
-            description: "echo".to_string(),
-            parameters: json_schema!({"type": "object"}),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(
@@ -519,19 +523,15 @@ impl LlmModel for PendingModel {
 /// Tool that captures its `cancel` token (so the test can inspect it),
 /// signals it has started, then parks on `cancel.cancelled().await`.
 struct CancellableTool {
-    name: &'static str,
+    definition: ToolDefinition,
     started: Arc<tokio::sync::Notify>,
     captured: Arc<Mutex<Option<CancellationToken>>>,
 }
 
 #[async_trait]
 impl Tool<Value, Value> for CancellableTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name.to_string(),
-            description: "cancellable".to_string(),
-            parameters: json_schema!({"type": "object"}),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, _args: Value, cancel: CancellationToken) -> Result<Value, Error> {
@@ -630,7 +630,11 @@ async fn cancellation_during_tool_phase_skips_finished_and_emits_cancelled() {
     let started = Arc::new(tokio::sync::Notify::new());
     let captured: Arc<Mutex<Option<CancellationToken>>> = Arc::new(Mutex::new(None));
     let tool = CancellableTool {
-        name: "slow",
+        definition: ToolDefinition {
+            name: "slow".to_string(),
+            description: "cancellable".to_string(),
+            parameters: json_schema!({"type": "object"}),
+        },
         started: started.clone(),
         captured: captured.clone(),
     };
