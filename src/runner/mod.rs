@@ -28,7 +28,7 @@ use crate::{
     auth::AuthManager,
     error::Error,
     model::{LlmModel, Message, ModelRequest, ModelStreamChunk, ToolCall},
-    tools::{ToolDefinition, ToolRegistry, ToolRegistryEntry},
+    tools::{ToolDefinition, ToolRegistry},
 };
 
 mod events;
@@ -356,14 +356,7 @@ impl AgentRunner {
                         );
                     }
                     result = async {
-                        match tool {
-                            ToolRegistryEntry::Tool(t) => {
-                                t.call(call.args.clone(), cancel.clone()).await
-                            }
-                            ToolRegistryEntry::Agent(a) => {
-                                a.call(call.args.clone(), cancel.clone()).await
-                            }
-                        }
+                        tool.call(call.args.clone(), cancel.clone()).await
                     } => result.into(),
                 };
 

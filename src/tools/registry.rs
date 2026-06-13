@@ -4,56 +4,15 @@
 use std::collections::HashMap;
 
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::Value;
 
-use crate::{
-    error::Error,
-    tools::{
-        agent_tool::AgentTool,
-        tool::{ErasedTool, Tool, ToolBridge, ToolDefinition},
-    },
-};
-/// One entry stored in a [`ToolRegistry`].
-///
-/// The registry holds two kinds of callables — plain [`Tool`] implementations
-/// and sub-agents wrapped in [`AgentTool`]. The runner dispatches each
-/// variant differently: plain tools resolve to a single JSON value, while
-/// agents run their own stream internally and resolve to their accumulated
-/// text output.
-pub enum ToolRegistryEntry {
-    /// A plain tool implementation. Stored behind an object-safe wrapper so
-    /// the registry can hold tools with different typed `I`/`O` parameters
-    /// in the same map.
-    Tool(Box<dyn ErasedTool>),
-    /// A sub-agent registered as a tool. Boxed to keep the enum compact —
-    /// `AgentTool` is much larger than `Box<dyn ErasedTool>`.
-    Agent(Box<AgentTool>),
-}
+use crate::tools::tool::{ErasedTool, Tool, ToolBridge, ToolDefinition};
 
-impl ToolRegistryEntry {
-    /// Returns the public [`ToolDefinition`] for this entry regardless of
-    /// variant.
-    pub fn definition(&self) -> &ToolDefinition {
-        match self {
-            ToolRegistryEntry::Tool(t) => t.definition(),
-            ToolRegistryEntry::Agent(a) => a.definition(),
-        }
-    }
-
-    pub fn title(&self, args: &Value) -> Result<String, Error> {
-        match self {
-            ToolRegistryEntry::Tool(t) => t.title(args),
-            ToolRegistryEntry::Agent(a) => Ok(a.name().to_string()),
-        }
-    }
-}
-
-/// A collection of [`Tool`]s and [`AgentTool`]s keyed by name.
+/// A collection of [`Tool`]s (including [`AgentTool`](crate::tools::AgentTool)s)
+/// keyed by name.
 ///
 /// `ToolRegistry` is independent of any [`AgentRunner`](crate::runner::AgentRunner)
 /// so a single registry can be shared across multiple runners via [`Arc`](std::sync::Arc).
-/// Build one with the chained [`register`](Self::register) /
-/// [`register_agent`](Self::register_agent) methods.
+/// Build one with the chained [`register`](Self::register) method.
 ///
 /// # Examples
 ///
@@ -93,7 +52,7 @@ impl ToolRegistryEntry {
 /// );
 /// ```
 pub struct ToolRegistry {
-    tools: HashMap<String, ToolRegistryEntry>,
+    tools: HashMap<String, Box<dyn ErasedTool>>,
 }
 
 impl ToolRegistry {
@@ -119,18 +78,7 @@ impl ToolRegistry {
     {
         let entry: Box<dyn ErasedTool> = Box::new(ToolBridge::new(tool));
         let name = entry.definition().name.clone();
-        self.tools.insert(name, ToolRegistryEntry::Tool(entry));
-        self
-    }
-
-    /// Registers a sub-agent as a tool, keyed by its [`ToolDefinition::name`].
-    ///
-    /// Consumes and returns `self` for builder-style chaining. If a tool with
-    /// the same name is already registered, it is overwritten.
-    pub fn register_agent(mut self, agent: AgentTool) -> Self {
-        let name = agent.definition().name.clone();
-        self.tools
-            .insert(name, ToolRegistryEntry::Agent(Box::new(agent)));
+        self.tools.insert(name, entry);
         self
     }
 
@@ -145,8 +93,8 @@ impl ToolRegistry {
     }
 
     /// Returns the tool registered under `name`, or `None` if not found.
-    pub(crate) fn get(&self, name: &str) -> Option<&ToolRegistryEntry> {
-        self.tools.get(name)
+    pub(crate) fn get(&self, name: &str) -> Option<&dyn ErasedTool> {
+        self.tools.get(name).map(|t| t.as_ref())
     }
 }
 
@@ -199,7 +147,7 @@ mod tests {
                 parameters: json_schema!({"type": "object"}),
             },
         });
-        assert!(matches!(reg.get("alpha"), Some(ToolRegistryEntry::Tool(_))));
+        assert!(reg.get("alpha").is_some());
     }
 
     #[test]
@@ -248,15 +196,15 @@ mod tests {
     }
 
     #[test]
-    fn register_agent_stores_an_agent_entry() {
+    fn register_accepts_an_agent_tool() {
         use crate::Agent;
         use crate::runner::AgentRunner;
         use crate::tools::agent_tool::AgentTool;
         use std::sync::Arc;
 
         // Build a runner with no model interactions — the test never invokes
-        // the AgentTool, only verifies the registry classifies it as an Agent
-        // entry.
+        // the AgentTool, only verifies an AgentTool registers like any other
+        // tool and is retrievable by name.
         struct DummyModel;
         #[async_trait]
         impl crate::model::LlmModel for DummyModel {
@@ -280,11 +228,8 @@ mod tests {
             runner,
         );
 
-        let reg = ToolRegistry::new().register_agent(tool);
-        assert!(matches!(
-            reg.get("delegate"),
-            Some(ToolRegistryEntry::Agent(_))
-        ));
+        let reg = ToolRegistry::new().register(tool);
+        assert!(reg.get("delegate").is_some());
         assert_eq!(reg.definitions().len(), 1);
     }
 }

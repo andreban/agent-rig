@@ -4,11 +4,10 @@
 //! Demonstrates running an agent as a tool of another agent.
 //!
 //! A `Summariser` child agent is wrapped in an [`AgentTool`] and registered
-//! with the parent runner via [`ToolRegistry::register_agent`]. The parent
-//! `Orchestrator` agent calls the `summarise` tool to delegate work; the
-//! parent runner streams the child's events through to the consumer, each
-//! tagged with its originating `run_id` so events from the parent and
-//! child runs can be told apart.
+//! with the parent runner via [`ToolRegistry::register`], like any other tool.
+//! The parent `Orchestrator` agent calls the `summarise` tool to delegate
+//! work; the child run is consumed internally and only its accumulated text
+//! is returned as the tool result.
 
 use std::sync::Arc;
 
@@ -61,7 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
-    let registry = Arc::new(ToolRegistry::new().register_agent(summariser_tool(&api_key)));
+    let registry = Arc::new(ToolRegistry::new().register(summariser_tool(&api_key)));
 
     let parent_model = GeminiModel::builder(&api_key, MODEL).build();
     let parent_runner = AgentRunner::with_registry(Arc::new(parent_model), registry);
