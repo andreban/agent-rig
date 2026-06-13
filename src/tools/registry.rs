@@ -63,10 +63,9 @@ impl ToolRegistry {
 
     /// Registers a [`Tool`], keyed by its [`ToolDefinition::name`].
     ///
-    /// Accepts anything that implements [`Tool`] — including typed
-    /// [`SimpleTool`](crate::tools::SimpleTool)s via their blanket impl — and
-    /// stores it behind `Box<dyn Tool>`, which is what lets a single registry
-    /// hold tools of different shapes. Consumes and returns `self` for
+    /// Accepts anything that implements [`Tool`] and stores it behind
+    /// `Box<dyn Tool>`, which is what lets a single registry hold tools of
+    /// different shapes. Consumes and returns `self` for
     /// builder-style chaining. If a tool with the same name is already
     /// registered, it is overwritten.
     pub fn register<T>(mut self, tool: T) -> Self

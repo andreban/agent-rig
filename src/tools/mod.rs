@@ -16,4 +16,4 @@ mod tool;
 
 pub use agent_tool::AgentTool;
 pub use registry::ToolRegistry;
-pub use tool::{ProgressDetails, ProgressReporter, SimpleTool, Tool, ToolDefinition};
+pub use tool::{ProgressDetails, ProgressReporter, Tool, ToolDefinition};

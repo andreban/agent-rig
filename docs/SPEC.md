@@ -199,8 +199,7 @@ pub struct ToolDefinition {
 
 // The object-safe trait the registry stores. Arguments and results are
 // untyped JSON, so a single registry can hold tools of any shape behind
-// `Box<dyn Tool>`. Implement this directly only for raw-JSON tools (e.g.
-// `AgentTool`); most authors implement `SimpleTool` instead.
+// `Box<dyn Tool>`.
 //
 // A call runs in two phases: `propose` resolves the args into a proposal
 // (side-effect free, before authorization), then `apply` executes it.
@@ -235,25 +234,6 @@ pub trait Tool: Send + Sync {
     ) -> Result<serde_json::Value, Error>;
 }
 
-// Convenience trait for typed tools. A blanket `impl<T: SimpleTool> Tool for T`
-// decodes `Args` from and encodes `Output` to JSON at the boundary, so a
-// `SimpleTool` registers anywhere a `Tool` is expected. Replaces the former
-// `Tool<I, O>` + `ToolBridge` indirection. It uses the default `propose` (the
-// proposal is the raw args), so `call` always receives the decoded `Args`.
-#[async_trait]
-pub trait SimpleTool: Send + Sync {
-    type Args: DeserializeOwned + Send;
-    type Output: Serialize + Send;
-    fn definition(&self) -> &ToolDefinition;
-    fn title(&self, args: &Self::Args) -> String { self.definition().name.clone() }
-    async fn call(
-        &self,
-        args: Self::Args,
-        progress: &dyn ProgressReporter,
-        cancel: tokio_util::sync::CancellationToken,
-    ) -> Result<Self::Output, Error>;
-}
-
 // src/tools/registry.rs
 pub struct ToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,    // AgentTool is just another `Tool`
@@ -270,9 +250,7 @@ impl ToolRegistry {
 
 `Tool` is the object-safe trait the registry stores: its arguments and results are raw `serde_json::Value`s. A call runs in two phases. `propose` resolves the model's raw `args` into a *proposal* — the concrete thing that will happen — without side effects and before authorization; it returns a single JSON value. The runner shows that proposal to the `AuthManager` and, if approved, hands the *same* value to `apply`. Because one value drives both the prompt and the execution, what the approver sees and what runs can never drift. An edit tool's `propose` reads the file and returns `{ path, old_text, new_text }`; the auth manager renders a diff from it and `apply` writes `new_text`. `propose` has a default that returns `args` unchanged, so a tool that needs no planning only implements `apply`. The proposal is opaque to the runner — rendering it for a human is the `AuthManager`'s job (a tool-aware manager matches on the tool name; a generic one displays the JSON).
 
-Most authors implement `SimpleTool` instead, which is generic over a deserializable `Args` type and a serializable `Output` type; a blanket `impl<T: SimpleTool> Tool for T` decodes the model's tool-call JSON into `Args` before `call` and re-encodes the `Output` afterwards. It uses the default `propose` (proposal == raw args), so a plain `SimpleTool` never thinks about the split. Implement `Tool` directly when you want to operate on raw JSON or resolve args into a richer proposal in `propose`.
-
-A single registry can hold tools of different shapes because everything is stored as `Box<dyn Tool>`. `register` accepts any `Tool` (including `SimpleTool`s via the blanket impl) and boxes it directly — there is no separate wrapper type.
+A single registry can hold tools of different shapes because everything is stored as `Box<dyn Tool>`. `register` accepts any `Tool` and boxes it directly — there is no separate wrapper type.
 
 The registry holds two kinds of callables: plain [`Tool`] implementations and sub-agents wrapped in [`AgentTool`]. The runner dispatches each variant differently — plain tools resolve to a single JSON value, while agents produce a stream of events that the parent forwards.
 
