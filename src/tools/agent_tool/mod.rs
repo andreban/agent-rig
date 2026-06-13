@@ -12,7 +12,7 @@ use crate::{
     error::Error,
     model::Message,
     runner::{AgentEvent, AgentRunner},
-    tools::{Tool, tool::ToolDefinition},
+    tools::{ProgressReporter, Tool, tool::ToolDefinition},
 };
 
 /// Wraps a child [`Agent`] (plus its [`AgentRunner`]) so it can be invoked
@@ -65,10 +65,11 @@ impl Tool<Value, Value> for AgentTool {
     /// `cancel` is propagated into the child run via
     /// [`AgentRunner::run_with_cancellation`], so cancelling the parent run
     /// cancels every nested agent in the tree.
-    #[instrument(skip(self, args, cancel), fields(tool = self.definition.name))]
+    #[instrument(skip(self, args, _progress, cancel), fields(tool = self.definition.name))]
     async fn call(
         &self,
         args: serde_json::Value,
+        _progress: &dyn ProgressReporter,
         cancel: CancellationToken,
     ) -> Result<Value, Error> {
         let input = serde_json::to_string(&args)

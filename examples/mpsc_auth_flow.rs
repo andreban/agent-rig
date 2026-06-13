@@ -18,7 +18,7 @@ use agent_rig::auth::AuthManager;
 use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -60,7 +60,7 @@ impl Tool<Value, Value> for SendEmailTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
         let to = args["to"].as_str().unwrap_or("");
         let subject = args["subject"].as_str().unwrap_or("");
         println!("[tool]  pretending to send email to {to} (subject: {subject:?})");

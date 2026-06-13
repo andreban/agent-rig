@@ -4,7 +4,7 @@
 use super::*;
 use crate::error::Error;
 use crate::model::{MessageContent, ModelResponse, Role, TokenUsage};
-use crate::tools::Tool;
+use crate::tools::{ProgressReporter, Tool};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use schemars::json_schema;
@@ -140,6 +140,7 @@ impl Tool<Value, Value> for EchoTool {
     async fn call(
         &self,
         args: serde_json::Value,
+        _progress: &dyn ProgressReporter,
         _cancel: CancellationToken,
     ) -> Result<serde_json::Value, Error> {
         self.calls.lock().unwrap().push(args);
@@ -541,7 +542,12 @@ impl Tool<Value, Value> for CancellableTool {
         &self.definition
     }
 
-    async fn call(&self, _args: Value, cancel: CancellationToken) -> Result<Value, Error> {
+    async fn call(
+        &self,
+        _args: Value,
+        _progress: &dyn ProgressReporter,
+        cancel: CancellationToken,
+    ) -> Result<Value, Error> {
         *self.captured.lock().unwrap() = Some(cancel.clone());
         self.started.notify_one();
         cancel.cancelled().await;

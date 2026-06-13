@@ -19,6 +19,7 @@ use std::{
 };
 
 use futures_util::{Stream, StreamExt, future::join_all};
+use serde_json::Value;
 use tokio::sync::mpsc::{self, Sender, error::SendError};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -28,7 +29,7 @@ use crate::{
     auth::AuthManager,
     error::Error,
     model::{LlmModel, Message, ModelRequest, ModelStreamChunk, ToolCall},
-    tools::{ToolDefinition, ToolRegistry},
+    tools::{ProgressReporter, ToolDefinition, ToolRegistry},
 };
 
 mod events;
@@ -63,6 +64,29 @@ impl RunEmitter {
             agent_event: event,
         };
         self.tx.send(event).await
+    }
+}
+
+/// [`ProgressReporter`] implementation handed to each tool call. Each
+/// [`update`](ProgressReporter::update) emits a `ToolCallUpdate` for this
+/// specific call on the run's event stream, awaiting delivery.
+struct ToolProgress<'a> {
+    tx: &'a RunEmitter,
+    tool_id: String,
+    name: String,
+}
+
+#[async_trait::async_trait]
+impl ProgressReporter for ToolProgress<'_> {
+    async fn update(&self, details: Value) {
+        let _ = self
+            .tx
+            .send(AgentEvent::ToolCallUpdate {
+                tool_id: self.tool_id.clone(),
+                name: self.name.clone(),
+                details,
+            })
+            .await;
     }
 }
 
@@ -345,6 +369,15 @@ impl AgentRunner {
                     }
                 }
 
+                // Progress sink for this call. Each `update` awaits delivery
+                // on the event channel, so a slow consumer applies backpressure
+                // to a chatty tool.
+                let progress = ToolProgress {
+                    tx,
+                    tool_id: call.id.clone(),
+                    name: call.name.clone(),
+                };
+
                 let event: ToolCallResult = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => {
@@ -355,9 +388,7 @@ impl AgentRunner {
                             ToolCallResult::Err(Error::Agent("cancelled".into())),
                         );
                     }
-                    result = async {
-                        tool.call(call.args.clone(), cancel.clone()).await
-                    } => result.into(),
+                    result = tool.call(call.args.clone(), &progress, cancel.clone()) => result.into(),
                 };
 
                 debug!(tool = call.name, "tool call complete");

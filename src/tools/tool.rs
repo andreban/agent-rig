@@ -55,7 +55,7 @@ pub struct ToolDefinition {
 /// ```no_run
 /// use async_trait::async_trait;
 /// use agent_rig::error::Error;
-/// use agent_rig::tools::{Tool, ToolDefinition};
+/// use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition};
 /// use schemars::json_schema;
 /// use serde::{Deserialize, Serialize};
 /// use tokio_util::sync::CancellationToken;
@@ -95,13 +95,32 @@ pub struct ToolDefinition {
 ///         &self.definition
 ///     }
 ///
-///     async fn call(&self, args: AddArgs, _cancel: CancellationToken)
-///         -> Result<AddResult, Error>
-///     {
+///     async fn call(
+///         &self,
+///         args: AddArgs,
+///         _progress: &dyn ProgressReporter,
+///         _cancel: CancellationToken,
+///     ) -> Result<AddResult, Error> {
 ///         Ok(AddResult { result: args.a + args.b })
 ///     }
 /// }
 /// ```
+/// Receives incremental progress updates emitted by a tool mid-call.
+///
+/// The runner passes a `&dyn ProgressReporter` into [`Tool::call`]; each
+/// [`update`](ProgressReporter::update) emits a `ToolCallUpdate` event on the
+/// run's event stream. Tool authors do not implement this — the runner
+/// supplies the implementation.
+#[async_trait]
+pub trait ProgressReporter: Send + Sync {
+    /// Emits a progress update carrying an arbitrary JSON `details` payload.
+    ///
+    /// Delivery is guaranteed but applies backpressure: if the run's event
+    /// channel is full, this awaits until the consumer drains it, so a slow
+    /// consumer can throttle a chatty tool.
+    async fn update(&self, details: Value);
+}
+
 #[async_trait]
 pub trait Tool<I, O>: Send + Sync
 where
@@ -139,7 +158,17 @@ where
     /// drops the future on cancellation), but any side effects already in
     /// flight may continue in the background until they finish on their
     /// own.
-    async fn call(&self, args: I, cancel: CancellationToken) -> Result<O, Error>;
+    ///
+    /// `progress` reports incremental progress: call
+    /// [`progress.update(details)`](ProgressReporter::update) to emit a
+    /// `ToolCallUpdate` event for this call. Delivery is guaranteed but
+    /// awaits, so it applies backpressure under a slow consumer.
+    async fn call(
+        &self,
+        args: I,
+        progress: &dyn ProgressReporter,
+        cancel: CancellationToken,
+    ) -> Result<O, Error>;
 }
 
 /// Object-safe view of a [`Tool`] that hides the typed argument and result
@@ -159,6 +188,7 @@ pub trait ErasedTool: Send + Sync {
     async fn call(
         &self,
         args: serde_json::Value,
+        progress: &dyn ProgressReporter,
         cancel: CancellationToken,
     ) -> Result<serde_json::Value, Error>;
 }
@@ -203,11 +233,12 @@ where
     async fn call(
         &self,
         args: serde_json::Value,
+        progress: &dyn ProgressReporter,
         cancel: CancellationToken,
     ) -> Result<serde_json::Value, Error> {
         let typed: I = serde_json::from_value(args)
             .map_err(|e| Error::Agent(format!("invalid tool arguments: {e}")))?;
-        let output = Tool::call(&self.tool, typed, cancel).await?;
+        let output = Tool::call(&self.tool, typed, progress, cancel).await?;
         serde_json::to_value(output)
             .map_err(|e| Error::Agent(format!("failed to serialize tool result: {e}")))
     }
