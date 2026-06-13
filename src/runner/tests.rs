@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use crate::error::Error;
 use crate::model::{MessageContent, ModelResponse, Role, TokenUsage};
@@ -174,21 +177,22 @@ async fn tool_call_then_text_completes_the_loop() {
 
     let events = collect(&runner, agent("Looper"), "go").await;
 
-    // Started + Finished + TextDelta. Both lifecycle events carry the model's
-    // call id ("c1") so consumers can correlate them.
-    assert!(matches!(
-        events[0],
-        AgentEvent::ToolCallStarted { ref id, ref name, .. } if id == "c1" && name == "echo"
-    ));
+    // StartTurn, then Started + Finished + TextDelta. Both lifecycle events
+    // carry the model's call id ("c1") so consumers can correlate them.
+    assert!(matches!(events[0], AgentEvent::StartTurn));
     assert!(matches!(
         events[1],
+        AgentEvent::ToolCallStarted { ref tool_id, ref name, .. } if tool_id == "c1" && name == "echo"
+    ));
+    assert!(matches!(
+        events[2],
         AgentEvent::ToolCallFinished {
-            ref id,
+            ref tool_id,
             ref name,
             result: ToolCallResult::Ok(_),
-        } if id == "c1" && name == "echo"
+        } if tool_id == "c1" && name == "echo"
     ));
-    assert!(matches!(events[2], AgentEvent::TextDelta(ref t) if t == "done"));
+    assert!(matches!(events[3], AgentEvent::TextDelta(ref t) if t == "done"));
 
     // The tool was actually invoked, and the second turn sent the tool
     // result back to the model.
@@ -359,11 +363,13 @@ async fn thinking_chunks_are_forwarded() {
             AgentEvent::Usage(_) => "usage",
             AgentEvent::Cancelled => "cancelled",
             AgentEvent::Error(_) => "error",
+            AgentEvent::StartTurn => "start_turn",
             AgentEvent::EndTurn { .. } => "end_turn",
         })
         .collect();
-    // Default `generate_stream` yields thinking before text, then end_turn.
-    assert_eq!(kinds, vec!["thinking", "text", "end_turn"]);
+    // start_turn fires first, then default `generate_stream` yields thinking
+    // before text, then end_turn.
+    assert_eq!(kinds, vec!["start_turn", "thinking", "text", "end_turn"]);
 }
 
 #[tokio::test]

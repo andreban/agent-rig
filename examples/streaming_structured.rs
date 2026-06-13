@@ -172,6 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Usage(usage) => println!("[usage] {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
+            AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
         }
     }

@@ -69,15 +69,15 @@ pub enum AgentEvent {
     /// Emitted before authorization and execution. A denied call therefore
     /// still emits this, followed by `ToolCallFinished { Denied }`.
     /// Hallucinated tool calls (no matching registry entry) do not emit this.
-    /// `id` is the provider-assigned call identifier (matching `ToolCall::id`);
+    /// `tool_id` is the provider-assigned call identifier (matching `ToolCall::id`);
     /// use it to correlate with the matching `ToolCallFinished`, since events
     /// from parallel calls in a turn may interleave. `title` is a
     /// human-readable display label for the call, derived from the tool's
     /// `Tool::title(&args)` (defaulting to the tool name).
-    ToolCallStarted { id: String, name: String, args: serde_json::Value, title: String },
-    /// Emitted after a tool resolves, errors, or is denied. `id` matches the
+    ToolCallStarted { tool_id: String, name: String, args: serde_json::Value, title: String },
+    /// Emitted after a tool resolves, errors, or is denied. `tool_id` matches the
     /// corresponding `ToolCallStarted`.
-    ToolCallFinished { id: String, name: String, result: ToolCallResult },
+    ToolCallFinished { tool_id: String, name: String, result: ToolCallResult },
     /// Reasoning token forwarded from the model stream.
     ThinkingDelta(String),
     /// Incremental text chunk forwarded from the model stream.
@@ -85,6 +85,13 @@ pub enum AgentEvent {
     /// Token counts reported by the provider for one model call.
     /// A run that issues N model calls produces up to N `Usage` events.
     Usage(TokenUsage),
+    /// First event of every run, before any model output.
+    StartTurn,
+    /// Last event on normal completion (no tool calls in the final model turn).
+    /// `thread` is the full conversation thread as it stood when the loop
+    /// exited, for carrying multi-turn state forward. Not emitted on the
+    /// `Cancelled` or `Error` paths.
+    EndTurn { thread: Vec<Message> },
     /// The run was cancelled via dropped stream or external token.
     /// Terminal — the stream ends after this event. Delivery is
     /// best-effort under stream-drop (the receiver may already be gone).

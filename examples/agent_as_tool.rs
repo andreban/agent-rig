@@ -133,6 +133,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             AgentEvent::Cancelled => {
                 println!("{prefix} cancelled")
             }
+            AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
         }
     }

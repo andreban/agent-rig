@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 //! Drives an [`Agent`] against an [`LlmModel`] until it produces a final reply.
 //!
 //! [`AgentRunner`] owns the model, the [`ToolRegistry`], and (optionally) an
@@ -209,6 +212,7 @@ impl AgentRunner {
         mut thread: Vec<Message>,
         cancel: CancellationToken,
     ) {
+        let _ = tx.send(AgentEvent::StartTurn).await;
         let tools: Vec<ToolDefinition> = self.registry.definitions();
 
         loop {
@@ -316,7 +320,7 @@ impl AgentRunner {
 
                 let _ = tx
                     .send(AgentEvent::ToolCallStarted {
-                        id: call.id.clone(),
+                        tool_id: call.id.clone(),
                         name: call.name.clone(),
                         args: call.args.clone(),
                         title: tool.title(&call.args).unwrap_or(call.name.clone()),
@@ -342,7 +346,7 @@ impl AgentRunner {
                         let result = ToolCallResult::Denied;
                         let _ = tx
                             .send(AgentEvent::ToolCallFinished {
-                                id: call.id.clone(),
+                                tool_id: call.id.clone(),
                                 name: call.name.clone(),
                                 result: result.clone(),
                             })
@@ -376,7 +380,7 @@ impl AgentRunner {
                 debug!(tool = call.name, "tool call complete");
                 let _ = tx
                     .send(AgentEvent::ToolCallFinished {
-                        id: call.id.clone(),
+                        tool_id: call.id.clone(),
                         name: call.name.clone(),
                         result: event.clone(),
                     })

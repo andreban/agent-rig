@@ -116,6 +116,7 @@ where
             AgentEvent::Usage(usage) => println!("\n[{label}] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[{label}] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[{label}] cancelled"),
+            AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
         }
     }

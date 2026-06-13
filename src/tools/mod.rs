@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 //! Tool and registry types used by [`AgentRunner`](crate::runner::AgentRunner).
 //!
 //! - [`Tool`] is the trait an application implements to expose a callable
