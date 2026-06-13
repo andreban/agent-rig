@@ -3,9 +3,7 @@
 
 use std::collections::HashMap;
 
-use serde::{Serialize, de::DeserializeOwned};
-
-use crate::tools::tool::{ErasedTool, Tool, ToolBridge, ToolDefinition};
+use crate::tools::tool::{Tool, ToolDefinition};
 
 /// A collection of [`Tool`]s (including [`AgentTool`](crate::tools::AgentTool)s)
 /// keyed by name.
@@ -39,7 +37,7 @@ use crate::tools::tool::{ErasedTool, Tool, ToolBridge, ToolDefinition};
 /// #     }
 /// # }
 /// # #[async_trait]
-/// # impl Tool<serde_json::Value, serde_json::Value> for MyTool {
+/// # impl Tool for MyTool {
 /// #     fn definition(&self) -> &ToolDefinition {
 /// #         &self.definition
 /// #     }
@@ -52,7 +50,7 @@ use crate::tools::tool::{ErasedTool, Tool, ToolBridge, ToolDefinition};
 /// );
 /// ```
 pub struct ToolRegistry {
-    tools: HashMap<String, Box<dyn ErasedTool>>,
+    tools: HashMap<String, Box<dyn Tool>>,
 }
 
 impl ToolRegistry {
@@ -65,18 +63,17 @@ impl ToolRegistry {
 
     /// Registers a [`Tool`], keyed by its [`ToolDefinition::name`].
     ///
-    /// Takes the tool by value and stores it behind an internal object-safe
-    /// wrapper, which is what lets a single registry hold tools with
-    /// different `I`/`O` types. Consumes and returns `self` for builder-style
-    /// chaining. If a tool with the same name is already registered, it is
-    /// overwritten.
-    pub fn register<T, I, O>(mut self, tool: T) -> Self
+    /// Accepts anything that implements [`Tool`] — including typed
+    /// [`SimpleTool`](crate::tools::SimpleTool)s via their blanket impl — and
+    /// stores it behind `Box<dyn Tool>`, which is what lets a single registry
+    /// hold tools of different shapes. Consumes and returns `self` for
+    /// builder-style chaining. If a tool with the same name is already
+    /// registered, it is overwritten.
+    pub fn register<T>(mut self, tool: T) -> Self
     where
-        T: Tool<I, O> + 'static,
-        I: DeserializeOwned + Send + 'static,
-        O: Serialize + Send + 'static,
+        T: Tool + 'static,
     {
-        let entry: Box<dyn ErasedTool> = Box::new(ToolBridge::new(tool));
+        let entry: Box<dyn Tool> = Box::new(tool);
         let name = entry.definition().name.clone();
         self.tools.insert(name, entry);
         self
@@ -93,7 +90,7 @@ impl ToolRegistry {
     }
 
     /// Returns the tool registered under `name`, or `None` if not found.
-    pub(crate) fn get(&self, name: &str) -> Option<&dyn ErasedTool> {
+    pub(crate) fn get(&self, name: &str) -> Option<&dyn Tool> {
         self.tools.get(name).map(|t| t.as_ref())
     }
 }
@@ -118,7 +115,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Tool<Value, Value> for StubTool {
+    impl Tool for StubTool {
         fn definition(&self) -> &ToolDefinition {
             &self.definition
         }

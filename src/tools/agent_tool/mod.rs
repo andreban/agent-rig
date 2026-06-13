@@ -49,7 +49,7 @@ impl AgentTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for AgentTool {
+impl Tool for AgentTool {
     /// The [`ToolDefinition`] this child agent exposes to the parent model.
     fn definition(&self) -> &ToolDefinition {
         &self.definition

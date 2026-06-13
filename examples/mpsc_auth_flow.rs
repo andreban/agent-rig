@@ -55,7 +55,7 @@ impl Default for SendEmailTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for SendEmailTool {
+impl Tool for SendEmailTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
@@ -158,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("\n[runner] started:   {name}({args})");
             }
             AgentEvent::ToolCallUpdate { name, details, .. } => {
-                println!("\n[runner] update:   {name}({details})");
+                println!("\n[runner] update:   {name}({details:?})");
             }
             AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),

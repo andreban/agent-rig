@@ -104,7 +104,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("{prefix} started:  {name}({args})");
             }
             AgentEvent::ToolCallUpdate { name, details, .. } => {
-                println!("{prefix} update:  {name}({details})");
+                println!("{prefix} update:  {name}({details:?})");
             }
             AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => {

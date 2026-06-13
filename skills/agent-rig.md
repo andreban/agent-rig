@@ -160,7 +160,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use agent_rig::{Agent, error::Error, model::Message, models::gemini::GeminiModel,
     runner::{AgentEvent, AgentRunner, ToolCallResult},
-    tools::{Tool, ToolDefinition, ToolRegistry}};
+    tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry}};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 
@@ -195,6 +195,7 @@ impl Tool for GetWeatherTool {
     async fn call(
         &self,
         args: Value,
+        _progress: &dyn ProgressReporter,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");

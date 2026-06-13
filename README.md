@@ -151,7 +151,7 @@ Implement the `Tool` trait to give the agent callable functions. The runner hand
 ```rust
 use std::sync::Arc;
 use async_trait::async_trait;
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
 use agent_rig::error::Error;
 use agent_rig::runner::AgentRunner;
 use serde_json::{json, Value};
@@ -185,6 +185,7 @@ impl Tool for GetWeatherTool {
     async fn call(
         &self,
         args: Value,
+        _progress: &dyn ProgressReporter,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");

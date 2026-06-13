@@ -60,7 +60,7 @@ impl Default for SlowUploadTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for SlowUploadTool {
+impl Tool for SlowUploadTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
@@ -106,7 +106,7 @@ where
                 println!("[{label}] started:   {name}({args})");
             }
             AgentEvent::ToolCallUpdate { name, details, .. } => {
-                println!("[{label}] update:   {name}({details})");
+                println!("[{label}] update:   {name}({details:?})");
             }
             AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => println!("[{label}] finished:  {name} → {value}"),

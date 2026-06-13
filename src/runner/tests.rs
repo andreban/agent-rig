@@ -132,7 +132,7 @@ impl EchoTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for EchoTool {
+impl Tool for EchoTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
@@ -537,7 +537,7 @@ struct CancellableTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for CancellableTool {
+impl Tool for CancellableTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }

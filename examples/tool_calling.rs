@@ -55,7 +55,7 @@ impl Default for GetTemperatureTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for GetTemperatureTool {
+impl Tool for GetTemperatureTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
@@ -99,7 +99,7 @@ impl Default for CelsiusToFahrenheitTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for CelsiusToFahrenheitTool {
+impl Tool for CelsiusToFahrenheitTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
@@ -150,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("[runner] started:   {name}({args})");
             }
             AgentEvent::ToolCallUpdate { name, details, .. } => {
-                println!("[runner] update:   {name}({details})");
+                println!("[runner] update:   {name}({details:?})");
             }
             AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),

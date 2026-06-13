@@ -59,7 +59,7 @@ impl Default for AddTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for AddTool {
+impl Tool for AddTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("[runner] tool call started: {name}({args})");
             }
             AgentEvent::ToolCallUpdate { name, details, .. } => {
-                println!("[runner] tool call started: {name}({details})");
+                println!("[runner] tool call started: {name}({details:?})");
             }
             AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => {

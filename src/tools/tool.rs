@@ -1,8 +1,6 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
-use std::marker::PhantomData;
-
 use async_trait::async_trait;
 
 use schemars::Schema;
@@ -35,76 +33,6 @@ pub struct ToolDefinition {
     pub parameters: Schema,
 }
 
-/// A callable tool that an agent can invoke during inference.
-///
-/// Implement this trait to expose executable logic to the agentic loop.
-/// The [`definition`](Tool::definition) method tells the model what the tool
-/// does; [`call`](Tool::call) executes it when the model requests it.
-///
-/// `I` is the argument type the tool receives. The runner deserializes the
-/// model's JSON tool-call payload into `I` before invoking [`call`], so `I`
-/// must implement [`DeserializeOwned`]. `O` is the result type the tool
-/// returns; the runner serializes it back to JSON when forwarding the
-/// tool result to the model, so `O` must implement [`Serialize`].
-///
-/// For tools that don't benefit from typed args, use
-/// `Tool<serde_json::Value, serde_json::Value>` and operate on raw JSON.
-///
-/// # Examples
-///
-/// ```no_run
-/// use async_trait::async_trait;
-/// use agent_rig::error::Error;
-/// use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition};
-/// use schemars::json_schema;
-/// use serde::{Deserialize, Serialize};
-/// use tokio_util::sync::CancellationToken;
-///
-/// #[derive(Deserialize)]
-/// struct AddArgs { a: i64, b: i64 }
-///
-/// #[derive(Serialize)]
-/// struct AddResult { result: i64 }
-///
-/// struct AddTool {
-///     definition: ToolDefinition,
-/// }
-///
-/// impl Default for AddTool {
-///     fn default() -> Self {
-///         Self {
-///             definition: ToolDefinition {
-///                 name: "add".to_string(),
-///                 description: "Adds two integers and returns the sum.".to_string(),
-///                 parameters: json_schema!({
-///                     "type": "object",
-///                     "properties": {
-///                         "a": { "type": "integer" },
-///                         "b": { "type": "integer" }
-///                     },
-///                     "required": ["a", "b"]
-///                 }),
-///             },
-///         }
-///     }
-/// }
-///
-/// #[async_trait]
-/// impl Tool<AddArgs, AddResult> for AddTool {
-///     fn definition(&self) -> &ToolDefinition {
-///         &self.definition
-///     }
-///
-///     async fn call(
-///         &self,
-///         args: AddArgs,
-///         _progress: &dyn ProgressReporter,
-///         _cancel: CancellationToken,
-///     ) -> Result<AddResult, Error> {
-///         Ok(AddResult { result: args.a + args.b })
-///     }
-/// }
-/// ```
 /// Receives incremental progress updates emitted by a tool mid-call.
 ///
 /// The runner passes a `&dyn ProgressReporter` into [`Tool::call`]; each
@@ -142,32 +70,85 @@ pub enum ProgressDetails {
     Other(Value),
 }
 
+/// A callable tool that an agent can invoke during inference.
+///
+/// `Tool` is the object-safe trait the [`ToolRegistry`](crate::tools::ToolRegistry)
+/// actually stores: arguments and results are untyped [`serde_json::Value`]s, so
+/// a single registry can hold tools with wildly different shapes behind
+/// `Box<dyn Tool>`.
+///
+/// Most authors should implement [`SimpleTool`] instead and get typed `Args`
+/// and `Output` for free — a blanket impl turns any `SimpleTool` into a `Tool`
+/// automatically. Implement `Tool` directly only when you genuinely want to
+/// work in raw JSON (for example, a passthrough tool, or
+/// [`AgentTool`](crate::tools::AgentTool), which serializes whatever the model
+/// sends into a child run).
+///
+/// # Examples
+///
+/// ```no_run
+/// use async_trait::async_trait;
+/// use agent_rig::error::Error;
+/// use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition};
+/// use schemars::json_schema;
+/// use serde_json::{Value, json};
+/// use tokio_util::sync::CancellationToken;
+///
+/// struct EchoTool {
+///     definition: ToolDefinition,
+/// }
+///
+/// impl Default for EchoTool {
+///     fn default() -> Self {
+///         Self {
+///             definition: ToolDefinition {
+///                 name: "echo".to_string(),
+///                 description: "Echoes the arguments back unchanged.".to_string(),
+///                 parameters: json_schema!({ "type": "object" }),
+///             },
+///         }
+///     }
+/// }
+///
+/// #[async_trait]
+/// impl Tool for EchoTool {
+///     fn definition(&self) -> &ToolDefinition {
+///         &self.definition
+///     }
+///
+///     async fn call(
+///         &self,
+///         args: Value,
+///         _progress: &dyn ProgressReporter,
+///         _cancel: CancellationToken,
+///     ) -> Result<Value, Error> {
+///         Ok(json!({ "echo": args }))
+///     }
+/// }
+/// ```
 #[async_trait]
-pub trait Tool<I, O>: Send + Sync
-where
-    I: DeserializeOwned + Send,
-    O: Serialize + Send,
-{
-    /// Returns a short, human-readable title for a specific invocation,
-    /// surfaced on [`AgentEvent::ToolCallStarted`].
-    ///
-    /// The default returns the tool's name. Override it to derive a more
-    /// descriptive label from the decoded `args` (for example,
-    /// `"Read foo.rs"` instead of `"read_file"`).
-    ///
-    /// [`AgentEvent::ToolCallStarted`]: crate::runner::AgentEvent::ToolCallStarted
-    fn title(&self, _args: &I) -> String {
-        self.definition().name.clone()
-    }
-
+pub trait Tool: Send + Sync {
     /// Returns the definition that describes this tool to the model.
     fn definition(&self) -> &ToolDefinition;
 
+    /// Returns a short, human-readable title for a specific invocation,
+    /// surfaced on [`AgentEvent::ToolCallStarted`].
+    ///
+    /// `args` is the raw tool-call JSON. The default returns the tool's name
+    /// and ignores `args`; override it to derive a more descriptive label (for
+    /// example, `"Read foo.rs"` instead of `"read_file"`). Returning `Err`
+    /// signals the arguments could not be interpreted — the runner falls back
+    /// to the tool name.
+    ///
+    /// [`AgentEvent::ToolCallStarted`]: crate::runner::AgentEvent::ToolCallStarted
+    fn title(&self, _args: &Value) -> Result<String, Error> {
+        Ok(self.definition().name.clone())
+    }
+
     /// Executes the tool with the arguments the model provided.
     ///
-    /// `args` is decoded from the model's tool-call JSON before this method
-    /// is invoked. The returned value is encoded back to JSON and sent to
-    /// the model as the tool result.
+    /// `args` is the raw tool-call JSON; the returned value is sent back to the
+    /// model as the tool result.
     ///
     /// `cancel` fires when the surrounding
     /// [`AgentRunner`](crate::runner::AgentRunner) run is cancelled — either
@@ -186,80 +167,140 @@ where
     /// awaits, so it applies backpressure under a slow consumer.
     async fn call(
         &self,
-        args: I,
+        args: Value,
         progress: &dyn ProgressReporter,
         cancel: CancellationToken,
-    ) -> Result<O, Error>;
+    ) -> Result<Value, Error>;
 }
 
-/// Object-safe view of a [`Tool`] that hides the typed argument and result
-/// behind `serde_json::Value`. This is what the [`ToolRegistry`](crate::tools::ToolRegistry)
-/// actually stores: every concrete `Tool<I, O>` is wrapped in a
-/// [`ToolBridge`] before being inserted, so a single registry can hold
-/// tools with different `I`/`O` types.
+/// A convenience trait for authoring typed tools without JSON boilerplate.
 ///
-/// Not intended for direct implementation — implement [`Tool`] instead.
+/// Implement `SimpleTool` to work with deserialized [`Args`](SimpleTool::Args)
+/// and a serializable [`Output`](SimpleTool::Output) instead of raw
+/// [`serde_json::Value`]s. A blanket `impl<T: SimpleTool> Tool for T` decodes
+/// the model's tool-call JSON into `Args` before [`call`](SimpleTool::call) and
+/// re-encodes the `Output` afterwards, so a `SimpleTool` registers anywhere a
+/// [`Tool`] is expected.
 ///
-/// [`ToolRegistry`]: crate::tools::ToolRegistry
-#[doc(hidden)]
+/// # Examples
+///
+/// ```no_run
+/// use async_trait::async_trait;
+/// use agent_rig::error::Error;
+/// use agent_rig::tools::{ProgressReporter, SimpleTool, ToolDefinition};
+/// use schemars::json_schema;
+/// use serde::{Deserialize, Serialize};
+/// use tokio_util::sync::CancellationToken;
+///
+/// #[derive(Deserialize)]
+/// struct AddArgs { a: i64, b: i64 }
+///
+/// #[derive(Serialize)]
+/// struct AddResult { result: i64 }
+///
+/// struct AddTool {
+///     definition: ToolDefinition,
+/// }
+///
+/// impl Default for AddTool {
+///     fn default() -> Self {
+///         Self {
+///             definition: ToolDefinition {
+///                 name: "add".to_string(),
+///                 description: "Adds two integers and returns the sum.".to_string(),
+///                 parameters: json_schema!({
+///                     "type": "object",
+///                     "properties": {
+///                         "a": { "type": "integer" },
+///                         "b": { "type": "integer" }
+///                     },
+///                     "required": ["a", "b"]
+///                 }),
+///             },
+///         }
+///     }
+/// }
+///
+/// #[async_trait]
+/// impl SimpleTool for AddTool {
+///     type Args = AddArgs;
+///     type Output = AddResult;
+///
+///     fn definition(&self) -> &ToolDefinition {
+///         &self.definition
+///     }
+///
+///     async fn call(
+///         &self,
+///         args: AddArgs,
+///         _progress: &dyn ProgressReporter,
+///         _cancel: CancellationToken,
+///     ) -> Result<AddResult, Error> {
+///         Ok(AddResult { result: args.a + args.b })
+///     }
+/// }
+/// ```
 #[async_trait]
-pub trait ErasedTool: Send + Sync {
+pub trait SimpleTool: Send + Sync {
+    /// The argument type decoded from the model's tool-call JSON before
+    /// [`call`](SimpleTool::call) is invoked.
+    type Args: DeserializeOwned + Send;
+    /// The result type serialized back to JSON and returned to the model.
+    type Output: Serialize + Send;
+
+    /// Returns the definition that describes this tool to the model.
     fn definition(&self) -> &ToolDefinition;
-    fn title(&self, args: &Value) -> Result<String, Error>;
+
+    /// Returns a short, human-readable title for a specific invocation,
+    /// surfaced on [`AgentEvent::ToolCallStarted`].
+    ///
+    /// The default returns the tool's name. Override it to derive a more
+    /// descriptive label from the decoded `args` (for example, `"Read foo.rs"`
+    /// instead of `"read_file"`).
+    ///
+    /// [`AgentEvent::ToolCallStarted`]: crate::runner::AgentEvent::ToolCallStarted
+    fn title(&self, _args: &Self::Args) -> String {
+        self.definition().name.clone()
+    }
+
+    /// Executes the tool with the decoded arguments the model provided.
+    ///
+    /// See [`Tool::call`] for the semantics of `progress` and `cancel`, which
+    /// are forwarded unchanged.
     async fn call(
         &self,
-        args: serde_json::Value,
+        args: Self::Args,
         progress: &dyn ProgressReporter,
         cancel: CancellationToken,
-    ) -> Result<serde_json::Value, Error>;
+    ) -> Result<Self::Output, Error>;
 }
 
-/// Wraps a typed [`Tool`] in an object-safe [`ErasedTool`] by serializing
-/// arguments and results at the boundary. The registry builds this
-/// internally; tool authors never name it.
-#[doc(hidden)]
-pub struct ToolBridge<T, I, O> {
-    tool: T,
-    _phantom: PhantomData<fn(I) -> O>,
-}
-
-impl<T, I, O> ToolBridge<T, I, O> {
-    pub fn new(tool: T) -> Self {
-        Self {
-            tool,
-            _phantom: PhantomData,
-        }
-    }
-}
-
+/// Blanket implementation: any [`SimpleTool`] is a [`Tool`], decoding `Args`
+/// from and encoding `Output` to JSON at the boundary.
 #[async_trait]
-impl<T, I, O> ErasedTool for ToolBridge<T, I, O>
+impl<T> Tool for T
 where
-    T: Tool<I, O> + Send + Sync,
-    I: DeserializeOwned + Send,
-    O: Serialize + Send,
+    T: SimpleTool,
 {
-    // Returns the name of this tool.
-    fn title(&self, args: &Value) -> Result<String, Error> {
-        let typed: I = serde_json::from_value(args.clone())
-            .map_err(|e| Error::Agent(format!("invalid tool arguments: {e}")))?;
-        let result = self.tool.title(&typed);
-        Ok(result)
+    fn definition(&self) -> &ToolDefinition {
+        SimpleTool::definition(self)
     }
 
-    fn definition(&self) -> &ToolDefinition {
-        Tool::definition(&self.tool)
+    fn title(&self, args: &Value) -> Result<String, Error> {
+        let typed: T::Args = serde_json::from_value(args.clone())
+            .map_err(|e| Error::Agent(format!("invalid tool arguments: {e}")))?;
+        Ok(SimpleTool::title(self, &typed))
     }
 
     async fn call(
         &self,
-        args: serde_json::Value,
+        args: Value,
         progress: &dyn ProgressReporter,
         cancel: CancellationToken,
-    ) -> Result<serde_json::Value, Error> {
-        let typed: I = serde_json::from_value(args)
+    ) -> Result<Value, Error> {
+        let typed: T::Args = serde_json::from_value(args)
             .map_err(|e| Error::Agent(format!("invalid tool arguments: {e}")))?;
-        let output = Tool::call(&self.tool, typed, progress, cancel).await?;
+        let output = SimpleTool::call(self, typed, progress, cancel).await?;
         serde_json::to_value(output)
             .map_err(|e| Error::Agent(format!("failed to serialize tool result: {e}")))
     }

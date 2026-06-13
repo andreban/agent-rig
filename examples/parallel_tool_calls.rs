@@ -65,7 +65,7 @@ impl Default for GetTemperatureTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for GetTemperatureTool {
+impl Tool for GetTemperatureTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
@@ -134,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name,
                 details,
             } => {
-                println!("[runner] started:   #{tool_id} {name}({details})");
+                println!("[runner] started:   #{tool_id} {name}({details:?})");
             }
             // Events from parallel calls interleave, so pair finished with
             // started by `id` rather than by `name`.
