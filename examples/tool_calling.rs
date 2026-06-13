@@ -160,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("[runner] usage:     {usage:?}"),
             AgentEvent::Cancelled => println!("[runner] cancelled"),
+            AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
         }
     }

@@ -91,11 +91,14 @@ pub struct RunEvent {
 }
 
 pub enum AgentEvent {
-    ToolCallStarted { id: String, name: String, args: serde_json::Value, title: String },
-    ToolCallFinished { id: String, name: String, result: ToolCallResult },
+    ToolCallStarted { tool_id: String, name: String, args: serde_json::Value, title: String },
+    ToolCallFinished { tool_id: String, name: String, result: ToolCallResult },
     ThinkingDelta(String),
     TextDelta(String),
     Usage(TokenUsage),
+    StartTurn,                       // first event of a run
+    EndTurn { thread: Vec<Message> }, // last event on normal completion
+    Cancelled,
     Error(Error),
 }
 ```

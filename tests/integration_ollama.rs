@@ -15,23 +15,33 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-struct AddTool;
+struct AddTool {
+    definition: ToolDefinition,
+}
+
+impl Default for AddTool {
+    fn default() -> Self {
+        Self {
+            definition: ToolDefinition {
+                name: "add".to_string(),
+                description: "Adds two integers and returns their sum.".to_string(),
+                parameters: json_schema!({
+                    "type": "object",
+                    "properties": {
+                        "a": { "type": "integer", "description": "First operand" },
+                        "b": { "type": "integer", "description": "Second operand" }
+                    },
+                    "required": ["a", "b"]
+                }),
+            },
+        }
+    }
+}
 
 #[async_trait]
 impl Tool<Value, Value> for AddTool {
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "add".to_string(),
-            description: "Adds two integers and returns their sum.".to_string(),
-            parameters: json_schema!({
-                "type": "object",
-                "properties": {
-                    "a": { "type": "integer", "description": "First operand" },
-                    "b": { "type": "integer", "description": "Second operand" }
-                },
-                "required": ["a", "b"]
-            }),
-        }
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
     }
 
     async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
@@ -185,7 +195,7 @@ async fn agent_tool_calling_returns_correct_result() {
     }
 
     let model = OllamaModel::new(&url, ollama_model());
-    let registry = Arc::new(ToolRegistry::new().register(AddTool));
+    let registry = Arc::new(ToolRegistry::new().register(AddTool::default()));
     let agent = Agent::builder()
         .name("Calculator")
         .instructions("You are a calculator. Use the add tool to compute sums. When asked to add numbers, call the tool and report the result.")

@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use geologia::prelude::{Candidate, Content, Part, PartData, Role};
 use serde_json::json;
@@ -225,10 +228,7 @@ fn ensure_object_response_wraps_non_object_scalars_and_arrays() {
         ensure_object_response(json!([1, 2, 3])),
         json!({"output": [1, 2, 3]})
     );
-    assert_eq!(
-        ensure_object_response(Value::Null),
-        json!({"output": null})
-    );
+    assert_eq!(ensure_object_response(Value::Null), json!({"output": null}));
 }
 
 #[test]

@@ -80,7 +80,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     print!("{chunk}");
                     io::stdout().flush()?;
                 }
-                AgentEvent::EndTurn { thread: updated } => {
+                AgentEvent::EndTurn {
+                    thread: updated, ..
+                } => {
                     thread = updated;
                 }
                 AgentEvent::Usage(usage) => {

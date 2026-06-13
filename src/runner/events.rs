@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 //! Public event types yielded by the [`AgentRunner`].
 //!
 //! [`AgentEvent`] is the union of things the runner reports as it drives the
@@ -71,6 +74,8 @@ impl From<Result<Value, Error>> for ToolCallResult {
 /// - [`Usage`](AgentEvent::Usage) reports token counts for one model call.
 ///   A run that performs `N` model calls produces up to `N` `Usage`
 ///   events; consumers sum across them to derive per-run totals.
+/// - [`StartTurn`](AgentEvent::StartTurn) is emitted as the first event of
+///   every run, before any model output.
 /// - [`EndTurn`](AgentEvent::EndTurn) is emitted as the last event on normal
 ///   completion and carries the full conversation thread (including any
 ///   [`ToolCalls`](crate::model::MessageContent::ToolCalls) and tool-result
@@ -88,7 +93,7 @@ pub enum AgentEvent {
         /// [`ToolCall::id`](crate::model::ToolCall::id). Use it to correlate
         /// this event with its [`ToolCallFinished`](AgentEvent::ToolCallFinished)
         /// — events from parallel calls in the same turn may interleave.
-        id: String,
+        tool_id: String,
         /// Name of the tool being invoked.
         name: String,
         /// The JSON arguments the model passed.
@@ -104,7 +109,7 @@ pub enum AgentEvent {
         /// [`ToolCall::id`](crate::model::ToolCall::id)). Use it to pair this
         /// event with its `Started` — events from parallel calls in the same
         /// turn may interleave.
-        id: String,
+        tool_id: String,
         /// Name of the tool that resolved.
         name: String,
         /// Outcome of the call.
@@ -121,6 +126,9 @@ pub enum AgentEvent {
     /// tool-calling turns produces multiple `Usage` events). Provider
     /// adapters that do not report usage never produce this event.
     Usage(TokenUsage),
+    /// The run has begun. Emitted as the first event of every run, before any
+    /// model output.
+    StartTurn,
     /// The run completed normally (no tool calls in the final model turn).
     ///
     /// Carries the full conversation thread as it stood when the loop exited,

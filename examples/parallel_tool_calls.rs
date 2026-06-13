@@ -120,24 +120,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted { id, name, args, .. } => {
-                println!("[runner] started:   #{id} {name}({args})");
+            AgentEvent::ToolCallStarted {
+                tool_id,
+                name,
+                args,
+                ..
+            } => {
+                println!("[runner] started:   #{tool_id} {name}({args})");
             }
             // Events from parallel calls interleave, so pair finished with
             // started by `id` rather than by `name`.
-            AgentEvent::ToolCallFinished { id, name, result } => match result {
-                ToolCallResult::Ok(value) => println!("[runner] finished:  #{id} {name} → {value}"),
-                ToolCallResult::Err(error) => {
-                    println!("[runner] error:     #{id} {name} → {error:?}")
+            AgentEvent::ToolCallFinished {
+                tool_id,
+                name,
+                result,
+            } => match result {
+                ToolCallResult::Ok(value) => {
+                    println!("[runner] finished:  #{tool_id} {name} → {value}")
                 }
-                ToolCallResult::Denied => println!("[runner] denied:    #{id} {name}"),
-                ToolCallResult::Unknown => println!("[runner] unknown:   #{id} {name}"),
+                ToolCallResult::Err(error) => {
+                    println!("[runner] error:     #{tool_id} {name} → {error:?}")
+                }
+                ToolCallResult::Denied => println!("[runner] denied:    #{tool_id} {name}"),
+                ToolCallResult::Unknown => println!("[runner] unknown:   #{tool_id} {name}"),
             },
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("\n[runner] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
+            AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
         }
     }

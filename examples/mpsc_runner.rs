@@ -132,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Cancelled => {
                 println!("\n[runner[{run_id}]] cancelled");
             }
+            AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
         }
     }
