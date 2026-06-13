@@ -64,7 +64,7 @@ impl Tool for AddTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
         let a = args["a"].as_i64().unwrap_or(0);
         let b = args["b"].as_i64().unwrap_or(0);
         println!("[tool]  add({a}, {b}) = {}", a + b);

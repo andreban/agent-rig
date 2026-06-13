@@ -55,24 +55,26 @@ impl Tool for AgentTool {
         &self.definition
     }
 
-    /// Invokes the child agent with `args` and returns the child's event stream.
+    /// Invokes the child agent with the proposal and consumes its event stream.
     ///
-    /// `args` is serialized to JSON and passed as the user message of the new
-    /// run. The child run is consumed internally and its accumulated text is
-    /// returned as the tool result; the child's events are not forwarded to
-    /// the parent stream.
+    /// `proposal` is the resolved tool-call JSON (the default
+    /// [`Tool::propose`] passes the model's arguments through unchanged); it is
+    /// serialized to JSON and passed as the user message of the new run. The
+    /// child run is consumed internally and its accumulated text is returned as
+    /// the tool result; the child's events are not forwarded to the parent
+    /// stream.
     ///
     /// `cancel` is propagated into the child run via
     /// [`AgentRunner::run_with_cancellation`], so cancelling the parent run
     /// cancels every nested agent in the tree.
-    #[instrument(skip(self, args, progress, cancel), fields(tool = self.definition.name))]
-    async fn call(
+    #[instrument(skip(self, proposal, progress, cancel), fields(tool = self.definition.name))]
+    async fn apply(
         &self,
-        args: serde_json::Value,
+        proposal: serde_json::Value,
         progress: &dyn ProgressReporter,
         cancel: CancellationToken,
     ) -> Result<Value, Error> {
-        let input = serde_json::to_string(&args)
+        let input = serde_json::to_string(&proposal)
             .map_err(|e| Error::Agent(format!("failed to serialize args: {e}")))?;
 
         let mut result = String::new();

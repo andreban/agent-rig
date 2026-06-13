@@ -73,7 +73,7 @@ impl Tool for RememberFactTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
         let fact = args["fact"]
             .as_str()
             .ok_or_else(|| Error::Agent("missing 'fact' argument".to_string()))?
@@ -124,7 +124,7 @@ impl Tool for RecallFactTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
         let query = args["query"]
             .as_str()
             .ok_or_else(|| Error::Agent("missing 'query' argument".to_string()))?

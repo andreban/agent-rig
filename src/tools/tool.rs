@@ -35,7 +35,8 @@ pub struct ToolDefinition {
 
 /// Receives incremental progress updates emitted by a tool mid-call.
 ///
-/// The runner passes a `&dyn ProgressReporter` into [`Tool::call`]; each
+/// The runner passes a `&dyn ProgressReporter` into [`Tool::propose`] and
+/// [`Tool::apply`]; each
 /// [`update`](ProgressReporter::update) emits a `ToolCallUpdate` event on the
 /// run's event stream. Tool authors do not implement this — the runner
 /// supplies the implementation.
@@ -66,7 +67,7 @@ pub enum ProgressDetails {
     /// which would otherwise make the type infinitely sized.
     AgentUpdate(Box<AgentEvent>),
     /// A tool-defined JSON payload describing the tool's current state. This is
-    /// what most tools emit from [`Tool::call`].
+    /// what most tools emit from [`Tool::apply`].
     Other(Value),
 }
 
@@ -116,13 +117,15 @@ pub enum ProgressDetails {
 ///         &self.definition
 ///     }
 ///
-///     async fn call(
+///     // `propose` is left as the default (it returns the args unchanged), so
+///     // only `apply` needs implementing.
+///     async fn apply(
 ///         &self,
-///         args: Value,
+///         proposal: Value,
 ///         _progress: &dyn ProgressReporter,
 ///         _cancel: CancellationToken,
 ///     ) -> Result<Value, Error> {
-///         Ok(json!({ "echo": args }))
+///         Ok(json!({ "echo": proposal }))
 ///     }
 /// }
 /// ```
@@ -145,10 +148,46 @@ pub trait Tool: Send + Sync {
         Ok(self.definition().name.clone())
     }
 
-    /// Executes the tool with the arguments the model provided.
+    /// Plans the call without committing side effects, returning a *proposal*:
+    /// a JSON value that both the [`AuthManager`](crate::auth::AuthManager) and
+    /// [`apply`](Tool::apply) read from.
     ///
-    /// `args` is the raw tool-call JSON; the returned value is sent back to the
-    /// model as the tool result.
+    /// A tool call runs in two phases. `propose` resolves the model's raw
+    /// `args` into the concrete thing that will happen — for an edit tool, it
+    /// reads the file and computes the new contents, returning something like
+    /// `{ "path": …, "old_text": …, "new_text": … }`. The runner shows that
+    /// proposal to the `AuthManager` (which can render a diff from it), and if
+    /// approved hands the *same* value to `apply` (which writes `new_text`).
+    /// Because one value drives both, what the approver sees and what executes
+    /// can never drift apart.
+    ///
+    /// `propose` runs on **every** call — before authorization, and even when
+    /// no authorization is required — because its result is what `apply`
+    /// consumes. It must therefore be **side-effect-free**: it may read
+    /// (resolve a path, compute a diff, expand a command), but it must not
+    /// mutate. Returning `Err` aborts the call before authorization is ever
+    /// requested and surfaces the error to the model.
+    ///
+    /// The default returns the `args` unchanged, which is right for any tool
+    /// whose call needs no planning. Override it to resolve `args` into a
+    /// richer proposal.
+    ///
+    /// `progress` and `cancel` behave as described on [`apply`](Tool::apply).
+    async fn propose(
+        &self,
+        args: &Value,
+        _progress: &dyn ProgressReporter,
+        _cancel: CancellationToken,
+    ) -> Result<Value, Error> {
+        Ok(args.clone())
+    }
+
+    /// Executes an approved proposal.
+    ///
+    /// `proposal` is the value [`propose`](Tool::propose) returned for this
+    /// call, handed back verbatim once it is authorized; the returned value is
+    /// sent back to the model as the tool result. For the default `propose`,
+    /// `proposal` is just the raw tool-call JSON.
     ///
     /// `cancel` fires when the surrounding
     /// [`AgentRunner`](crate::runner::AgentRunner) run is cancelled — either
@@ -165,9 +204,9 @@ pub trait Tool: Send + Sync {
     /// [`progress.update(details)`](ProgressReporter::update) to emit a
     /// `ToolCallUpdate` event for this call. Delivery is guaranteed but
     /// awaits, so it applies backpressure under a slow consumer.
-    async fn call(
+    async fn apply(
         &self,
-        args: Value,
+        proposal: Value,
         progress: &dyn ProgressReporter,
         cancel: CancellationToken,
     ) -> Result<Value, Error>;
@@ -181,6 +220,12 @@ pub trait Tool: Send + Sync {
 /// the model's tool-call JSON into `Args` before [`call`](SimpleTool::call) and
 /// re-encodes the `Output` afterwards, so a `SimpleTool` registers anywhere a
 /// [`Tool`] is expected.
+///
+/// The blanket impl uses the default [`Tool::propose`] (the proposal is the
+/// raw args), so `call` always receives the same decoded `Args`. A tool that
+/// needs to resolve its args into a richer proposal — e.g. read a file and
+/// produce a diff for the authorization prompt — should implement [`Tool`]
+/// directly instead.
 ///
 /// # Examples
 ///
@@ -265,7 +310,7 @@ pub trait SimpleTool: Send + Sync {
 
     /// Executes the tool with the decoded arguments the model provided.
     ///
-    /// See [`Tool::call`] for the semantics of `progress` and `cancel`, which
+    /// See [`Tool::apply`] for the semantics of `progress` and `cancel`, which
     /// are forwarded unchanged.
     async fn call(
         &self,
@@ -292,13 +337,15 @@ where
         Ok(SimpleTool::title(self, &typed))
     }
 
-    async fn call(
+    async fn apply(
         &self,
-        args: Value,
+        proposal: Value,
         progress: &dyn ProgressReporter,
         cancel: CancellationToken,
     ) -> Result<Value, Error> {
-        let typed: T::Args = serde_json::from_value(args)
+        // The default `propose` leaves the proposal equal to the raw args, so
+        // it decodes straight into `Args`.
+        let typed: T::Args = serde_json::from_value(proposal)
             .map_err(|e| Error::Agent(format!("invalid tool arguments: {e}")))?;
         let output = SimpleTool::call(self, typed, progress, cancel).await?;
         serde_json::to_value(output)

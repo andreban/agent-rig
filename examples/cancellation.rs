@@ -65,7 +65,7 @@ impl Tool for SlowUploadTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, cancel: CancellationToken) -> Result<Value, Error> {
         let path = args["path"].as_str().unwrap_or("unknown");
         println!("[tool]  upload({path}) starting (5s)…");
         tokio::select! {

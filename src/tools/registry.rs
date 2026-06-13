@@ -41,7 +41,7 @@ use crate::tools::tool::{Tool, ToolDefinition};
 /// #     fn definition(&self) -> &ToolDefinition {
 /// #         &self.definition
 /// #     }
-/// #     async fn call(&self, _: serde_json::Value, _: &dyn ProgressReporter, _: tokio_util::sync::CancellationToken)
+/// #     async fn apply(&self, _: serde_json::Value, _: &dyn ProgressReporter, _: tokio_util::sync::CancellationToken)
 /// #         -> Result<serde_json::Value, Error> { Ok(serde_json::json!({})) }
 /// # }
 /// let registry = Arc::new(
@@ -120,9 +120,9 @@ mod tests {
             &self.definition
         }
 
-        async fn call(
+        async fn apply(
             &self,
-            _args: Value,
+            _proposal: Value,
             _progress: &dyn ProgressReporter,
             _cancel: tokio_util::sync::CancellationToken,
         ) -> Result<Value, Error> {

@@ -60,9 +60,29 @@ impl Tool for SendEmailTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    /// Resolves the raw args into a proposal carrying a `preview` string the
+    /// authorization prompt can show. The other fields are passed through so
+    /// `apply` still has everything it needs.
+    async fn propose(
+        &self,
+        args: &Value,
+        _progress: &dyn ProgressReporter,
+        _cancel: CancellationToken,
+    ) -> Result<Value, Error> {
         let to = args["to"].as_str().unwrap_or("");
         let subject = args["subject"].as_str().unwrap_or("");
+        let body = args["body"].as_str().unwrap_or("");
+        Ok(json!({
+            "to": to,
+            "subject": subject,
+            "body": body,
+            "preview": format!("To: {to}\n  Subject: {subject}\n  {body}"),
+        }))
+    }
+
+    async fn apply(&self, proposal: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+        let to = proposal["to"].as_str().unwrap_or("");
+        let subject = proposal["subject"].as_str().unwrap_or("");
         println!("[tool]  pretending to send email to {to} (subject: {subject:?})");
         Ok(json!({ "status": "sent", "to": to }))
     }
@@ -100,11 +120,14 @@ impl AuthManager for StdinPromptAuthManager {
         self.protected.contains(name)
     }
 
-    async fn authorize(&self, id: &str, name: &str, args: &Value) -> bool {
+    async fn authorize(&self, id: &str, name: &str, _args: &Value, proposal: &Value) -> bool {
         let _guard = self.prompt_lock.lock().await;
 
-        println!("\n[auth]  Tool '{name}' (id {id}) wants to run with args:");
-        println!("[auth]    {args}");
+        // The tool resolved the call into a proposal; show its human-readable
+        // `preview` rather than the raw args.
+        let preview = proposal["preview"].as_str().unwrap_or("(no preview)");
+        println!("\n[auth]  Tool '{name}' (id {id}) wants to run:");
+        println!("[auth]    {preview}");
         print!("[auth]  Approve? [y/N]: ");
         use std::io::Write;
         let _ = std::io::stdout().flush();

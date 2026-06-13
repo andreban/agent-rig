@@ -192,13 +192,15 @@ impl Tool for GetWeatherTool {
         &self.definition
     }
 
-    async fn call(
+    // Two-phase call: `propose` resolves the args (default passthrough here),
+    // then `apply` executes the approved proposal.
+    async fn apply(
         &self,
-        args: Value,
+        proposal: Value,
         _progress: &dyn ProgressReporter,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Value, Error> {
-        let city = args["city"].as_str().unwrap_or("unknown");
+        let city = proposal["city"].as_str().unwrap_or("unknown");
         Ok(json!({ "city": city, "celsius": 22.0 }))
     }
 }
@@ -314,9 +316,11 @@ impl AuthManager for ProtectedTools {
         self.names.contains(name)
     }
 
-    async fn authorize(&self, id: &str, name: &str, args: &Value) -> bool {
-        // Async. Prompt the user, call a policy service, etc.
-        prompt_user(id, name, args).await
+    async fn authorize(&self, id: &str, name: &str, _args: &Value, proposal: &Value) -> bool {
+        // Async. `proposal` is what `Tool::propose` resolved the call into
+        // (the default passthrough makes it equal to the args). Prompt the
+        // user, call a policy service, etc.
+        prompt_user(id, name, proposal).await
     }
 }
 
@@ -366,9 +370,9 @@ let mut stream = runner.run_with_cancellation(&agent, thread, cancel.clone());
 //   });
 ```
 
-`Tool::call` receives the cancel token; long-running tools should `select!` on it
-or pass it down to the libraries they call. Tools that ignore it still terminate
-the run correctly — the runner races each call against `cancel` — but their
+Both `Tool::propose` and `Tool::apply` receive the cancel token; long-running tools
+should `select!` on it or pass it down to the libraries they call. Tools that ignore it
+still terminate the run correctly — the runner races each phase against `cancel` — but their
 side effects may continue in the background until they finish on their own.
 
 A cancelled run emits a terminal `AgentEvent::Cancelled` before the stream ends.
@@ -482,8 +486,8 @@ while let Some(event) = stream.next().await {
 **Notes:**
 
 - `AgentTool` **owns** its `AgentRunner` (not a shared reference). Each child has its own model
-  binding. Multiple concurrent `call` invocations are safe.
-- Internally, `AgentTool::call` serialises the parent's `args` JSON to a string and passes it as the
+  binding. Multiple concurrent `apply` invocations are safe.
+- Internally, `AgentTool::apply` serialises the proposal JSON to a string and passes it as the
   child's user message. The child's `TextDelta` chunks are accumulated; the tool result returned to
   the parent model is `{"output": "<accumulated text>"}`.
 - Child agents can have their own tools and even their own sub-agents. Nesting is unlimited.
