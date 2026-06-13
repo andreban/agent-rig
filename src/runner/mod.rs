@@ -340,6 +340,45 @@ impl AgentRunner {
                     })
                     .await;
 
+                // Progress sink for this call. Each `update` awaits delivery
+                // on the event channel, so a slow consumer applies backpressure
+                // to a chatty tool. Created before `propose` so the planning
+                // phase can report progress too.
+                let progress = ToolProgress {
+                    tx,
+                    tool_id: call.id.clone(),
+                    name: call.name.clone(),
+                };
+
+                // Propose phase: resolve the call into a proposal without
+                // committing side effects. Runs unconditionally (its result is
+                // what `apply` executes) and before authorization, so the
+                // approval prompt can show the resolved action. A propose error
+                // aborts the call before authorization is ever requested.
+                let proposal = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        return (
+                            call,
+                            ToolCallResult::Err(Error::Agent("cancelled".into())),
+                        );
+                    }
+                    result = tool.propose(&call.args, &progress, cancel.clone()) => match result {
+                        Ok(proposal) => proposal,
+                        Err(error) => {
+                            let result = ToolCallResult::Err(error);
+                            let _ = tx
+                                .send(AgentEvent::ToolCallFinished {
+                                    tool_id: call.id.clone(),
+                                    name: call.name.clone(),
+                                    result: result.clone(),
+                                })
+                                .await;
+                            return (call, result);
+                        }
+                    },
+                };
+
                 // Authorization gate: the sync check decides whether to consult
                 // the async decision path. If no manager is configured, no gating.
                 if let Some(auth) = &self.auth_manager
@@ -353,7 +392,7 @@ impl AgentRunner {
                                 ToolCallResult::Err(Error::Agent("cancelled".into())),
                             );
                         }
-                        decision = auth.authorize(&call.id, &call.name, &call.args) => decision,
+                        decision = auth.authorize(&call.id, &call.name, &call.args, &proposal) => decision,
                     };
                     if !allowed {
                         let result = ToolCallResult::Denied;
@@ -368,15 +407,7 @@ impl AgentRunner {
                     }
                 }
 
-                // Progress sink for this call. Each `update` awaits delivery
-                // on the event channel, so a slow consumer applies backpressure
-                // to a chatty tool.
-                let progress = ToolProgress {
-                    tx,
-                    tool_id: call.id.clone(),
-                    name: call.name.clone(),
-                };
-
+                // Apply phase: execute the approved proposal.
                 let event: ToolCallResult = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => {
@@ -387,7 +418,7 @@ impl AgentRunner {
                             ToolCallResult::Err(Error::Agent("cancelled".into())),
                         );
                     }
-                    result = tool.call(call.args.clone(), &progress, cancel.clone()) => result.into(),
+                    result = tool.apply(proposal, &progress, cancel.clone()) => result.into(),
                 };
 
                 debug!(tool = call.name, "tool call complete");

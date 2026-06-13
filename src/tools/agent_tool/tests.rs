@@ -80,7 +80,7 @@ fn build_agent_tool(model: Arc<ScriptedModel>) -> AgentTool {
 
 /// Regression test for a Gemini-specific bug: `function_response.response`
 /// is typed as a protobuf `Struct`, so the value MUST be a JSON object.
-/// `AgentTool::call` always wraps the child's text reply in
+/// `AgentTool::apply` always wraps the child's text reply in
 /// `{"output": "..."}` regardless of what the child agent actually emitted.
 #[tokio::test]
 async fn call_wraps_accumulated_text_in_output_object() {
@@ -88,7 +88,7 @@ async fn call_wraps_accumulated_text_in_output_object() {
     let tool = build_agent_tool(model);
 
     let result = tool
-        .call(
+        .apply(
             json!({"text": "anything"}),
             &NoopProgress,
             CancellationToken::new(),
@@ -106,7 +106,7 @@ async fn call_passes_args_as_serialized_json_user_message() {
     let tool = build_agent_tool(model.clone());
 
     let _ = tool
-        .call(
+        .apply(
             json!({"text": "hello", "n": 42}),
             &NoopProgress,
             CancellationToken::new(),

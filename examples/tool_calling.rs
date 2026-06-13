@@ -60,7 +60,7 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");
         let celsius = match city.to_lowercase().as_str() {
             "london" => 15.0,
@@ -104,7 +104,7 @@ impl Tool for CelsiusToFahrenheitTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
         let celsius = args["celsius"].as_f64().unwrap_or(0.0);
         let fahrenheit = celsius * 9.0 / 5.0 + 32.0;
         println!("[tool] celsius_to_fahrenheit({celsius}) → {fahrenheit}°F");

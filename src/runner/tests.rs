@@ -137,13 +137,13 @@ impl Tool for EchoTool {
         &self.definition
     }
 
-    async fn call(
+    async fn apply(
         &self,
-        args: serde_json::Value,
+        proposal: serde_json::Value,
         _progress: &dyn ProgressReporter,
         _cancel: CancellationToken,
     ) -> Result<serde_json::Value, Error> {
-        self.calls.lock().unwrap().push(args);
+        self.calls.lock().unwrap().push(proposal);
         self.result.clone()
     }
 }
@@ -261,6 +261,8 @@ struct ScriptedAuth {
     decisions: Mutex<std::collections::VecDeque<bool>>,
     required: bool,
     calls: Arc<Mutex<Vec<String>>>,
+    /// Proposals seen by `authorize`, in call order.
+    proposals: Arc<Mutex<Vec<Value>>>,
 }
 
 impl ScriptedAuth {
@@ -269,6 +271,7 @@ impl ScriptedAuth {
             decisions: Mutex::new(decisions.into()),
             required,
             calls: Arc::new(Mutex::new(Vec::new())),
+            proposals: Arc::new(Mutex::new(Vec::new())),
         })
     }
 }
@@ -279,8 +282,15 @@ impl AuthManager for ScriptedAuth {
         self.required
     }
 
-    async fn authorize(&self, _id: &str, name: &str, _args: &Value) -> bool {
+    async fn authorize(
+        &self,
+        _id: &str,
+        name: &str,
+        _args: &Value,
+        proposal: &Value,
+    ) -> bool {
         self.calls.lock().unwrap().push(name.to_string());
+        self.proposals.lock().unwrap().push(proposal.clone());
         self.decisions
             .lock()
             .unwrap()
@@ -341,6 +351,117 @@ async fn auth_fast_path_skips_authorize() {
 
     assert!(auth.calls.lock().unwrap().is_empty());
     assert_eq!(calls.lock().unwrap().len(), 1);
+}
+
+/// Tool with a custom [`Tool::propose`]: it resolves the raw args into a
+/// distinct proposal and records the proposal its `apply` actually receives.
+struct ProposingTool {
+    definition: ToolDefinition,
+    /// The proposal `propose` returns; `Err` makes it fail before auth.
+    proposal: Result<Value, Error>,
+    applied: Arc<Mutex<Vec<Value>>>,
+}
+
+impl ProposingTool {
+    fn new(proposal: Result<Value, Error>) -> (Self, Arc<Mutex<Vec<Value>>>) {
+        let applied = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                definition: ToolDefinition {
+                    name: "proposing".to_string(),
+                    description: "proposing".to_string(),
+                    parameters: json_schema!({"type": "object"}),
+                },
+                proposal,
+                applied: applied.clone(),
+            },
+            applied,
+        )
+    }
+}
+
+#[async_trait]
+impl Tool for ProposingTool {
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
+    }
+
+    async fn propose(
+        &self,
+        _args: &Value,
+        _progress: &dyn ProgressReporter,
+        _cancel: CancellationToken,
+    ) -> Result<Value, Error> {
+        self.proposal
+            .clone()
+            .map_err(|e| Error::Agent(e.to_string()))
+    }
+
+    async fn apply(
+        &self,
+        proposal: Value,
+        _progress: &dyn ProgressReporter,
+        _cancel: CancellationToken,
+    ) -> Result<Value, Error> {
+        self.applied.lock().unwrap().push(proposal);
+        Ok(json!({"ok": true}))
+    }
+}
+
+#[tokio::test]
+async fn proposal_is_forwarded_to_authorize_and_apply() {
+    let resolved = json!({"path": "f.rs", "old_text": "a", "new_text": "b"});
+    let (tool, applied) = ProposingTool::new(Ok(resolved.clone()));
+    let registry = Arc::new(ToolRegistry::new().register(tool));
+    let auth = ScriptedAuth::new(true, vec![true]);
+    let model = ScriptedModel::new(vec![
+        tool_call_response("c1", "proposing", json!({"raw": "args"})),
+        final_response("ok"),
+    ]);
+    let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
+
+    let _ = collect(&runner, agent("a"), "go").await;
+
+    // `authorize` saw the resolved proposal, not the raw args ...
+    assert_eq!(
+        auth.proposals.lock().unwrap().as_slice(),
+        std::slice::from_ref(&resolved)
+    );
+    // ... and `apply` ran with the same approved proposal.
+    assert_eq!(
+        applied.lock().unwrap().as_slice(),
+        std::slice::from_ref(&resolved)
+    );
+}
+
+#[tokio::test]
+async fn propose_error_skips_authorization_and_apply() {
+    let (tool, applied) = ProposingTool::new(Err(Error::Agent("cannot plan".to_string())));
+    let registry = Arc::new(ToolRegistry::new().register(tool));
+    let auth = ScriptedAuth::new(true, vec![]);
+    let model = ScriptedModel::new(vec![
+        tool_call_response("c1", "proposing", json!({})),
+        final_response("ok"),
+    ]);
+    let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
+
+    let events = collect(&runner, agent("a"), "go").await;
+
+    // A propose failure surfaces as Finished(Err) ...
+    let finished = events
+        .iter()
+        .find(|e| matches!(e, AgentEvent::ToolCallFinished { .. }))
+        .unwrap();
+    assert!(matches!(
+        finished,
+        AgentEvent::ToolCallFinished {
+            result: ToolCallResult::Err(_),
+            ..
+        }
+    ));
+    // ... without ever consulting the auth manager or running `apply`.
+    assert!(auth.calls.lock().unwrap().is_empty());
+    assert!(applied.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -542,9 +663,9 @@ impl Tool for CancellableTool {
         &self.definition
     }
 
-    async fn call(
+    async fn apply(
         &self,
-        _args: Value,
+        _proposal: Value,
         _progress: &dyn ProgressReporter,
         cancel: CancellationToken,
     ) -> Result<Value, Error> {

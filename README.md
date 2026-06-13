@@ -182,13 +182,15 @@ impl Tool for GetWeatherTool {
         &self.definition
     }
 
-    async fn call(
+    // A call runs in two phases: `propose` resolves the args (the default
+    // passthrough is fine here), then `apply` executes the approved proposal.
+    async fn apply(
         &self,
-        args: Value,
+        proposal: Value,
         _progress: &dyn ProgressReporter,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Value, Error> {
-        let city = args["city"].as_str().unwrap_or("unknown");
+        let city = proposal["city"].as_str().unwrap_or("unknown");
         Ok(json!({ "city": city, "celsius": 22.0 }))
     }
 }
@@ -232,7 +234,7 @@ while let Some(event) = stream.next().await {
 
 ### Authorization
 
-Implement `AuthManager` to gate tool calls. The runner consults the manager for every call: `requires_authorization` is a cheap synchronous filter; `authorize` is the async decision (`true` to allow, `false` to deny).
+Implement `AuthManager` to gate tool calls. The runner consults the manager for every call: `requires_authorization` is a cheap synchronous filter; `authorize` is the async decision (`true` to allow, `false` to deny). Before authorization the runner calls the tool's `propose`, so `authorize` also receives the resolved `proposal` — the concrete action (e.g. a path plus old/new contents to diff). Show that instead of the raw `args`.
 
 ```rust
 use std::sync::Arc;
@@ -249,9 +251,9 @@ impl AuthManager for ProtectedTools {
         self.names.contains(name)
     }
 
-    async fn authorize(&self, id: &str, name: &str, args: &Value) -> bool {
-        // Prompt the user, call a policy service, etc.
-        prompt_user(id, name, args).await
+    async fn authorize(&self, id: &str, name: &str, _args: &Value, proposal: &Value) -> bool {
+        // Prompt the user with the resolved action, call a policy service, etc.
+        prompt_user(id, name, proposal).await
     }
 }
 

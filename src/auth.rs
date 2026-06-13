@@ -63,7 +63,18 @@ pub trait AuthManager: Send + Sync {
     /// keyed by id, a remote approval service) can use it to correlate the
     /// prompt with the tool call the runner reports.
     ///
+    /// `args` is the raw JSON the model requested. `proposal` is what the tool
+    /// resolved those args into via
+    /// [`Tool::propose`](crate::tools::Tool::propose): the concrete thing that
+    /// will happen if approved (for an edit tool, the path plus old and new
+    /// contents — enough to render a diff). The approved proposal is handed
+    /// verbatim to [`Tool::apply`](crate::tools::Tool::apply), so what the
+    /// prompt shows is exactly what runs. For a tool that does no planning the
+    /// proposal equals `args`. Rendering it for a human is the manager's job:
+    /// a tool-aware manager matches on `name` and renders accordingly; a
+    /// generic one can display the JSON.
+    ///
     /// This is the async decision path — block on user input, RPCs, or any
     /// other I/O here. See the trait docs for concurrency requirements.
-    async fn authorize(&self, id: &str, name: &str, args: &Value) -> bool;
+    async fn authorize(&self, id: &str, name: &str, args: &Value, proposal: &Value) -> bool;
 }

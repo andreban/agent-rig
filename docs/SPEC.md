@@ -201,6 +201,9 @@ pub struct ToolDefinition {
 // untyped JSON, so a single registry can hold tools of any shape behind
 // `Box<dyn Tool>`. Implement this directly only for raw-JSON tools (e.g.
 // `AgentTool`); most authors implement `SimpleTool` instead.
+//
+// A call runs in two phases: `propose` resolves the args into a proposal
+// (side-effect free, before authorization), then `apply` executes it.
 #[async_trait]
 pub trait Tool: Send + Sync {
     /// Borrows the tool's definition; tools own a `ToolDefinition` and return
@@ -212,9 +215,21 @@ pub trait Tool: Send + Sync {
     fn title(&self, args: &serde_json::Value) -> Result<String, Error> {
         Ok(self.definition().name.clone())
     }
-    async fn call(
+    /// Resolves `args` into a proposal — the concrete thing that will happen —
+    /// without side effects, before authorization. The returned value is shown
+    /// to the `AuthManager` and then handed verbatim to `apply`. The default
+    /// returns `args` unchanged; override it to do real planning (e.g. read a
+    /// file and return `{ path, old_text, new_text }` so a diff can be shown).
+    async fn propose(
         &self,
-        args: serde_json::Value,
+        args: &serde_json::Value,
+        progress: &dyn ProgressReporter,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value, Error> { Ok(args.clone()) }
+    /// Executes the approved `proposal` (the value `propose` returned).
+    async fn apply(
+        &self,
+        proposal: serde_json::Value,
         progress: &dyn ProgressReporter,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<serde_json::Value, Error>;
@@ -223,7 +238,8 @@ pub trait Tool: Send + Sync {
 // Convenience trait for typed tools. A blanket `impl<T: SimpleTool> Tool for T`
 // decodes `Args` from and encodes `Output` to JSON at the boundary, so a
 // `SimpleTool` registers anywhere a `Tool` is expected. Replaces the former
-// `Tool<I, O>` + `ToolBridge` indirection.
+// `Tool<I, O>` + `ToolBridge` indirection. It uses the default `propose` (the
+// proposal is the raw args), so `call` always receives the decoded `Args`.
 #[async_trait]
 pub trait SimpleTool: Send + Sync {
     type Args: DeserializeOwned + Send;
@@ -252,7 +268,9 @@ impl ToolRegistry {
 
 `ToolDefinition` is the runtime-only contract between agent and model. It is never stored in `Agent` — it lives in the `ToolRegistry` alongside its implementation and is resolved at run time. `parameters` is a `schemars::Schema`, typically built with the `schemars::json_schema!` macro.
 
-`Tool` is the object-safe trait the registry stores: its `Args`/`Output` are raw `serde_json::Value`s. Most authors implement `SimpleTool` instead, which is generic over a deserializable `Args` type and a serializable `Output` type; a blanket `impl<T: SimpleTool> Tool for T` decodes the model's tool-call JSON into `Args` before `call` and re-encodes the `Output` afterwards. Implement `Tool` directly only when you genuinely want to operate on raw JSON.
+`Tool` is the object-safe trait the registry stores: its arguments and results are raw `serde_json::Value`s. A call runs in two phases. `propose` resolves the model's raw `args` into a *proposal* — the concrete thing that will happen — without side effects and before authorization; it returns a single JSON value. The runner shows that proposal to the `AuthManager` and, if approved, hands the *same* value to `apply`. Because one value drives both the prompt and the execution, what the approver sees and what runs can never drift. An edit tool's `propose` reads the file and returns `{ path, old_text, new_text }`; the auth manager renders a diff from it and `apply` writes `new_text`. `propose` has a default that returns `args` unchanged, so a tool that needs no planning only implements `apply`. The proposal is opaque to the runner — rendering it for a human is the `AuthManager`'s job (a tool-aware manager matches on the tool name; a generic one displays the JSON).
+
+Most authors implement `SimpleTool` instead, which is generic over a deserializable `Args` type and a serializable `Output` type; a blanket `impl<T: SimpleTool> Tool for T` decodes the model's tool-call JSON into `Args` before `call` and re-encodes the `Output` afterwards. It uses the default `propose` (proposal == raw args), so a plain `SimpleTool` never thinks about the split. Implement `Tool` directly when you want to operate on raw JSON or resolve args into a richer proposal in `propose`.
 
 A single registry can hold tools of different shapes because everything is stored as `Box<dyn Tool>`. `register` accepts any `Tool` (including `SimpleTool`s via the blanket impl) and boxes it directly — there is no separate wrapper type.
 
@@ -304,11 +322,11 @@ The caller is responsible for maintaining conversation history across turns: eac
 2. Drive `model.generate_stream(request)` — forward `ThinkingDelta`/`TextDelta` events; collect any tool calls.
 3. If no tool calls were issued, the loop ends.
 4. Append the tool calls as a single assistant turn (`Message::tool_calls`).
-5. For each tool call, run a future that: looks up the tool in the registry; if missing, returns `Unknown` with no events. Otherwise emits `ToolCallStarted`, then consults the `AuthManager` (if any); on denial, emits `ToolCallFinished { Denied }`. On allow, runs the tool (or sub-agent), then emits `ToolCallFinished` with the result.
+5. For each tool call, run a future that: looks up the tool in the registry; if missing, returns `Unknown` with no events. Otherwise emits `ToolCallStarted`, then calls `Tool::propose` to resolve the call (a propose error short-circuits to `ToolCallFinished { Err }` without consulting auth). It then consults the `AuthManager` (if any), passing the resulting proposal; on denial, emits `ToolCallFinished { Denied }`. On allow, calls `Tool::apply` with the approved proposal (or runs the sub-agent), then emits `ToolCallFinished` with the result.
 6. All tool futures run **concurrently** via `futures_util::future::join_all`. `join_all` preserves input order in its return value, so tool-result messages are appended in the same order the model issued them — even though events may interleave.
 7. Repeat from step 1.
 
-**Cancellation checkpoints.** The runner races against the cancel token at four points: (a) the top of the loop, before building the next `ModelRequest`; (b) `model_stream.next()` (a `tokio::select!` against `cancel.cancelled()` — winning the cancel arm drops the model stream, aborting the in-flight reqwest); (c) every per-tool future inside `handle_tool_calls`; and (d) `auth.authorize` when an `AuthManager` is configured. On cancellation the runner emits a single terminal `AgentEvent::Cancelled` and exits; no `ToolCallFinished` is emitted for in-flight tools (a trailing `ToolCallStarted` may be observed without its matching `Finished`). Each `Tool::call` and `AgentTool::call` receives a clone of the run's cancel token; cooperating tools select on it to abort cleanly. Tools that ignore the token do not block the runner from terminating — the runner drops the future on cancel — but their side effects may continue in the background until they finish on their own.
+**Cancellation checkpoints.** The runner races against the cancel token at these points: (a) the top of the loop, before building the next `ModelRequest`; (b) `model_stream.next()` (a `tokio::select!` against `cancel.cancelled()` — winning the cancel arm drops the model stream, aborting the in-flight reqwest); (c) `Tool::propose`; (d) `auth.authorize` when an `AuthManager` is configured; and (e) `Tool::apply`. On cancellation the runner emits a single terminal `AgentEvent::Cancelled` and exits; no `ToolCallFinished` is emitted for in-flight tools (a trailing `ToolCallStarted` may be observed without its matching `Finished`). Both `Tool::propose` and `Tool::apply` receive a clone of the run's cancel token; cooperating tools select on it to abort cleanly. Tools that ignore the token do not block the runner from terminating — the runner drops the future on cancel — but their side effects may continue in the background until they finish on their own.
 
 ### `AgentTool` (`src/tools/agent_tool.rs`)
 
@@ -336,9 +354,9 @@ impl AgentTool {
 
 Registered via `ToolRegistry::register_agent`. `AgentTool` lives in `src/tools/agent_tool/mod.rs`.
 
-**How `call` works:**
+**How `apply` works:**
 
-1. Serializes `args` to a JSON string and passes it as the user message of a fresh run on the inner `AgentRunner`.
+1. Serializes the proposal to a JSON string and passes it as the user message of a fresh run on the inner `AgentRunner`. `AgentTool` keeps the default `propose`, so the proposal is the model's raw args.
 2. Drives the child's event stream internally: every event is forwarded through the parent's `RunEmitter` (a child emitter is created so events carry the child's `run_id` and the parent's `parent` link), and `TextDelta` chunks are accumulated into a string.
 3. Returns the accumulated text wrapped as `{"output": "..."}` — this JSON value becomes the tool result the parent model sees on its next turn.
 
@@ -346,7 +364,7 @@ The `cancel` token is forwarded to the child via `run_with_cancellation`, so can
 
 **Design rationale:**
 
-- `AgentTool` owns its `AgentRunner` (not a shared reference). Each sub-agent maintains its own model binding. Multiple concurrent `call` invocations are safe because `AgentRunner::run` takes `&self`.
+- `AgentTool` owns its `AgentRunner` (not a shared reference). Each sub-agent maintains its own model binding. Multiple concurrent `apply` invocations are safe because `AgentRunner::run` takes `&self`.
 - The caller supplies the `ToolDefinition` explicitly: the `name` is what the parent model uses to invoke the sub-agent, the `description` guides the parent model's routing decision, and `parameters` describes what args the parent model should pass.
 - `AgentTool` lives in its own module (`src/tools/agent_tool/`) to avoid a circular dependency: `tool.rs` must not import the runner, and the runner must not import `agent_tool` directly (it imports it via `crate::tools`).
 
@@ -356,7 +374,7 @@ The `cancel` token is forwarded to the child via `run_with_cancellation`, so can
 #[async_trait]
 pub trait AuthManager: Send + Sync {
     fn requires_authorization(&self, name: &str, args: &Value) -> bool { true }
-    async fn authorize(&self, id: &str, name: &str, args: &Value) -> bool;
+    async fn authorize(&self, id: &str, name: &str, args: &Value, proposal: &Value) -> bool;
 }
 ```
 
@@ -365,7 +383,7 @@ Optional hook on `AgentRunner` (set via `with_auth_manager`). With no manager se
 The trait has two methods so the cheap filter and the async decision can live apart:
 
 - `requires_authorization` — sync, must be cheap. The runner calls it first; if it returns `false`, `authorize` is skipped entirely. No I/O, no locks, no awaits.
-- `authorize` — async; may block on user input, RPC, dialogs, etc. Returns `true` to allow, `false` to deny. Denial is binary — the runner reports it via `ToolCallResult::Denied` with no accompanying reason. (This matches a user-facing accept/decline approval prompt.) `id` is the tool call's identifier — the same id the runner later reports on `ToolCallStarted`/`ToolCallFinished` — so an out-of-process approver (editor permission request, GUI dialog, remote service) can correlate the prompt with the call.
+- `authorize` — async; may block on user input, RPC, dialogs, etc. Returns `true` to allow, `false` to deny. Denial is binary — the runner reports it via `ToolCallResult::Denied` with no accompanying reason. (This matches a user-facing accept/decline approval prompt.) `id` is the tool call's identifier — the same id the runner later reports on `ToolCallStarted`/`ToolCallFinished` — so an out-of-process approver (editor permission request, GUI dialog, remote service) can correlate the prompt with the call. `args` is the model's raw request; `proposal` is what `Tool::propose` resolved it into — the concrete action that will run if approved (an edit tool's proposal carries the path and old/new contents, enough to render a diff). Rendering it is the manager's job: a tool-aware manager matches on `name`, a generic one can display the JSON.
 
 `authorize` may be called concurrently when the model returns multiple tool calls in one turn. Implementations sharing UI resources (stdin, a modal dialog) must serialize internally — typically with a `tokio::sync::Mutex`. The lock belongs in `authorize`, not in `requires_authorization`.
 
