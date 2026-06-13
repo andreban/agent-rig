@@ -12,7 +12,7 @@ use crate::{
     error::Error,
     model::Message,
     runner::{AgentEvent, AgentRunner},
-    tools::{ProgressReporter, Tool, tool::ToolDefinition},
+    tools::{ProgressDetails, ProgressReporter, Tool, tool::ToolDefinition},
 };
 
 /// Wraps a child [`Agent`] (plus its [`AgentRunner`]) so it can be invoked
@@ -65,11 +65,11 @@ impl Tool<Value, Value> for AgentTool {
     /// `cancel` is propagated into the child run via
     /// [`AgentRunner::run_with_cancellation`], so cancelling the parent run
     /// cancels every nested agent in the tree.
-    #[instrument(skip(self, args, _progress, cancel), fields(tool = self.definition.name))]
+    #[instrument(skip(self, args, progress, cancel), fields(tool = self.definition.name))]
     async fn call(
         &self,
         args: serde_json::Value,
-        _progress: &dyn ProgressReporter,
+        progress: &dyn ProgressReporter,
         cancel: CancellationToken,
     ) -> Result<Value, Error> {
         let input = serde_json::to_string(&args)
@@ -82,6 +82,14 @@ impl Tool<Value, Value> for AgentTool {
         while let Some(next) = stream.next().await {
             if let AgentEvent::TextDelta(text) = &next.agent_event {
                 result += text;
+            }
+            match next.agent_event {
+                AgentEvent::StartTurn | AgentEvent::EndTurn { .. } | AgentEvent::Cancelled => {}
+                AgentEvent::Error(e) => return Err(e),
+                _ => {
+                    let details = ProgressDetails::AgentUpdate(Box::new(next.agent_event));
+                    let _ = progress.update(details).await;
+                }
             }
         }
         Ok(json!({"output": result }))

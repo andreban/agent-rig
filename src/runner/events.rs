@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::model::{Message, TokenUsage};
+use crate::tools::ProgressDetails;
 
 /// Outcome of executing a single tool call.
 ///
@@ -111,8 +112,11 @@ pub enum AgentEvent {
         tool_id: String,
         /// Name of the tool being invoked.
         name: String,
-        /// Tool-defined progress payload describing the current state.
-        details: Value,
+        /// The progress payload. Either a tool-defined JSON value
+        /// ([`ProgressDetails::Other`]) or, when the tool is an
+        /// [`AgentTool`](crate::tools::AgentTool), a forwarded event from the
+        /// nested child agent ([`ProgressDetails::AgentUpdate`]).
+        details: ProgressDetails,
     },
     /// A tool call resolved with [`ToolCallResult`]. Fires after the tool
     /// returns, errors, or is denied.
