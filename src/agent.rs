@@ -1,8 +1,8 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
+use schemars::Schema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 /// A blueprint describing an agent's identity and behaviour.
 ///
@@ -34,7 +34,7 @@ use serde_json::Value;
 pub struct Agent {
     pub(crate) name: String,
     pub(crate) instructions: String,
-    pub(crate) output_schema: Option<serde_json::Value>,
+    pub(crate) output_schema: Option<Schema>,
     /// Names of tools this agent may use. Each name must match a key in the
     /// [`ToolRegistry`] supplied to the runner.
     ///
@@ -60,7 +60,7 @@ impl Agent {
     }
 
     /// The JSON Schema the agent's output must conform to, if any.
-    pub fn output_schema(&self) -> Option<&serde_json::Value> {
+    pub fn output_schema(&self) -> Option<&Schema> {
         self.output_schema.as_ref()
     }
 
@@ -75,7 +75,7 @@ impl Agent {
 pub struct AgentBuilder {
     name: Option<String>,
     instructions: Option<String>,
-    output_schema: Option<serde_json::Value>,
+    output_schema: Option<Schema>,
     tool_names: Vec<String>,
 }
 
@@ -97,7 +97,7 @@ impl AgentBuilder {
     /// When set, the runner forwards the schema to the model provider so that
     /// responses conform to the schema. Providers that do not support structured
     /// output ignore this field.
-    pub fn output_schema<S: Into<Value>>(mut self, schema: S) -> Self {
+    pub fn output_schema<S: Into<Schema>>(mut self, schema: S) -> Self {
         self.output_schema = Some(schema.into());
         self
     }
