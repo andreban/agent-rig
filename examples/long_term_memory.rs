@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -73,7 +73,7 @@ impl Tool<Value, Value> for RememberFactTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
         let fact = args["fact"]
             .as_str()
             .ok_or_else(|| Error::Agent("missing 'fact' argument".to_string()))?
@@ -124,7 +124,7 @@ impl Tool<Value, Value> for RecallFactTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
         let query = args["query"]
             .as_str()
             .ok_or_else(|| Error::Agent("missing 'query' argument".to_string()))?

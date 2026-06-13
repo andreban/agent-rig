@@ -6,7 +6,7 @@ use std::sync::Arc;
 use agent_rig::error::Error;
 use agent_rig::model::{LlmModel, Message, ModelRequest};
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::ollama::OllamaModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -44,7 +44,7 @@ impl Tool<Value, Value> for AddTool {
         &self.definition
     }
 
-    async fn call(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn call(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
         let a = args["a"].as_i64().unwrap_or(0);
         let b = args["b"].as_i64().unwrap_or(0);
         Ok(json!({ "result": a + b }))

@@ -9,6 +9,15 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
+/// A [`ProgressReporter`] that discards every update, for tests that exercise
+/// `call` directly without a runner.
+struct NoopProgress;
+
+#[async_trait]
+impl ProgressReporter for NoopProgress {
+    async fn update(&self, _details: Value) {}
+}
+
 /// Minimal scripted [`LlmModel`] returning queued responses and recording
 /// every [`ModelRequest`] it received. Kept local to this test module so
 /// it doesn't depend on the runner's test helpers.
@@ -78,7 +87,11 @@ async fn call_wraps_accumulated_text_in_output_object() {
     let tool = build_agent_tool(model);
 
     let result = tool
-        .call(json!({"text": "anything"}), CancellationToken::new())
+        .call(
+            json!({"text": "anything"}),
+            &NoopProgress,
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert_eq!(result, json!({ "output": "hello world" }));
@@ -92,7 +105,11 @@ async fn call_passes_args_as_serialized_json_user_message() {
     let tool = build_agent_tool(model.clone());
 
     let _ = tool
-        .call(json!({"text": "hello", "n": 42}), CancellationToken::new())
+        .call(
+            json!({"text": "hello", "n": 42}),
+            &NoopProgress,
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
