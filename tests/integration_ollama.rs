@@ -39,7 +39,7 @@ impl Default for AddTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for AddTool {
+impl Tool for AddTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }

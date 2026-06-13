@@ -68,7 +68,7 @@ impl RememberFactTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for RememberFactTool {
+impl Tool for RememberFactTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
@@ -119,7 +119,7 @@ impl RecallFactTool {
 }
 
 #[async_trait]
-impl Tool<Value, Value> for RecallFactTool {
+impl Tool for RecallFactTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
