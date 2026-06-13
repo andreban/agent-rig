@@ -115,6 +115,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCallStarted { name, args, .. } => {
                 println!("[runner] tool call started: {name}({args})");
             }
+            AgentEvent::ToolCallUpdate { name, details, .. } => {
+                println!("[runner] tool call started: {name}({details})");
+            }
             AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => {
                     println!("[runner] tool call finished: {name} → {value}")

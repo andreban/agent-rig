@@ -91,11 +91,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut stream = parent_runner.run(&parent_agent, vec![Message::user(input)]);
     while let Some(event) = stream.next().await {
         let run_id = event.run_id;
-        let parent = event
-            .parent
-            .map_or_else(|| "-".to_string(), |p| p.to_string());
-        let is_root = event.parent.is_none();
-        let prefix = format!("[run={run_id} parent={parent}]");
+        let prefix = format!("[run={run_id}]");
 
         match event.agent_event {
             AgentEvent::ThinkingDelta(chunk) => {
@@ -103,12 +99,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             AgentEvent::TextDelta(chunk) => {
                 println!("{prefix} text:     {chunk:?}");
-                if is_root {
-                    answer.push_str(&chunk);
-                }
+                answer.push_str(&chunk);
             }
             AgentEvent::ToolCallStarted { name, args, .. } => {
                 println!("{prefix} started:  {name}({args})");
+            }
+            AgentEvent::ToolCallUpdate { name, details, .. } => {
+                println!("{prefix} update:  {name}({details})");
             }
             AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => {

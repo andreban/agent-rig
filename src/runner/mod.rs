@@ -61,7 +61,6 @@ impl RunEmitter {
     pub async fn send(&self, event: AgentEvent) -> Result<(), SendError<RunEvent>> {
         let event = RunEvent {
             run_id: self.run_id,
-            parent: self.parent,
             agent_event: event,
         };
         self.tx.send(event).await

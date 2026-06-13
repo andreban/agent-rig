@@ -5,9 +5,8 @@
 //!
 //! [`AgentEvent`] is the union of things the runner reports as it drives the
 //! agentic loop; [`RunEvent`] tags one of those with the identity of the
-//! run that produced it ([`run_id`](RunEvent::run_id), optional
-//! [`parent`](RunEvent::parent)). [`ToolCallResult`] is the outcome carried
-//! by [`AgentEvent::ToolCallFinished`].
+//! run that produced it ([`run_id`](RunEvent::run_id)). [`ToolCallResult`] is
+//! the outcome carried by [`AgentEvent::ToolCallFinished`].
 //!
 //! [`AgentRunner`]: super::AgentRunner
 
@@ -97,9 +96,23 @@ pub enum AgentEvent {
         /// Name of the tool being invoked.
         name: String,
         /// The JSON arguments the model passed.
-        args: serde_json::Value,
+        args: Value,
         /// The display information for the tool being invoked.
         title: String,
+    },
+    /// A running tool reported incremental progress before it resolved.
+    /// Fires zero or more times between [`ToolCallStarted`](AgentEvent::ToolCallStarted)
+    /// and [`ToolCallFinished`](AgentEvent::ToolCallFinished) for the same call.
+    ToolCallUpdate {
+        /// Provider-assigned call identifier, matching
+        /// [`ToolCall::id`](crate::model::ToolCall::id). Use it to correlate
+        /// this update with its `Started`/`Finished` events — events from
+        /// parallel calls in the same turn may interleave.
+        tool_id: String,
+        /// Name of the tool being invoked.
+        name: String,
+        /// Tool-defined progress payload describing the current state.
+        details: Value,
     },
     /// A tool call resolved with [`ToolCallResult`]. Fires after the tool
     /// returns, errors, or is denied.
@@ -170,8 +183,6 @@ pub enum AgentEvent {
 pub struct RunEvent {
     /// Unique identifier of the run that produced this event.
     pub run_id: usize,
-    /// `run_id` of the run that invoked this one. `None` for a root run.
-    pub parent: Option<usize>,
     /// The wrapped event.
     pub agent_event: AgentEvent,
 }
