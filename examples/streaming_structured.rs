@@ -163,6 +163,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 println!("[tool →] {name}({args})");
             }
+            AgentEvent::ToolCallUpdate { name, details, .. } => {
+                println!("[tool →] {name}({details})");
+            }
+
             AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => println!("[tool ←] {name} = {value}"),
                 ToolCallResult::Err(error) => println!("[tool ✗] {name} → {error:?}"),

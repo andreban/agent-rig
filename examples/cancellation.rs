@@ -105,6 +105,9 @@ where
             AgentEvent::ToolCallStarted { name, args, .. } => {
                 println!("[{label}] started:   {name}({args})");
             }
+            AgentEvent::ToolCallUpdate { name, details, .. } => {
+                println!("[{label}] update:   {name}({details})");
+            }
             AgentEvent::ToolCallFinished { name, result, .. } => match result {
                 ToolCallResult::Ok(value) => println!("[{label}] finished:  {name} → {value}"),
                 ToolCallResult::Err(error) => println!("[{label}] error:     {name} → {error:?}"),

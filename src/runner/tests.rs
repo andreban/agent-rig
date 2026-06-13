@@ -359,6 +359,7 @@ async fn thinking_chunks_are_forwarded() {
             AgentEvent::ThinkingDelta(_) => "thinking",
             AgentEvent::TextDelta(_) => "text",
             AgentEvent::ToolCallStarted { .. } => "started",
+            AgentEvent::ToolCallUpdate { .. } => "updated",
             AgentEvent::ToolCallFinished { .. } => "finished",
             AgentEvent::Usage(_) => "usage",
             AgentEvent::Cancelled => "cancelled",
