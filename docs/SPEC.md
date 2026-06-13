@@ -133,7 +133,7 @@ The outcome carried by `AgentEvent::ToolCallFinished`. `Unknown` is a special ca
 pub struct ModelRequest {
     pub messages: Vec<Message>,                    // conversation history
     pub system: Option<String>,                    // system prompt
-    pub output_schema: Option<serde_json::Value>,  // JSON Schema for structured output
+    pub output_schema: Option<schemars::Schema>,   // JSON Schema for structured output, typed
     pub tools: Vec<ToolDefinition>,                // tool definitions for this turn
 }
 
@@ -178,7 +178,7 @@ pub struct TokenUsage {
 pub struct Agent {
     name: String,
     instructions: String,
-    output_schema: Option<serde_json::Value>,
+    output_schema: Option<schemars::Schema>,
     tool_names: Vec<String>,
 }
 ```

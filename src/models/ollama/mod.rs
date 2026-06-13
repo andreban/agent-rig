@@ -292,7 +292,7 @@ fn build_chat_request(
     }
 
     if let Some(schema) = request.output_schema {
-        builder = builder.format(schema);
+        builder = builder.format(schema.to_value());
     }
 
     Ok(builder.build())

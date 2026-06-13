@@ -14,6 +14,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use futures_util::stream::Stream;
 
+use schemars::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
@@ -135,7 +136,7 @@ pub struct ModelRequest {
     /// When set, the provider adapter applies structured-output constraints
     /// using provider-specific mechanisms. Providers that do not support
     /// structured output ignore this field.
-    pub output_schema: Option<serde_json::Value>,
+    pub output_schema: Option<Schema>,
     /// Tool definitions available to the model on this request.
     ///
     /// An empty `Vec` means no tools are available.

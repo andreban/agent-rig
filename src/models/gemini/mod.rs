@@ -320,7 +320,7 @@ impl GeminiModel {
         // that models with extended thinking still emit reasoning tokens in
         // structured-output mode.
         let effective_config = if let Some(schema) = request.output_schema {
-            let normalised = normalise_for_gemini(schema);
+            let normalised = normalise_for_gemini(schema.to_value());
             let mut builder = GenerationConfig::builder()
                 .response_mime_type("application/json")
                 .response_schema(normalised);
