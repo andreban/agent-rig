@@ -3,12 +3,10 @@
 
 use super::*;
 use crate::model::{LlmModel, MessageContent, ModelRequest, ModelResponse};
-use crate::runner::RunEvent;
 use async_trait::async_trait;
 use schemars::json_schema;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Minimal scripted [`LlmModel`] returning queued responses and recording
@@ -70,23 +68,6 @@ fn build_agent_tool(model: Arc<ScriptedModel>) -> AgentTool {
     )
 }
 
-fn fresh_emitter() -> (RunEmitter, mpsc::Receiver<RunEvent>) {
-    let (tx, rx) = mpsc::channel(16);
-    (RunEmitter::new(tx, None), rx)
-}
-
-/// Drains the receiver. All senders end up dropped once `call` returns
-/// (the emitter is moved into `call`; the child runner's spawned task
-/// drops its own senders when it exits), so `recv` eventually yields
-/// `None`.
-async fn drain(mut rx: mpsc::Receiver<RunEvent>) -> Vec<RunEvent> {
-    let mut events = Vec::new();
-    while let Some(e) = rx.recv().await {
-        events.push(e);
-    }
-    events
-}
-
 /// Regression test for a Gemini-specific bug: `function_response.response`
 /// is typed as a protobuf `Struct`, so the value MUST be a JSON object.
 /// `AgentTool::call` always wraps the child's text reply in
@@ -95,18 +76,12 @@ async fn drain(mut rx: mpsc::Receiver<RunEvent>) -> Vec<RunEvent> {
 async fn call_wraps_accumulated_text_in_output_object() {
     let model = ScriptedModel::new(vec![text_only("hello world")]);
     let tool = build_agent_tool(model);
-    let (emitter, rx) = fresh_emitter();
 
     let result = tool
-        .call(
-            emitter,
-            json!({"text": "anything"}),
-            CancellationToken::new(),
-        )
+        .call(json!({"text": "anything"}), CancellationToken::new())
         .await
         .unwrap();
     assert_eq!(result, json!({ "output": "hello world" }));
-    let _ = drain(rx).await;
 }
 
 /// The JSON args become the child run's user message verbatim (after
@@ -115,17 +90,11 @@ async fn call_wraps_accumulated_text_in_output_object() {
 async fn call_passes_args_as_serialized_json_user_message() {
     let model = ScriptedModel::new(vec![text_only("ok")]);
     let tool = build_agent_tool(model.clone());
-    let (emitter, rx) = fresh_emitter();
 
     let _ = tool
-        .call(
-            emitter,
-            json!({"text": "hello", "n": 42}),
-            CancellationToken::new(),
-        )
+        .call(json!({"text": "hello", "n": 42}), CancellationToken::new())
         .await
         .unwrap();
-    let _ = drain(rx).await;
 
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
@@ -137,35 +106,4 @@ async fn call_passes_args_as_serialized_json_user_message() {
     // make this flaky.
     let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
     assert_eq!(parsed, json!({ "text": "hello", "n": 42 }));
-}
-
-/// Every event the child run produces is forwarded through the supplied
-/// emitter. Forwarding goes via `tx.send(next.agent_event)`, which
-/// re-stamps the event with the *parent* emitter's `run_id` — that's the
-/// observable contract.
-#[tokio::test]
-async fn call_forwards_child_events_through_parent_emitter() {
-    let model = ScriptedModel::new(vec![text_only("hi")]);
-    let tool = build_agent_tool(model);
-    let (emitter, rx) = fresh_emitter();
-    let parent_run_id = emitter.run_id;
-
-    let _ = tool
-        .call(emitter, json!({}), CancellationToken::new())
-        .await
-        .unwrap();
-    let events = drain(rx).await;
-
-    let text: String = events
-        .iter()
-        .filter_map(|e| match &e.agent_event {
-            AgentEvent::TextDelta(t) => Some(t.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(text, "hi");
-    assert!(
-        events.iter().all(|e| e.run_id == parent_run_id),
-        "forwarded events should be stamped with the parent emitter's run_id"
-    );
 }

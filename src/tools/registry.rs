@@ -18,7 +18,8 @@ use crate::{
 /// The registry holds two kinds of callables — plain [`Tool`] implementations
 /// and sub-agents wrapped in [`AgentTool`]. The runner dispatches each
 /// variant differently: plain tools resolve to a single JSON value, while
-/// agents produce a stream of events that the parent forwards.
+/// agents run their own stream internally and resolve to their accumulated
+/// text output.
 pub enum ToolRegistryEntry {
     /// A plain tool implementation. Stored behind an object-safe wrapper so
     /// the registry can hold tools with different typed `I`/`O` parameters

@@ -10,7 +10,7 @@ use crate::{
     agent::Agent,
     error::Error,
     model::Message,
-    runner::{AgentEvent, AgentRunner, RunEmitter},
+    runner::{AgentEvent, AgentRunner},
     tools::tool::ToolDefinition,
 };
 
@@ -20,9 +20,10 @@ use crate::{
 /// Register one with
 /// [`ToolRegistry::register_agent`](crate::tools::ToolRegistry::register_agent).
 /// When the parent model calls this tool, the runner serialises the JSON
-/// arguments into a single user message, runs the child agent against its
-/// own runner, and forwards the child's [`AgentEvent`]s through to the parent
-/// stream. The accumulated `TextDelta` output becomes the tool result.
+/// arguments into a single user message and runs the child agent against its
+/// own runner. The child's stream is consumed internally and its accumulated
+/// `TextDelta` output becomes the tool result; the child's events are not
+/// forwarded to the parent stream.
 pub struct AgentTool {
     definition: ToolDefinition,
     agent: Agent,
@@ -54,8 +55,9 @@ impl AgentTool {
     /// Invokes the child agent with `args` and returns the child's event stream.
     ///
     /// `args` is serialized to JSON and passed as the user message of the new
-    /// run. The caller (the parent runner) consumes the stream, forwards each
-    /// event, and uses the accumulated text as the tool result.
+    /// run. The child run is consumed internally and its accumulated text is
+    /// returned as the tool result; the child's events are not forwarded to
+    /// the parent stream.
     ///
     /// `cancel` is propagated into the child run via
     /// [`AgentRunner::run_with_cancellation`], so cancelling the parent run
@@ -63,7 +65,6 @@ impl AgentTool {
     #[instrument(skip(self, args, cancel), fields(tool = self.definition.name))]
     pub async fn call(
         &self,
-        tx: RunEmitter,
         args: serde_json::Value,
         cancel: CancellationToken,
     ) -> Result<Value, Error> {
@@ -78,7 +79,6 @@ impl AgentTool {
             if let AgentEvent::TextDelta(text) = &next.agent_event {
                 result += text;
             }
-            let _ = tx.send(next.agent_event).await;
         }
         Ok(json!({"output": result }))
     }
