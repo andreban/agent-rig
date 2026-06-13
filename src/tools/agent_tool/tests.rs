@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::model::{LlmModel, MessageContent, ModelRequest, ModelResponse};
+use crate::tools::tool::ProgressDetails;
 use async_trait::async_trait;
 use schemars::json_schema;
 use std::collections::VecDeque;
@@ -15,7 +16,7 @@ struct NoopProgress;
 
 #[async_trait]
 impl ProgressReporter for NoopProgress {
-    async fn update(&self, _details: Value) {}
+    async fn update(&self, _details: ProgressDetails) {}
 }
 
 /// Minimal scripted [`LlmModel`] returning queued responses and recording

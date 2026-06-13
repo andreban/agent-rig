@@ -19,7 +19,6 @@ use std::{
 };
 
 use futures_util::{Stream, StreamExt, future::join_all};
-use serde_json::Value;
 use tokio::sync::mpsc::{self, Sender, error::SendError};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -29,7 +28,7 @@ use crate::{
     auth::AuthManager,
     error::Error,
     model::{LlmModel, Message, ModelRequest, ModelStreamChunk, ToolCall},
-    tools::{ProgressReporter, ToolDefinition, ToolRegistry},
+    tools::{ProgressDetails, ProgressReporter, ToolDefinition, ToolRegistry},
 };
 
 mod events;
@@ -78,7 +77,7 @@ struct ToolProgress<'a> {
 
 #[async_trait::async_trait]
 impl ProgressReporter for ToolProgress<'_> {
-    async fn update(&self, details: Value) {
+    async fn update(&self, details: ProgressDetails) {
         let _ = self
             .tx
             .send(AgentEvent::ToolCallUpdate {

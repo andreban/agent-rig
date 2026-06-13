@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::Error;
+use crate::{error::Error, runner::AgentEvent};
 
 /// Describes a tool to the model: its name, purpose, and parameter schema.
 ///
@@ -113,12 +113,33 @@ pub struct ToolDefinition {
 /// supplies the implementation.
 #[async_trait]
 pub trait ProgressReporter: Send + Sync {
-    /// Emits a progress update carrying an arbitrary JSON `details` payload.
+    /// Emits a progress update carrying a [`ProgressDetails`] payload.
     ///
     /// Delivery is guaranteed but applies backpressure: if the run's event
     /// channel is full, this awaits until the consumer drains it, so a slow
     /// consumer can throttle a chatty tool.
-    async fn update(&self, details: Value);
+    async fn update(&self, details: ProgressDetails);
+}
+
+/// The payload carried by a progress update emitted through
+/// [`ProgressReporter::update`] and surfaced on
+/// [`AgentEvent::ToolCallUpdate`](crate::runner::AgentEvent::ToolCallUpdate).
+///
+/// Most tools report progress with [`Other`](ProgressDetails::Other), wrapping
+/// whatever JSON best describes their current state. The
+/// [`AgentUpdate`](ProgressDetails::AgentUpdate) variant is produced by
+/// [`AgentTool`](crate::tools::AgentTool) to relay a nested child agent's own
+/// events upward, giving the parent consumer visibility into the child run.
+#[derive(Debug, Clone)]
+pub enum ProgressDetails {
+    /// An event from a nested child agent, forwarded by
+    /// [`AgentTool`](crate::tools::AgentTool) so the parent run can observe the
+    /// child's progress. Boxed because [`AgentEvent`] embeds `ProgressDetails`,
+    /// which would otherwise make the type infinitely sized.
+    AgentUpdate(Box<AgentEvent>),
+    /// A tool-defined JSON payload describing the tool's current state. This is
+    /// what most tools emit from [`Tool::call`].
+    Other(Value),
 }
 
 #[async_trait]

@@ -18,4 +18,4 @@ pub use agent_tool::AgentTool;
 pub use registry::ToolRegistry;
 #[doc(hidden)]
 pub use tool::ErasedTool;
-pub use tool::{ProgressReporter, Tool, ToolDefinition};
+pub use tool::{ProgressDetails, ProgressReporter, Tool, ToolDefinition};
