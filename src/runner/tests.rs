@@ -728,7 +728,7 @@ async fn nested_agent_tool_propagates_cancellation() {
         child_runner,
     );
 
-    let parent_registry = Arc::new(ToolRegistry::new().register_agent(agent_tool));
+    let parent_registry = Arc::new(ToolRegistry::new().register(agent_tool));
     let parent_model = ScriptedModel::new(vec![tool_call_response(
         "c1",
         "delegate",

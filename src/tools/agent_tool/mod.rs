@@ -1,6 +1,7 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
+use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -11,14 +12,15 @@ use crate::{
     error::Error,
     model::Message,
     runner::{AgentEvent, AgentRunner},
-    tools::tool::ToolDefinition,
+    tools::{Tool, tool::ToolDefinition},
 };
 
 /// Wraps a child [`Agent`] (plus its [`AgentRunner`]) so it can be invoked
 /// as a tool by a parent agent.
 ///
 /// Register one with
-/// [`ToolRegistry::register_agent`](crate::tools::ToolRegistry::register_agent).
+/// [`ToolRegistry::register`](crate::tools::ToolRegistry::register), like any
+/// other [`Tool`].
 /// When the parent model calls this tool, the runner serialises the JSON
 /// arguments into a single user message and runs the child agent against its
 /// own runner. The child's stream is consumed internally and its accumulated
@@ -46,9 +48,10 @@ impl AgentTool {
     }
 }
 
-impl AgentTool {
+#[async_trait]
+impl Tool<Value, Value> for AgentTool {
     /// The [`ToolDefinition`] this child agent exposes to the parent model.
-    pub fn definition(&self) -> &ToolDefinition {
+    fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
 
@@ -63,7 +66,7 @@ impl AgentTool {
     /// [`AgentRunner::run_with_cancellation`], so cancelling the parent run
     /// cancels every nested agent in the tree.
     #[instrument(skip(self, args, cancel), fields(tool = self.definition.name))]
-    pub async fn call(
+    async fn call(
         &self,
         args: serde_json::Value,
         cancel: CancellationToken,
