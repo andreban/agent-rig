@@ -43,7 +43,6 @@ const EVENT_CHANNEL_CAPACITY: usize = 100;
 #[derive(Debug)]
 pub struct RunEmitter {
     pub run_id: usize,
-    pub parent: Option<usize>,
     pub tx: Sender<RunEvent>,
 }
 
@@ -53,9 +52,9 @@ impl RunEmitter {
         RUN_ID_FACTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn new(tx: Sender<RunEvent>, parent: Option<usize>) -> Self {
+    pub fn new(tx: Sender<RunEvent>) -> Self {
         let run_id = RunEmitter::next_run_id();
-        Self { tx, run_id, parent }
+        Self { tx, run_id }
     }
 
     pub async fn send(&self, event: AgentEvent) -> Result<(), SendError<RunEvent>> {
@@ -64,14 +63,6 @@ impl RunEmitter {
             agent_event: event,
         };
         self.tx.send(event).await
-    }
-
-    pub fn child(&self) -> Self {
-        Self {
-            parent: Some(self.run_id),
-            run_id: RunEmitter::next_run_id(),
-            tx: self.tx.clone(),
-        }
     }
 }
 
@@ -186,7 +177,7 @@ impl AgentRunner {
         // stream before it is ever polled still fires the guard and
         // cancels the spawned loop.
         let (tx, mut rx) = mpsc::channel::<RunEvent>(EVENT_CHANNEL_CAPACITY);
-        let tx = RunEmitter::new(tx, None);
+        let tx = RunEmitter::new(tx);
         tokio::spawn(cloned.main_loop(tx, agent, thread, token_for_loop));
         let guard = internal.drop_guard();
 
@@ -370,7 +361,7 @@ impl AgentRunner {
                                 t.call(call.args.clone(), cancel.clone()).await
                             }
                             ToolRegistryEntry::Agent(a) => {
-                                a.call(tx.child(), call.args.clone(), cancel.clone()).await
+                                a.call(call.args.clone(), cancel.clone()).await
                             }
                         }
                     } => result.into(),

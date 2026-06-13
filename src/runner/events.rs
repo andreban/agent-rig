@@ -175,9 +175,7 @@ pub enum AgentEvent {
 
 /// An [`AgentEvent`] tagged with the identity of the run that produced it.
 ///
-/// `run_id` is unique per process; `parent` points at the `run_id` of the
-/// run that invoked this one (a sub-agent invocation), or `None` for a
-/// root run. For a flat single-run consumer the extra fields can be
+/// `run_id` is unique per process. For a flat single-run consumer it can be
 /// ignored — destructure or read `event.agent_event`.
 #[derive(Debug)]
 pub struct RunEvent {
