@@ -255,24 +255,16 @@ async fn tool_error_is_reported_via_finished_event() {
     ));
 }
 
-/// Auth manager that records its decisions and returns a scripted vector
-/// of allow/deny responses.
+/// Auth manager whose `requires_authorization` returns a fixed answer. The
+/// allow/deny decision now lives with the consumer, which responds to each
+/// [`AgentEvent::ApprovalRequest`] — see [`collect_with_approvals`].
 struct ScriptedAuth {
-    decisions: Mutex<std::collections::VecDeque<bool>>,
     required: bool,
-    calls: Arc<Mutex<Vec<String>>>,
-    /// Proposals seen by `authorize`, in call order.
-    proposals: Arc<Mutex<Vec<Value>>>,
 }
 
 impl ScriptedAuth {
-    fn new(required: bool, decisions: Vec<bool>) -> Arc<Self> {
-        Arc::new(Self {
-            decisions: Mutex::new(decisions.into()),
-            required,
-            calls: Arc::new(Mutex::new(Vec::new())),
-            proposals: Arc::new(Mutex::new(Vec::new())),
-        })
+    fn new(required: bool) -> Arc<Self> {
+        Arc::new(Self { required })
     }
 }
 
@@ -281,46 +273,70 @@ impl AuthManager for ScriptedAuth {
     fn requires_authorization(&self, _name: &str, _args: &Value) -> bool {
         self.required
     }
+}
 
-    async fn authorize(
-        &self,
-        _id: &str,
-        name: &str,
-        _args: &Value,
-        proposal: &Value,
-    ) -> bool {
-        self.calls.lock().unwrap().push(name.to_string());
-        self.proposals.lock().unwrap().push(proposal.clone());
-        self.decisions
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("ScriptedAuth: decision queue exhausted")
+/// What [`collect_with_approvals`] observed: the non-approval events, plus the
+/// name and proposal of every [`AgentEvent::ApprovalRequest`] seen, in order.
+struct ApprovalOutcome {
+    events: Vec<AgentEvent>,
+    approval_names: Vec<String>,
+    approval_proposals: Vec<Value>,
+}
+
+/// Drives the runner to completion, responding to each `ApprovalRequest` with
+/// the next decision from `decisions` (defaulting to allow once the queue is
+/// exhausted). Responding consumes the request, so its name and proposal are
+/// recorded into the returned [`ApprovalOutcome`] rather than re-emitted.
+async fn collect_with_approvals(
+    runner: &AgentRunner,
+    agent: Agent,
+    prompt: &str,
+    decisions: Vec<bool>,
+) -> ApprovalOutcome {
+    let mut decisions: std::collections::VecDeque<bool> = decisions.into();
+    let mut outcome = ApprovalOutcome {
+        events: Vec::new(),
+        approval_names: Vec::new(),
+        approval_proposals: Vec::new(),
+    };
+    let mut stream = runner.run(&agent, vec![Message::user(prompt)]);
+    while let Some(event) = stream.next().await {
+        match event.agent_event {
+            AgentEvent::ApprovalRequest(req) => {
+                outcome.approval_names.push(req.name.clone());
+                outcome.approval_proposals.push(req.proposal.clone());
+                req.respond(decisions.pop_front().unwrap_or(true));
+            }
+            other => outcome.events.push(other),
+        }
     }
+    outcome
 }
 
 #[tokio::test]
 async fn auth_denial_skips_tool_execution() {
     let (tool, calls) = EchoTool::ok("echo");
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    let auth = ScriptedAuth::new(true, vec![false]);
+    let auth = ScriptedAuth::new(true);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "echo", json!({})),
         final_response("ok"),
     ]);
     let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
 
-    let events = collect(&runner, agent("a"), "go").await;
+    let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![false]).await;
 
-    // Started is emitted before the authorization gate, so a denied call
-    // still produces Started followed by Finished(Denied); only the
-    // underlying tool is skipped.
+    // Started is emitted before the approval gate, so a denied call still
+    // produces Started followed by Finished(Denied); only the underlying tool
+    // is skipped.
     assert!(
-        events
+        outcome
+            .events
             .iter()
             .any(|e| matches!(e, AgentEvent::ToolCallStarted { .. }))
     );
-    let finished = events
+    let finished = outcome
+        .events
         .iter()
         .find(|e| matches!(e, AgentEvent::ToolCallFinished { .. }))
         .unwrap();
@@ -332,77 +348,66 @@ async fn auth_denial_skips_tool_execution() {
         }
     ));
     assert!(calls.lock().unwrap().is_empty());
-    assert_eq!(auth.calls.lock().unwrap().as_slice(), &["echo".to_string()]);
-}
-
-/// Auth manager that appends a marker to a shared log when `authorize` runs,
-/// so a test can assert its ordering against events the consumer observes.
-struct LoggingAuth {
-    log: Arc<Mutex<Vec<String>>>,
-}
-
-#[async_trait]
-impl AuthManager for LoggingAuth {
-    async fn authorize(&self, _id: &str, _name: &str, _args: &Value, _proposal: &Value) -> bool {
-        self.log.lock().unwrap().push("authorize".to_string());
-        true
-    }
+    assert_eq!(
+        outcome.approval_names.as_slice(),
+        &["echo".to_string()],
+        "the runner requested approval for the echo call"
+    );
 }
 
 #[tokio::test]
-async fn started_reaches_consumer_before_authorize_runs() {
+async fn started_reaches_consumer_before_approval_request() {
     // Regression test for #64: the consumer must observe `ToolCallStarted`
-    // before `authorize` is invoked, so a frontend can correlate an
-    // authorization prompt with the announced tool call. `EchoTool` uses the
-    // default `propose` (returns instantly), which is exactly the case that
-    // raced before the flush barrier was added.
-    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+    // before the `ApprovalRequest` for the same call, so a frontend can
+    // correlate the approval prompt with the announced tool call. Because both
+    // events now travel the same FIFO stream, this ordering holds structurally
+    // — no out-of-band flush barrier needed.
     let (tool, _calls) = EchoTool::ok("echo");
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    let auth = Arc::new(LoggingAuth { log: log.clone() });
+    let auth = ScriptedAuth::new(true);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "echo", json!({})),
         final_response("ok"),
     ]);
     let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth);
 
+    let mut order = Vec::<&str>::new();
     let mut stream = runner.run(&agent("a"), vec![Message::user("go")]);
     while let Some(event) = stream.next().await {
-        if let AgentEvent::ToolCallStarted { .. } = event.agent_event {
-            // Park before asking for the next event. Without the flush
-            // barrier the loop would race ahead and call `authorize` during
-            // this sleep; with it, `authorize` cannot run until we resume and
-            // the pump drains the barrier that follows `ToolCallStarted`.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            log.lock().unwrap().push("started_seen".to_string());
+        match event.agent_event {
+            AgentEvent::ToolCallStarted { .. } => order.push("started"),
+            AgentEvent::ApprovalRequest(req) => {
+                order.push("approval");
+                req.respond(true);
+            }
+            _ => {}
         }
     }
 
-    let log = log.lock().unwrap();
-    let started = log.iter().position(|m| m == "started_seen");
-    let authorized = log.iter().position(|m| m == "authorize");
+    let started = order.iter().position(|m| *m == "started");
+    let approval = order.iter().position(|m| *m == "approval");
     assert_eq!(
-        (started, authorized),
+        (started, approval),
         (Some(0), Some(1)),
-        "ToolCallStarted must reach the consumer before authorize runs: {log:?}"
+        "ToolCallStarted must reach the consumer before the ApprovalRequest: {order:?}"
     );
 }
 
 #[tokio::test]
-async fn auth_fast_path_skips_authorize() {
+async fn auth_fast_path_skips_approval() {
     let (tool, calls) = EchoTool::ok("echo");
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    // requires_authorization returns false — authorize must never run.
-    let auth = ScriptedAuth::new(false, vec![]);
+    // requires_authorization returns false — no ApprovalRequest must be emitted.
+    let auth = ScriptedAuth::new(false);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "echo", json!({})),
         final_response("ok"),
     ]);
     let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
 
-    let _ = collect(&runner, agent("a"), "go").await;
+    let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![]).await;
 
-    assert!(auth.calls.lock().unwrap().is_empty());
+    assert!(outcome.approval_names.is_empty());
     assert_eq!(calls.lock().unwrap().len(), 1);
 }
 
@@ -462,22 +467,22 @@ impl Tool for ProposingTool {
 }
 
 #[tokio::test]
-async fn proposal_is_forwarded_to_authorize_and_apply() {
+async fn proposal_is_forwarded_to_approval_and_apply() {
     let resolved = json!({"path": "f.rs", "old_text": "a", "new_text": "b"});
     let (tool, applied) = ProposingTool::new(Ok(resolved.clone()));
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    let auth = ScriptedAuth::new(true, vec![true]);
+    let auth = ScriptedAuth::new(true);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "proposing", json!({"raw": "args"})),
         final_response("ok"),
     ]);
     let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
 
-    let _ = collect(&runner, agent("a"), "go").await;
+    let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![true]).await;
 
-    // `authorize` saw the resolved proposal, not the raw args ...
+    // The ApprovalRequest carried the resolved proposal, not the raw args ...
     assert_eq!(
-        auth.proposals.lock().unwrap().as_slice(),
+        outcome.approval_proposals.as_slice(),
         std::slice::from_ref(&resolved)
     );
     // ... and `apply` ran with the same approved proposal.
@@ -488,20 +493,21 @@ async fn proposal_is_forwarded_to_authorize_and_apply() {
 }
 
 #[tokio::test]
-async fn propose_error_skips_authorization_and_apply() {
+async fn propose_error_skips_approval_and_apply() {
     let (tool, applied) = ProposingTool::new(Err(Error::Agent("cannot plan".to_string())));
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    let auth = ScriptedAuth::new(true, vec![]);
+    let auth = ScriptedAuth::new(true);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "proposing", json!({})),
         final_response("ok"),
     ]);
     let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
 
-    let events = collect(&runner, agent("a"), "go").await;
+    let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![]).await;
 
     // A propose failure surfaces as Finished(Err) ...
-    let finished = events
+    let finished = outcome
+        .events
         .iter()
         .find(|e| matches!(e, AgentEvent::ToolCallFinished { .. }))
         .unwrap();
@@ -512,8 +518,8 @@ async fn propose_error_skips_authorization_and_apply() {
             ..
         }
     ));
-    // ... without ever consulting the auth manager or running `apply`.
-    assert!(auth.calls.lock().unwrap().is_empty());
+    // ... without ever requesting approval or running `apply`.
+    assert!(outcome.approval_names.is_empty());
     assert!(applied.lock().unwrap().is_empty());
 }
 
@@ -541,6 +547,7 @@ async fn thinking_chunks_are_forwarded() {
             AgentEvent::Error(_) => "error",
             AgentEvent::StartTurn => "start_turn",
             AgentEvent::EndTurn { .. } => "end_turn",
+            AgentEvent::ApprovalRequest(_) => "approval_request",
         })
         .collect();
     // start_turn fires first, then default `generate_stream` yields thinking

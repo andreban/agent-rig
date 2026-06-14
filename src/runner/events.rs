@@ -12,6 +12,7 @@
 
 use serde_json::Value;
 
+use crate::auth::ApprovalRequest;
 use crate::error::Error;
 use crate::model::{Message, TokenUsage};
 use crate::tools::ProgressDetails;
@@ -86,7 +87,7 @@ impl From<Result<Value, Error>> for ToolCallResult {
 ///   are terminal: the stream ends after either of them, and they are
 ///   mutually exclusive with the loop's normal completion (no tool calls
 ///   in the final model turn).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum AgentEvent {
     /// A registered tool is about to run with these arguments.
     ToolCallStarted {
@@ -176,6 +177,13 @@ pub enum AgentEvent {
     Cancelled,
     /// The provider returned an error. The stream ends after this event.
     Error(crate::error::Error),
+    /// A tool call needs the consumer's approval before it runs. Carries an
+    /// [`ApprovalRequest`] the consumer answers with
+    /// [`ApprovalRequest::respond`]; the call is blocked until it does.
+    /// Emitted only for calls an [`AuthManager`](crate::auth::AuthManager)
+    /// reports as requiring authorization, and always after the
+    /// [`ToolCallStarted`](AgentEvent::ToolCallStarted) for the same call.
+    ApprovalRequest(ApprovalRequest),
 }
 
 /// An [`AgentEvent`] tagged with the identity of the run that produced it.
