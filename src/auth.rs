@@ -56,12 +56,13 @@ pub trait AuthManager: Send + Sync {
     /// `false` surfaces a [`ToolCallResult::Denied`](crate::runner::ToolCallResult::Denied)
     /// without invoking the tool.
     ///
-    /// `id` is the tool call's identifier — the same id the runner later
-    /// reports on [`AgentEvent::ToolCallStarted`](crate::runner::AgentEvent::ToolCallStarted)
-    /// and `ToolCallFinished`. Implementations that surface the approval
-    /// prompt out-of-process (an editor permission request, a GUI dialog
-    /// keyed by id, a remote approval service) can use it to correlate the
-    /// prompt with the tool call the runner reports.
+    /// `id` is the tool call's identifier — the same id the runner reports on
+    /// [`AgentEvent::ToolCallStarted`](crate::runner::AgentEvent::ToolCallStarted)
+    /// and `ToolCallFinished`. `ToolCallStarted` is guaranteed to reach the
+    /// consumer's stream before this method is called, so implementations that
+    /// surface the approval prompt out-of-process (an editor permission
+    /// request, a GUI dialog keyed by id, a remote approval service) can use
+    /// the id to correlate the prompt with the already-announced tool call.
     ///
     /// `args` is the raw JSON the model requested. `proposal` is what the tool
     /// resolved those args into via

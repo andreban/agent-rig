@@ -19,7 +19,10 @@ use std::{
 };
 
 use futures_util::{Stream, StreamExt, future::join_all};
-use tokio::sync::mpsc::{self, Sender, error::SendError};
+use tokio::sync::{
+    mpsc::{self, Sender, error::SendError},
+    oneshot,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -40,10 +43,28 @@ pub use events::{AgentEvent, RunEvent, ToolCallResult};
 /// worker to round-trip on every event.
 const EVENT_CHANNEL_CAPACITY: usize = 100;
 
+/// Payload carried by the per-run mpsc channel from the spawned agentic loop
+/// to the consumer's stream pump.
+///
+/// Most messages are [`Event`](LoopMessage::Event)s that the pump yields
+/// straight to the consumer. A [`Flush`](LoopMessage::Flush) is an internal
+/// barrier the pump consumes silently: it carries a oneshot the pump completes
+/// as soon as it pulls the barrier off the channel. Because the channel is
+/// FIFO and the pump only advances when the consumer asks for the next item,
+/// the barrier's completion proves every event queued before it has already
+/// been handed to the consumer.
+enum LoopMessage {
+    /// An event to yield on the consumer's stream.
+    Event(RunEvent),
+    /// A barrier whose oneshot the pump completes once it reaches it. See the
+    /// type docs and [`RunEmitter::flush`].
+    Flush(oneshot::Sender<()>),
+}
+
 #[derive(Debug)]
-pub struct RunEmitter {
+pub(crate) struct RunEmitter {
     pub run_id: usize,
-    pub tx: Sender<RunEvent>,
+    tx: Sender<LoopMessage>,
 }
 
 impl RunEmitter {
@@ -52,7 +73,7 @@ impl RunEmitter {
         RUN_ID_FACTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn new(tx: Sender<RunEvent>) -> Self {
+    fn new(tx: Sender<LoopMessage>) -> Self {
         let run_id = RunEmitter::next_run_id();
         Self { tx, run_id }
     }
@@ -62,7 +83,35 @@ impl RunEmitter {
             run_id: self.run_id,
             agent_event: event,
         };
-        self.tx.send(event).await
+        self.tx
+            .send(LoopMessage::Event(event))
+            .await
+            .map_err(|SendError(msg)| match msg {
+                LoopMessage::Event(event) => SendError(event),
+                // Only `Event`s are sent through this method.
+                LoopMessage::Flush(_) => unreachable!("send only enqueues Event"),
+            })
+    }
+
+    /// Blocks until every event sent before this call has been pulled off the
+    /// channel by the consumer's stream pump.
+    ///
+    /// Enqueues a [`LoopMessage::Flush`] barrier and awaits its acknowledgement.
+    /// The pump completes that acknowledgement only when it reaches the barrier,
+    /// which — for a consumer that processes each yielded event before asking
+    /// for the next — means the prior events have already been handed over.
+    /// Used to order [`AgentEvent::ToolCallStarted`] ahead of an out-of-band
+    /// authorization prompt so a frontend can correlate the two.
+    ///
+    /// Returns immediately if the consumer has gone away (the channel or the
+    /// acknowledgement sender was dropped); ordering is moot once there is no
+    /// consumer left to observe it.
+    pub async fn flush(&self) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self.tx.send(LoopMessage::Flush(ack_tx)).await.is_err() {
+            return;
+        }
+        let _ = ack_rx.await;
     }
 }
 
@@ -199,7 +248,7 @@ impl AgentRunner {
         // `async_stream::stream!` body — so that dropping the returned
         // stream before it is ever polled still fires the guard and
         // cancels the spawned loop.
-        let (tx, mut rx) = mpsc::channel::<RunEvent>(EVENT_CHANNEL_CAPACITY);
+        let (tx, mut rx) = mpsc::channel::<LoopMessage>(EVENT_CHANNEL_CAPACITY);
         let tx = RunEmitter::new(tx);
         tokio::spawn(cloned.main_loop(tx, agent, thread, token_for_loop));
         let guard = internal.drop_guard();
@@ -212,7 +261,16 @@ impl AgentRunner {
           let _guard = guard;
 
           while let Some(message) = rx.recv().await {
-            yield message;
+            match message {
+              LoopMessage::Event(event) => yield event,
+              // A flush barrier never reaches the consumer: completing the
+              // oneshot here signals the loop that everything queued before
+              // this point has already been yielded. Reaching this arm means
+              // the consumer pulled the prior event and came back for more.
+              LoopMessage::Flush(ack) => {
+                let _ = ack.send(());
+              }
+            }
           }
         };
         Box::pin(stream)
@@ -384,6 +442,24 @@ impl AgentRunner {
                 if let Some(auth) = &self.auth_manager
                     && auth.requires_authorization(&call.name, &call.args)
                 {
+                    // Wait until the consumer has pulled `ToolCallStarted` for
+                    // this call off the stream before invoking `authorize`,
+                    // which calls into the frontend out of band (e.g. a
+                    // permission prompt). Without this barrier the buffered
+                    // `ToolCallStarted` can still be sitting in the channel
+                    // when the prompt arrives, leaving the frontend unable to
+                    // correlate the two (see issue #64).
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => {
+                            return (
+                                call,
+                                ToolCallResult::Err(Error::Agent("cancelled".into())),
+                            );
+                        }
+                        _ = tx.flush() => {}
+                    }
+
                     let allowed = tokio::select! {
                         biased;
                         _ = cancel.cancelled() => {

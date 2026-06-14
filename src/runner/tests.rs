@@ -335,6 +335,59 @@ async fn auth_denial_skips_tool_execution() {
     assert_eq!(auth.calls.lock().unwrap().as_slice(), &["echo".to_string()]);
 }
 
+/// Auth manager that appends a marker to a shared log when `authorize` runs,
+/// so a test can assert its ordering against events the consumer observes.
+struct LoggingAuth {
+    log: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl AuthManager for LoggingAuth {
+    async fn authorize(&self, _id: &str, _name: &str, _args: &Value, _proposal: &Value) -> bool {
+        self.log.lock().unwrap().push("authorize".to_string());
+        true
+    }
+}
+
+#[tokio::test]
+async fn started_reaches_consumer_before_authorize_runs() {
+    // Regression test for #64: the consumer must observe `ToolCallStarted`
+    // before `authorize` is invoked, so a frontend can correlate an
+    // authorization prompt with the announced tool call. `EchoTool` uses the
+    // default `propose` (returns instantly), which is exactly the case that
+    // raced before the flush barrier was added.
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (tool, _calls) = EchoTool::ok("echo");
+    let registry = Arc::new(ToolRegistry::new().register(tool));
+    let auth = Arc::new(LoggingAuth { log: log.clone() });
+    let model = ScriptedModel::new(vec![
+        tool_call_response("c1", "echo", json!({})),
+        final_response("ok"),
+    ]);
+    let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth);
+
+    let mut stream = runner.run(&agent("a"), vec![Message::user("go")]);
+    while let Some(event) = stream.next().await {
+        if let AgentEvent::ToolCallStarted { .. } = event.agent_event {
+            // Park before asking for the next event. Without the flush
+            // barrier the loop would race ahead and call `authorize` during
+            // this sleep; with it, `authorize` cannot run until we resume and
+            // the pump drains the barrier that follows `ToolCallStarted`.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            log.lock().unwrap().push("started_seen".to_string());
+        }
+    }
+
+    let log = log.lock().unwrap();
+    let started = log.iter().position(|m| m == "started_seen");
+    let authorized = log.iter().position(|m| m == "authorize");
+    assert_eq!(
+        (started, authorized),
+        (Some(0), Some(1)),
+        "ToolCallStarted must reach the consumer before authorize runs: {log:?}"
+    );
+}
+
 #[tokio::test]
 async fn auth_fast_path_skips_authorize() {
     let (tool, calls) = EchoTool::ok("echo");
