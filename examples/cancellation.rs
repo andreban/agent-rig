@@ -65,7 +65,12 @@ impl Tool for SlowUploadTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(
+        &self,
+        args: Value,
+        _progress: &dyn ProgressReporter,
+        cancel: CancellationToken,
+    ) -> Result<Value, Error> {
         let path = args["path"].as_str().unwrap_or("unknown");
         println!("[tool]  upload({path}) starting (5s)…");
         tokio::select! {
@@ -121,6 +126,9 @@ where
             AgentEvent::Cancelled => println!("\n[{label}] cancelled"),
             AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
+            AgentEvent::ApprovalRequest(request) => {
+                request.respond(true);
+            }
         }
     }
 }

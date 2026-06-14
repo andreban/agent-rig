@@ -86,7 +86,12 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(
+        &self,
+        args: Value,
+        _progress: &dyn ProgressReporter,
+        _cancel: CancellationToken,
+    ) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");
         let celsius = match city.to_lowercase().as_str() {
             "london" => 12.0,
@@ -178,6 +183,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
             AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
+            AgentEvent::ApprovalRequest(request) => {
+                request.respond(true);
+            }
         }
     }
 

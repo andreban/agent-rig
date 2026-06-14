@@ -59,7 +59,7 @@ pub trait ProgressReporter: Send + Sync {
 /// [`AgentUpdate`](ProgressDetails::AgentUpdate) variant is produced by
 /// [`AgentTool`](crate::tools::AgentTool) to relay a nested child agent's own
 /// events upward, giving the parent consumer visibility into the child run.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ProgressDetails {
     /// An event from a nested child agent, forwarded by
     /// [`AgentTool`](crate::tools::AgentTool) so the parent run can observe the

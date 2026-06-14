@@ -131,6 +131,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
+            AgentEvent::ApprovalRequest(request) => {
+                request.respond(true);
+            }
         }
     }
     println!("\n--- final answer ---\n{answer}");

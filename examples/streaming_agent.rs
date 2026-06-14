@@ -64,7 +64,12 @@ impl Tool for AddTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(
+        &self,
+        args: Value,
+        _progress: &dyn ProgressReporter,
+        _cancel: CancellationToken,
+    ) -> Result<Value, Error> {
         let a = args["a"].as_i64().unwrap_or(0);
         let b = args["b"].as_i64().unwrap_or(0);
         println!("[tool]  add({a}, {b}) = {}", a + b);
@@ -133,6 +138,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
             AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
+            AgentEvent::ApprovalRequest(request) => {
+                request.respond(true);
+            }
         }
     }
 

@@ -80,7 +80,12 @@ impl Tool for SendEmailTool {
         }))
     }
 
-    async fn apply(&self, proposal: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(
+        &self,
+        proposal: Value,
+        _progress: &dyn ProgressReporter,
+        _cancel: CancellationToken,
+    ) -> Result<Value, Error> {
         let to = proposal["to"].as_str().unwrap_or("");
         let subject = proposal["subject"].as_str().unwrap_or("");
         println!("[tool]  pretending to send email to {to} (subject: {subject:?})");
@@ -98,7 +103,6 @@ impl Tool for SendEmailTool {
 /// prompt-and-read sequence runs under a mutex.
 struct StdinPromptAuthManager {
     protected: HashSet<String>,
-    prompt_lock: tokio::sync::Mutex<()>,
 }
 
 impl StdinPromptAuthManager {
@@ -109,7 +113,6 @@ impl StdinPromptAuthManager {
     {
         Self {
             protected: protected.into_iter().map(Into::into).collect(),
-            prompt_lock: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -118,28 +121,6 @@ impl StdinPromptAuthManager {
 impl AuthManager for StdinPromptAuthManager {
     fn requires_authorization(&self, name: &str, _args: &Value) -> bool {
         self.protected.contains(name)
-    }
-
-    async fn authorize(&self, id: &str, name: &str, _args: &Value, proposal: &Value) -> bool {
-        let _guard = self.prompt_lock.lock().await;
-
-        // The tool resolved the call into a proposal; show its human-readable
-        // `preview` rather than the raw args.
-        let preview = proposal["preview"].as_str().unwrap_or("(no preview)");
-        println!("\n[auth]  Tool '{name}' (id {id}) wants to run:");
-        println!("[auth]    {preview}");
-        print!("[auth]  Approve? [y/N]: ");
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
-
-        let mut line = String::new();
-        let mut stdin = BufReader::new(tokio::io::stdin());
-        if let Err(e) = stdin.read_line(&mut line).await {
-            eprintln!("[auth]  stdin error: {e}");
-            return false;
-        }
-
-        matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
     }
 }
 
@@ -196,6 +177,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
             AgentEvent::StartTurn => {}
             AgentEvent::EndTurn { .. } => {}
+            AgentEvent::ApprovalRequest(request) => {
+                // The tool resolved the call into a proposal; show its human-readable
+                // `preview` rather than the raw args.
+                let preview = request.proposal["preview"]
+                    .as_str()
+                    .unwrap_or("(no preview)");
+                println!(
+                    "\n[auth]  Tool '{}' (id {}) wants to run:",
+                    request.name, request.tool_id
+                );
+                println!("[auth]    {preview}");
+                print!("[auth]  Approve? [y/N]: ");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+
+                let mut line = String::new();
+                let mut stdin = BufReader::new(tokio::io::stdin());
+                if let Err(e) = stdin.read_line(&mut line).await {
+                    eprintln!("[auth]  stdin error: {e}");
+                    request.respond(false);
+                } else {
+                    let result = matches!(line.trim().to_lowercase().as_str(), "y" | "yes");
+                    request.respond(result);
+                }
+            }
         }
     }
 
