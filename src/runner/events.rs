@@ -67,7 +67,8 @@ impl From<Result<Value, Error>> for ToolCallResult {
 ///   them. Concatenating every `TextDelta` reconstructs the final reply.
 /// - Tool lifecycle:
 ///   [`ToolCallStarted`](AgentEvent::ToolCallStarted) fires before a tool
-///   runs (after authorization, if any) and
+///   runs — and, for a gated call, before its authorization prompt, so a
+///   frontend can correlate the prompt with the announced call — while
 ///   [`ToolCallFinished`](AgentEvent::ToolCallFinished) fires once it
 ///   resolves. Hallucinated tool calls (no matching registry entry) emit
 ///   *neither* event; see [`ToolCallResult::Unknown`].
