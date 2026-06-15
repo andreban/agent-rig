@@ -156,21 +156,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = runner.run(&agent, vec![Message::user(question)]);
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStart { tool_name, args, .. } => {
-                println!("[runner] started:   {name}({args})");
+            AgentEvent::ToolCallStart {
+                tool_name, args, ..
+            } => {
+                println!("[runner] started:   {tool_name}({args})");
             }
             AgentEvent::ToolCallUpdate {
                 tool_name, details, ..
             } => {
-                println!("[runner] update:   {name}({details:?})");
+                println!("[runner] update:   {tool_name}({details:?})");
             }
             AgentEvent::ToolCallFinish {
                 tool_name, result, ..
             } => match result {
-                ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
-                ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
-                ToolCallResult::Denied => println!("[runner] denied:    {name}"),
-                ToolCallResult::Unknown => println!("[runner] unknown:   {name}"),
+                ToolCallResult::Ok(value) => println!("[runner] finished:  {tool_name} → {value}"),
+                ToolCallResult::Err(error) => {
+                    println!("[runner] error:     {tool_name} → {error:?}")
+                }
+                ToolCallResult::Denied => println!("[runner] denied:    {tool_name}"),
+                ToolCallResult::Unknown => println!("[runner] unknown:   {tool_name}"),
             },
             AgentEvent::TextDelta(chunk) => answer.push_str(&chunk),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),

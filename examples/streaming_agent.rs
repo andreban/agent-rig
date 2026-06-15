@@ -117,25 +117,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::TextDelta(chunk) => {
                 print!("{chunk}");
             }
-            AgentEvent::ToolCallStart { tool_name, args, .. } => {
-                println!("[runner] tool call started: {name}({args})");
+            AgentEvent::ToolCallStart {
+                tool_name, args, ..
+            } => {
+                println!("[runner] tool call started: {tool_name}({args})");
             }
             AgentEvent::ToolCallUpdate {
                 tool_name, details, ..
             } => {
-                println!("[runner] tool call started: {name}({details:?})");
+                println!("[runner] tool call started: {tool_name}({details:?})");
             }
             AgentEvent::ToolCallFinish {
                 tool_name, result, ..
             } => match result {
                 ToolCallResult::Ok(value) => {
-                    println!("[runner] tool call finished: {name} → {value}")
+                    println!("[runner] tool call finished: {tool_name} → {value}")
                 }
                 ToolCallResult::Err(error) => {
-                    println!("[runner] tool call error: {name} → {error:?}")
+                    println!("[runner] tool call error: {tool_name} → {error:?}")
                 }
-                ToolCallResult::Denied => println!("[runner] tool call denied: {name}"),
-                ToolCallResult::Unknown => println!("[runner] tool call unknown: {name}"),
+                ToolCallResult::Denied => println!("[runner] tool call denied: {tool_name}"),
+                ToolCallResult::Unknown => println!("[runner] tool call unknown: {tool_name}"),
             },
             AgentEvent::Usage(usage) => println!("[runner] token usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),

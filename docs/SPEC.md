@@ -9,7 +9,6 @@
 │  holds:      │               (pure blueprint)
 │   model      │
 │   registry   │
-│   auth?      │
 └──────┬───────┘
        │ holds
 ┌──────▼───────────┐
@@ -21,9 +20,9 @@
 GeminiModel     OllamaModel    (more providers …)
 ```
 
-The library is a single crate (`agent-rig`). Provider adapters live in `src/models/`. Agent logic lives in `src/agent.rs` and `src/runner/`. The `LlmModel` trait in `src/model.rs` is the extension point. Tool types live under `src/tools/`. The authorization hook lives in `src/auth.rs`.
+The library is a single crate (`agent-rig`). Provider adapters live in `src/models/`. Agent logic lives in `src/agent.rs` and `src/runner/`. The `LlmModel` trait in `src/model.rs` is the extension point. Tool types live under `src/tools/`.
 
-`Agent` is a pure data blueprint (name, instructions, optional output schema, optional tool name list) with no model reference. `AgentRunner` owns an `Arc<dyn LlmModel>` (cheap to clone), a `ToolRegistry` (also `Arc`), and an optional `AuthManager`. The runner is cheap to `Clone` so a single runner can be shared across tasks; the same runner can execute multiple agents, and the same agent can be run by different runners backed by different models.
+`Agent` is a pure data blueprint (name, instructions, optional output schema, optional tool name list) with no model reference. `AgentRunner` owns an `Arc<dyn LlmModel>` (cheap to clone) and a `ToolRegistry` (also `Arc`). The runner is cheap to `Clone` so a single runner can be shared across tasks; the same runner can execute multiple agents, and the same agent can be run by different runners backed by different models.
 
 The runner streams: `AgentRunner::run` spawns the agentic loop on a background tokio task and returns a `Stream<Item = RunEvent>`. A `RunEvent` wraps an `AgentEvent` together with the `run_id` of the run that produced it and an optional `parent` run id (set when the event came from a sub-agent invoked via `AgentTool`). Provider errors are surfaced as `AgentEvent::Error(Error)` and terminate the stream; the stream item type is bare `RunEvent`, not `Result`.
 
@@ -66,18 +65,25 @@ Emitted by [`LlmModel::generate_stream`]. The runner wraps these into [`AgentEve
 
 ```rust
 pub enum AgentEvent {
-    /// Emitted before authorization and execution. A denied call therefore
-    /// still emits this, followed by `ToolCallFinished { Denied }`.
+    /// Emitted before approval and execution. A denied call therefore
+    /// still emits this, followed by `ToolCallFinish { Denied }`.
     /// Hallucinated tool calls (no matching registry entry) do not emit this.
-    /// `tool_id` is the provider-assigned call identifier (matching `ToolCall::id`);
-    /// use it to correlate with the matching `ToolCallFinished`, since events
+    /// `tool_call_id` is the provider-assigned call identifier (matching `ToolCall::id`);
+    /// use it to correlate with the matching `ToolCallFinish`, since events
     /// from parallel calls in a turn may interleave. `title` is a
     /// human-readable display label for the call, derived from the tool's
     /// `Tool::title(&args)` (defaulting to the tool name).
-    ToolCallStarted { tool_id: String, name: String, args: serde_json::Value, title: String },
-    /// Emitted after a tool resolves, errors, or is denied. `tool_id` matches the
-    /// corresponding `ToolCallStarted`.
-    ToolCallFinished { tool_id: String, name: String, result: ToolCallResult },
+    ToolCallStart { tool_call_id: String, tool_name: String, args: serde_json::Value, title: String },
+    /// Emitted after a tool resolves, errors, or is denied. `tool_call_id`
+    /// matches the corresponding `ToolCallStart`.
+    ToolCallFinish { tool_call_id: String, tool_name: String, result: ToolCallResult },
+    /// Emitted zero or more times between `ToolCallStart` and `ToolCallFinish`
+    /// as the tool reports incremental progress.
+    ToolCallUpdate { tool_call_id: String, tool_name: String, details: ProgressDetails },
+    /// Carries an `ApprovalRequest` the consumer must answer before the tool runs.
+    /// Emitted only when `Tool::requires_approval` returns `true`, always after
+    /// the `ToolCallStart` for the same call.
+    ApprovalRequest(ApprovalRequest),
     /// Reasoning token forwarded from the model stream.
     ThinkingDelta(String),
     /// Incremental text chunk forwarded from the model stream.
@@ -86,12 +92,12 @@ pub enum AgentEvent {
     /// A run that issues N model calls produces up to N `Usage` events.
     Usage(TokenUsage),
     /// First event of every run, before any model output.
-    StartTurn,
+    TurnStart,
     /// Last event on normal completion (no tool calls in the final model turn).
     /// `thread` is the full conversation thread as it stood when the loop
     /// exited, for carrying multi-turn state forward. Not emitted on the
     /// `Cancelled` or `Error` paths.
-    EndTurn { thread: Vec<Message> },
+    TurnFinish { thread: Vec<Message> },
     /// The run was cancelled via dropped stream or external token.
     /// Terminal — the stream ends after this event. Delivery is
     /// best-effort under stream-drop (the receiver may already be gone).
@@ -103,16 +109,13 @@ pub enum AgentEvent {
 pub struct RunEvent {
     /// Unique-per-process identifier of the run that produced this event.
     pub run_id: usize,
-    /// `run_id` of the run that invoked this one (sub-agent invocation),
-    /// or `None` for a root run.
-    pub parent: Option<usize>,
     pub agent_event: AgentEvent,
 }
 ```
 
 `AgentEvent` is the union of things the runner reports as it drives the agentic loop. Tool-call lifecycle events are generated by the runner; `ThinkingDelta` and `TextDelta` are forwarded from the model. Concatenating every `TextDelta` reconstructs the model's final reply.
 
-`RunEvent` is what [`AgentRunner::run`] actually yields — every event is tagged with the identity of the run that produced it, so consumers can distinguish events from a root run and from any sub-agents invoked via `AgentTool`. For a flat single-run consumer the extra fields can be ignored.
+`RunEvent` is what [`AgentRunner::run`] actually yields — every event is tagged with the identity of the run that produced it, so consumers can distinguish events from a root run and from any sub-agents invoked via `AgentTool`. For a flat single-run consumer the extra field can be ignored.
 
 ### `ToolCallResult` (`src/runner/events.rs`)
 
@@ -120,12 +123,12 @@ pub struct RunEvent {
 pub enum ToolCallResult {
     Ok(serde_json::Value),  // tool returned successfully
     Err(Error),             // tool returned an error
-    Denied,                 // AuthManager denied the call
+    Denied,                 // consumer denied the approval request
     Unknown,                // model called a tool not registered in the registry
 }
 ```
 
-The outcome carried by `AgentEvent::ToolCallFinished`. `Unknown` is a special case: hallucinated tool calls emit *no* `ToolCallStarted` event, but the runner still appends a synthetic tool-result message to the thread so the assistant turn and tool-result messages stay paired. A `Denied` call, by contrast, *does* emit `ToolCallStarted` (emitted before the authorization gate) followed by `ToolCallFinished { Denied }`.
+The outcome carried by `AgentEvent::ToolCallFinish`. `Unknown` is a special case: hallucinated tool calls emit *no* `ToolCallStart` event, but the runner still appends a synthetic tool-result message to the thread so the assistant turn and tool-result messages stay paired. A `Denied` call, by contrast, *does* emit `ToolCallStart` (emitted before the approval gate) followed by `ToolCallFinish { Denied }`.
 
 ### `ModelRequest` / `ModelResponse` / `ToolCall` (`src/model.rs`)
 
@@ -202,7 +205,7 @@ pub struct ToolDefinition {
 // `Box<dyn Tool>`.
 //
 // A call runs in two phases: `propose` resolves the args into a proposal
-// (side-effect free, before authorization), then `apply` executes it.
+// (side-effect free, before approval), then `apply` executes it.
 #[async_trait]
 pub trait Tool: Send + Sync {
     /// Borrows the tool's definition; tools own a `ToolDefinition` and return
@@ -214,11 +217,16 @@ pub trait Tool: Send + Sync {
     fn title(&self, args: &serde_json::Value) -> Result<String, Error> {
         Ok(self.definition().name.clone())
     }
+    /// Returns `true` if this call requires the consumer's approval before it
+    /// runs. When `true`, the runner emits `AgentEvent::ApprovalRequest` and
+    /// blocks until the consumer calls `ApprovalRequest::respond`. Default: `false`.
+    fn requires_approval(&self, args: &serde_json::Value) -> bool { false }
     /// Resolves `args` into a proposal — the concrete thing that will happen —
-    /// without side effects, before authorization. The returned value is shown
-    /// to the `AuthManager` and then handed verbatim to `apply`. The default
-    /// returns `args` unchanged; override it to do real planning (e.g. read a
-    /// file and return `{ path, old_text, new_text }` so a diff can be shown).
+    /// without side effects. The returned value is shown to the consumer via
+    /// `AgentEvent::ApprovalRequest` and then handed verbatim to `apply`. The
+    /// default returns `args` unchanged; override it to do real planning (e.g.
+    /// read a file and return `{ path, old_text, new_text }` so a diff can be
+    /// shown).
     async fn propose(
         &self,
         args: &serde_json::Value,
@@ -248,7 +256,7 @@ impl ToolRegistry {
 
 `ToolDefinition` is the runtime-only contract between agent and model. It is never stored in `Agent` — it lives in the `ToolRegistry` alongside its implementation and is resolved at run time. `parameters` is a `schemars::Schema`, typically built with the `schemars::json_schema!` macro.
 
-`Tool` is the object-safe trait the registry stores: its arguments and results are raw `serde_json::Value`s. A call runs in two phases. `propose` resolves the model's raw `args` into a *proposal* — the concrete thing that will happen — without side effects and before authorization; it returns a single JSON value. The runner shows that proposal to the `AuthManager` and, if approved, hands the *same* value to `apply`. Because one value drives both the prompt and the execution, what the approver sees and what runs can never drift. An edit tool's `propose` reads the file and returns `{ path, old_text, new_text }`; the auth manager renders a diff from it and `apply` writes `new_text`. `propose` has a default that returns `args` unchanged, so a tool that needs no planning only implements `apply`. The proposal is opaque to the runner — rendering it for a human is the `AuthManager`'s job (a tool-aware manager matches on the tool name; a generic one displays the JSON).
+`Tool` is the object-safe trait the registry stores: its arguments and results are raw `serde_json::Value`s. A call runs in two phases. `propose` resolves the model's raw `args` into a *proposal* — the concrete thing that will happen — without side effects; it returns a single JSON value. If `requires_approval` returns `true`, the runner emits an `AgentEvent::ApprovalRequest` carrying the proposal and blocks until the consumer responds. Because one value drives both the prompt and the execution, what the consumer sees and what runs can never drift. An edit tool's `propose` reads the file and returns `{ path, old_text, new_text }`; the consumer renders a diff from `ApprovalRequest::proposal` and `apply` writes `new_text`. `propose` has a default that returns `args` unchanged, so a tool that needs no planning only implements `apply`. The proposal is opaque to the runner — rendering it for a human is the consumer's responsibility.
 
 A single registry can hold tools of different shapes because everything is stored as `Box<dyn Tool>`. `register` accepts any `Tool` and boxes it directly — there is no separate wrapper type.
 
@@ -263,13 +271,11 @@ The registry holds two kinds of callables: plain [`Tool`] implementations and su
 pub struct AgentRunner {
     model: Arc<dyn LlmModel>,
     registry: Arc<ToolRegistry>,
-    auth_manager: Option<Arc<dyn AuthManager>>,
 }
 
 impl AgentRunner {
     pub fn new(model: Arc<dyn LlmModel>) -> Self;
     pub fn with_registry(model: Arc<dyn LlmModel>, registry: Arc<ToolRegistry>) -> Self;
-    pub fn with_auth_manager(self, auth: Arc<dyn AuthManager>) -> Self;
 
     pub fn run(
         &self,
@@ -286,7 +292,7 @@ impl AgentRunner {
 }
 ```
 
-Owns the LLM model, a shared reference to a `ToolRegistry`, and an optional `AuthManager`. The runner is `Clone` (internals are `Arc`) so it can be shared across tasks. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
+Owns the LLM model and a shared reference to a `ToolRegistry`. The runner is `Clone` (internals are `Arc`) so it can be shared across tasks. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
 
 `run` is the simple entry point. It takes the agent by reference and the message thread by value, and returns a `Stream<Item = RunEvent>`. Internally, `run` clones the agent and `self` before spawning the agentic loop on a background tokio task — the spawned generator must be `'static`, so it cannot capture the `&Agent` or `&self` references directly. Events are delivered through an internal mpsc channel as they happen. The stream ends after the model produces a turn with no tool calls, or after a terminal `AgentEvent::Error` / `AgentEvent::Cancelled`.
 
@@ -300,11 +306,11 @@ The caller is responsible for maintaining conversation history across turns: eac
 2. Drive `model.generate_stream(request)` — forward `ThinkingDelta`/`TextDelta` events; collect any tool calls.
 3. If no tool calls were issued, the loop ends.
 4. Append the tool calls as a single assistant turn (`Message::tool_calls`).
-5. For each tool call, run a future that: looks up the tool in the registry; if missing, returns `Unknown` with no events. Otherwise emits `ToolCallStarted`, then calls `Tool::propose` to resolve the call (a propose error short-circuits to `ToolCallFinished { Err }` without consulting auth). It then consults the `AuthManager` (if any), passing the resulting proposal; on denial, emits `ToolCallFinished { Denied }`. On allow, calls `Tool::apply` with the approved proposal (or runs the sub-agent), then emits `ToolCallFinished` with the result. Before invoking `authorize`, the runner *flushes* the event channel — it waits until the consumer has drained `ToolCallStarted` for this call off the stream — so that `authorize`, which may surface a prompt to the frontend out of band, can never reach the frontend before the announcement of the call it is gating. (`ToolCallStarted` goes through the buffered event channel while `authorize` is a direct call; without the flush the announcement could still be queued when the prompt arrives, breaking correlation — see issue #64. The flush is a `LoopMessage::Flush` barrier carrying a oneshot that the stream pump completes when it reaches it.)
+5. For each tool call, run a future that: looks up the tool in the registry; if missing, returns `Unknown` with no events. Otherwise emits `ToolCallStart`, then calls `Tool::propose` to resolve the call (a propose error short-circuits to `ToolCallFinish { Err }` without requesting approval). If `Tool::requires_approval` returns `true`, the runner emits `AgentEvent::ApprovalRequest` carrying the proposal and blocks until the consumer responds via `ApprovalRequest::respond`; on denial, emits `ToolCallFinish { Denied }`. On allow (or when approval is not required), calls `Tool::apply` with the approved proposal (or runs the sub-agent), then emits `ToolCallFinish` with the result. Because `ToolCallStart` and `ApprovalRequest` both travel the same FIFO event channel, the consumer is guaranteed to observe `ToolCallStart` before the approval prompt for the same call — no flush barrier is needed.
 6. All tool futures run **concurrently** via `futures_util::future::join_all`. `join_all` preserves input order in its return value, so tool-result messages are appended in the same order the model issued them — even though events may interleave.
 7. Repeat from step 1.
 
-**Cancellation checkpoints.** The runner races against the cancel token at these points: (a) the top of the loop, before building the next `ModelRequest`; (b) `model_stream.next()` (a `tokio::select!` against `cancel.cancelled()` — winning the cancel arm drops the model stream, aborting the in-flight reqwest); (c) `Tool::propose`; (d) `auth.authorize` when an `AuthManager` is configured; and (e) `Tool::apply`. On cancellation the runner emits a single terminal `AgentEvent::Cancelled` and exits; no `ToolCallFinished` is emitted for in-flight tools (a trailing `ToolCallStarted` may be observed without its matching `Finished`). Both `Tool::propose` and `Tool::apply` receive a clone of the run's cancel token; cooperating tools select on it to abort cleanly. Tools that ignore the token do not block the runner from terminating — the runner drops the future on cancel — but their side effects may continue in the background until they finish on their own.
+**Cancellation checkpoints.** The runner races against the cancel token at these points: (a) the top of the loop, before building the next `ModelRequest`; (b) `model_stream.next()` (a `tokio::select!` against `cancel.cancelled()` — winning the cancel arm drops the model stream, aborting the in-flight reqwest); (c) `Tool::propose`; (d) the `ApprovalRequest` response wait (when a tool requires approval); and (e) `Tool::apply`. On cancellation the runner emits a single terminal `AgentEvent::Cancelled` and exits; no `ToolCallFinish` is emitted for in-flight tools (a trailing `ToolCallStart` may be observed without its matching `Finish`). Both `Tool::propose` and `Tool::apply` receive a clone of the run's cancel token; cooperating tools select on it to abort cleanly. Tools that ignore the token do not block the runner from terminating — the runner drops the future on cancel — but their side effects may continue in the background until they finish on their own.
 
 ### `AgentTool` (`src/tools/agent_tool.rs`)
 
@@ -346,24 +352,39 @@ The `cancel` token is forwarded to the child via `run_with_cancellation`, so can
 - The caller supplies the `ToolDefinition` explicitly: the `name` is what the parent model uses to invoke the sub-agent, the `description` guides the parent model's routing decision, and `parameters` describes what args the parent model should pass.
 - `AgentTool` lives in its own module (`src/tools/agent_tool/`) to avoid a circular dependency: `tool.rs` must not import the runner, and the runner must not import `agent_tool` directly (it imports it via `crate::tools`).
 
-### `AuthManager` (`src/auth.rs`)
+### `Tool::requires_approval` and `ApprovalRequest` (`src/tools/`)
+
+Per-tool approval is declared directly on the `Tool` trait:
 
 ```rust
-#[async_trait]
-pub trait AuthManager: Send + Sync {
-    fn requires_authorization(&self, name: &str, args: &Value) -> bool { true }
-    async fn authorize(&self, id: &str, name: &str, args: &Value, proposal: &Value) -> bool;
+fn requires_approval(&self, args: &serde_json::Value) -> bool { false }
+```
+
+The default returns `false` — tools run without any prompt. Override and return `true` (or compute from `args`) for any tool that should require consumer confirmation before executing.
+
+When `requires_approval` returns `true`, the runner emits `AgentEvent::ApprovalRequest` on the event stream and blocks the call until the consumer answers:
+
+```rust
+pub struct ApprovalRequest {
+    pub tool_call_id: String,   // matches ToolCallStart / ToolCallFinish for the same call
+    pub tool_name: String,
+    pub args: Value,            // raw model-supplied arguments
+    pub proposal: Value,        // value Tool::propose resolved — what will run if approved
+    // ...
+}
+
+impl ApprovalRequest {
+    pub fn respond(self, allowed: bool);  // true → allow, false → deny
 }
 ```
 
-Optional hook on `AgentRunner` (set via `with_auth_manager`). With no manager set, no authorization is performed and every tool call runs.
+`ApprovalRequest` travels the same FIFO event channel as `ToolCallStart`, so the consumer is guaranteed to observe `ToolCallStart` before the approval request for the same call — correlation by `tool_call_id` is always safe.
 
-The trait has two methods so the cheap filter and the async decision can live apart:
+`proposal` is the value `Tool::propose` returned: the concrete action that will execute if approved (e.g., `{ path, old_text, new_text }` for an edit tool — enough to render a diff). If approved, `proposal` is handed verbatim to `Tool::apply`, so what the consumer sees is exactly what runs.
 
-- `requires_authorization` — sync, must be cheap. The runner calls it first; if it returns `false`, `authorize` is skipped entirely. No I/O, no locks, no awaits.
-- `authorize` — async; may block on user input, RPC, dialogs, etc. Returns `true` to allow, `false` to deny. Denial is binary — the runner reports it via `ToolCallResult::Denied` with no accompanying reason. (This matches a user-facing accept/decline approval prompt.) `id` is the tool call's identifier — the same id the runner reports on `ToolCallStarted`/`ToolCallFinished`. `ToolCallStarted` is guaranteed to reach the consumer's stream before `authorize` runs (the runner flushes the event channel first), so an out-of-process approver (editor permission request, GUI dialog, remote service) can correlate the prompt with the already-announced call. `args` is the model's raw request; `proposal` is what `Tool::propose` resolved it into — the concrete action that will run if approved (an edit tool's proposal carries the path and old/new contents, enough to render a diff). Rendering it is the manager's job: a tool-aware manager matches on `name`, a generic one can display the JSON.
+Denial is binary — the runner reports it via `ToolCallResult::Denied` with no accompanying reason. Dropping an `ApprovalRequest` without calling `respond` is treated as a denial.
 
-`authorize` may be called concurrently when the model returns multiple tool calls in one turn. Implementations sharing UI resources (stdin, a modal dialog) must serialize internally — typically with a `tokio::sync::Mutex`. The lock belongs in `authorize`, not in `requires_authorization`.
+When the model returns multiple tool calls in one turn, approval requests may arrive concurrently. Consumers sharing UI resources (stdin, a modal dialog) must serialize internally — typically with a `tokio::sync::Mutex`.
 
 ### `Error` (`src/error.rs`)
 
@@ -405,7 +426,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 
 ## Cargo Features
 
-Provider adapters are opt-in via Cargo features. The core types (`LlmModel`, `Agent`, `AgentRunner`, `Tool`, `Error`, `AuthManager`, etc.) are always available regardless of which features are enabled.
+Provider adapters are opt-in via Cargo features. The core types (`LlmModel`, `Agent`, `AgentRunner`, `Tool`, `ApprovalRequest`, `Error`, etc.) are always available regardless of which features are enabled.
 
 | Feature    | Enables                          |
 |------------|----------------------------------|
@@ -436,14 +457,14 @@ src/
   model.rs            — LlmModel trait, ModelStreamChunk, Message, MessageContent,
                         ModelRequest, ModelResponse, TokenUsage, ToolCall, Role
   agent.rs            — Agent, AgentBuilder
-  auth.rs             — AuthManager trait
   runner/
     mod.rs            — AgentRunner, RunEmitter, agentic loop
     events.rs         — AgentEvent, RunEvent, ToolCallResult
     tests.rs          — runner unit tests (with scripted LlmModel)
   tools/
-    mod.rs            — re-exports Tool, ToolDefinition, ToolRegistry, AgentTool
+    mod.rs            — re-exports Tool, ToolDefinition, ToolRegistry, AgentTool, ApprovalRequest
     tool.rs           — Tool trait, ToolDefinition
+    approval.rs       — ApprovalRequest
     registry.rs       — ToolRegistry, ToolRegistryEntry
     agent_tool/
       mod.rs          — AgentTool (wraps AgentRunner + Agent as a tool)
@@ -462,7 +483,7 @@ examples/
   parallel_tool_calls.rs  — concurrent tool execution
   agent_as_tool.rs        — AgentTool composition (parent/child runs distinguished by run_id)
   long_term_memory.rs     — memory via tools
-  mpsc_auth_flow.rs       — AuthManager CLI prompt
+  mpsc_auth_flow.rs       — per-tool approval via Tool::requires_approval, stdin y/N prompt
   mpsc_runner.rs          — runner basics
   cancellation.rs         — drop-the-stream, external CancellationToken, deadline
 tests/

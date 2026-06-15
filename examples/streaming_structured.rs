@@ -161,26 +161,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print!("{chunk}");
                 output.push_str(&chunk);
             }
-            AgentEvent::ToolCallStart { tool_name, args, .. } => {
+            AgentEvent::ToolCallStart {
+                tool_name, args, ..
+            } => {
                 if in_thinking {
                     println!("\x1b[0m");
                     in_thinking = false;
                 }
-                println!("[tool →] {name}({args})");
+                println!("[tool →] {tool_name}({args})");
             }
             AgentEvent::ToolCallUpdate {
                 tool_name, details, ..
             } => {
-                println!("[tool →] {name}({details:?})");
+                println!("[tool →] {tool_name}({details:?})");
             }
 
             AgentEvent::ToolCallFinish {
                 tool_name, result, ..
             } => match result {
-                ToolCallResult::Ok(value) => println!("[tool ←] {name} = {value}"),
-                ToolCallResult::Err(error) => println!("[tool ✗] {name} → {error:?}"),
-                ToolCallResult::Denied => println!("[tool ⨯] {name} denied"),
-                ToolCallResult::Unknown => println!("[tool ?] {name} unknown"),
+                ToolCallResult::Ok(value) => println!("[tool ←] {tool_name} = {value}"),
+                ToolCallResult::Err(error) => println!("[tool ✗] {tool_name} → {error:?}"),
+                ToolCallResult::Denied => println!("[tool ⨯] {tool_name} denied"),
+                ToolCallResult::Unknown => println!("[tool ?] {tool_name} unknown"),
             },
             AgentEvent::Usage(usage) => println!("[usage] {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),

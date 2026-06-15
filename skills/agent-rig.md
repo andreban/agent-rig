@@ -3,7 +3,7 @@ name: agent-rig
 description: >
   Guide and write code using the `agent-rig` library — a provider-agnostic AI agent toolkit for Rust.
   Use this skill whenever the user is writing, reading, debugging, or extending code that involves
-  `agent_rig`, `AgentRunner`, `Agent`, `LlmModel`, `ToolRegistry`, `AgentTool`, `AuthManager`,
+  `agent_rig`, `AgentRunner`, `Agent`, `LlmModel`, `ToolRegistry`, `AgentTool`, `ApprovalRequest`,
   `GeminiModel`, `OllamaModel`, or any type from this crate. Also trigger when the user asks how to
   add a new LLM provider, implement a custom tool, wire up multi-turn conversations, stream agent
   output, gate tool calls behind user approval, or use structured output in the context of this
@@ -49,15 +49,15 @@ dotenvy        = "0.15"
 | Type | Description |
 |------|-------------|
 | `Agent` / `AgentBuilder` | Pure data blueprint: name, instructions, optional output schema, allowed tool names. Implements `Serialize`/`Deserialize` so configs can be stored as JSON/YAML. **Carries no model reference** — the same blueprint can run on any `AgentRunner`. |
-| `AgentRunner` | Execution engine; owns an `Arc<dyn LlmModel>`, an `Arc<ToolRegistry>`, and an optional `Arc<dyn AuthManager>`. Cheap to `Clone` (everything is behind `Arc`). |
+| `AgentRunner` | Execution engine; owns an `Arc<dyn LlmModel>` and an `Arc<ToolRegistry>`. Cheap to `Clone` (everything is behind `Arc`). |
 | `LlmModel` | Async trait every provider implements. Has `generate` (required) and `generate_stream` (default impl wraps `generate`). The extension point for new providers. |
 | `Message` / `MessageContent` | Conversation history elements. `MessageContent` is one of `Text`, `ToolCalls(Vec<ToolCall>)`, or `ToolResult { id, name, result, provider_metadata }`. |
 | `ModelRequest` / `ModelResponse` / `ToolCall` | Provider-agnostic request/response envelope. `ModelResponse::text` and `tool_calls` are mutually exclusive per turn. |
 | `Tool` / `ToolDefinition` | Async trait for callable tools. `parameters` is a JSON Schema `serde_json::Value`. |
 | `ToolRegistry` | Registry of `Tool` and `AgentTool` entries, keyed by name. Shared via `Arc<ToolRegistry>`. |
 | `AgentTool` | Wraps an `AgentRunner` + `Agent` so it can be invoked through the same tool-call mechanism. Registered via `ToolRegistry::register_agent`. |
-| `AuthManager` | Optional trait for gating tool calls before execution (e.g. user approval prompts). |
-| `AgentEvent` | Stream event: `TextDelta`, `ThinkingDelta`, `ToolCallStarted`, `ToolCallFinished`, `Error`. |
+| `ApprovalRequest` | Approval gate carried on the event stream. Tools opt in by overriding `Tool::requires_approval` to return `true`; call `request.respond(bool)` to allow or deny. |
+| `AgentEvent` | Stream event: `TextDelta`, `ThinkingDelta`, `ToolCallStart`, `ToolCallFinish`, `ApprovalRequest`, `Error`. |
 | `RunEvent` | An `AgentEvent` tagged with `run_id` and an optional `parent` run id (for sub-agents). **This is what the runner stream actually yields.** |
 | `ToolCallResult` | Outcome of a tool call: `Ok(Value)`, `Err(Error)`, `Denied`, `Unknown`. |
 | `Error` | `Provider(String)` or `Agent(String)`. |
@@ -296,46 +296,48 @@ while let Some(event) = stream.next().await {
 
 ## Authorization (Gating Tool Calls)
 
-Implement `AuthManager` to gate tool calls before they execute. The runner consults the manager for
-every tool call: `requires_authorization` is a cheap **synchronous** filter; `authorize` is the
-async decision (`true` to allow, `false` to deny).
+Gate individual tool calls by overriding `requires_approval` on the `Tool` trait. The runner calls
+it synchronously before every invocation; returning `true` causes it to emit
+`AgentEvent::ApprovalRequest` on the event stream and block until the consumer responds.
 
 ```rust
-use std::sync::Arc;
-use std::collections::HashSet;
-use async_trait::async_trait;
-use agent_rig::{auth::AuthManager, runner::AgentRunner};
+use agent_rig::tools::{Tool, ToolDefinition};
 use serde_json::Value;
 
-struct ProtectedTools { names: HashSet<String> }
+struct SendEmailTool { definition: ToolDefinition }
 
-#[async_trait]
-impl AuthManager for ProtectedTools {
-    fn requires_authorization(&self, name: &str, _args: &Value) -> bool {
+impl Tool for SendEmailTool {
+    fn definition(&self) -> &ToolDefinition { &self.definition }
+
+    fn requires_approval(&self, _args: &Value) -> bool {
         // Sync. No I/O, no locks, no awaits.
-        self.names.contains(name)
+        true
     }
 
-    async fn authorize(&self, id: &str, name: &str, _args: &Value, proposal: &Value) -> bool {
-        // Async. `proposal` is what `Tool::propose` resolved the call into
-        // (the default passthrough makes it equal to the args). Prompt the
-        // user, call a policy service, etc.
-        prompt_user(id, name, proposal).await
+    async fn apply(&self, proposal: Value, /* ... */) -> Result<Value, Error> {
+        // Only reached after the consumer calls request.respond(true).
     }
 }
-
-let runner = AgentRunner::with_registry(Arc::new(model), registry)
-    .with_auth_manager(Arc::new(ProtectedTools { names: ["send_email".into()].into() }));
 ```
 
-When a call is denied, the runner emits `ToolCallFinished { result: ToolCallResult::Denied, .. }`
-(no `ToolCallStarted` is emitted for denied or unknown calls) and feeds a synthetic "denied"
-result back to the model so the next turn stays paired with the original tool-call message.
+In the event loop, handle `AgentEvent::ApprovalRequest`:
 
-`authorize` may be called concurrently when the model returns multiple tool calls in one turn.
-Implementations sharing UI resources (stdin, a modal dialog) must serialize internally — typically
-with a `tokio::sync::Mutex` held inside `authorize`. Do not hold a lock in
-`requires_authorization`; it must stay cheap and non-blocking.
+```rust
+AgentEvent::ApprovalRequest(request) => {
+    // request.proposal is what Tool::propose resolved — show it to the user.
+    let allow = prompt_user(&request.tool_name, &request.proposal).await;
+    request.respond(allow);  // consumes the request
+}
+```
+
+When a call is denied, the runner emits `ToolCallFinish { result: ToolCallResult::Denied, .. }`
+and feeds a synthetic "denied" result back to the model so the next turn stays paired with the
+original tool-call message. `ToolCallStart` is always emitted before `ApprovalRequest` for the
+same call (both travel the same FIFO channel), so correlation by `tool_call_id` is safe.
+
+When the model returns multiple tool calls in one turn, approval requests may arrive concurrently.
+Consumers sharing UI resources (stdin, a modal dialog) must serialize internally — typically with
+a `tokio::sync::Mutex`.
 
 See `examples/mpsc_auth_flow.rs` for a working CLI prompt.
 

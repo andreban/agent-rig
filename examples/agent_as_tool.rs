@@ -103,27 +103,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             AgentEvent::ToolCallStart {
                 tool_name, args, ..
             } => {
-                println!("{prefix} started:  {name}({args})");
+                println!("{prefix} started:  {tool_name}({args})");
             }
             AgentEvent::ToolCallUpdate {
                 tool_name, details, ..
             } => {
-                println!("{prefix} update:  {name}({details:?})");
+                println!("{prefix} update:  {tool_name}({details:?})");
             }
             AgentEvent::ToolCallFinish {
                 tool_name, result, ..
             } => match result {
                 ToolCallResult::Ok(value) => {
-                    println!("{prefix} ok:       {name} → {value}")
+                    println!("{prefix} ok:       {tool_name} → {value}")
                 }
                 ToolCallResult::Err(error) => {
-                    println!("{prefix} err:      {name} → {error}")
+                    println!("{prefix} err:      {tool_name} → {error}")
                 }
                 ToolCallResult::Denied => {
-                    println!("{prefix} denied:   {name}")
+                    println!("{prefix} denied:   {tool_name}")
                 }
                 ToolCallResult::Unknown => {
-                    println!("{prefix} unknown:  {name}")
+                    println!("{prefix} unknown:  {tool_name}")
                 }
             },
             AgentEvent::Usage(usage) => {

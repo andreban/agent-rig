@@ -1,20 +1,17 @@
-//! Demonstrates the authorization flow in the `MpscRunner`.
+//! Demonstrates the per-tool approval flow via [`Tool::requires_approval`].
 //!
-//! The runner consults its configured [`AuthManager`] for every tool call;
-//! managers decide which ones actually need approval. Here we plug in a CLI
-//! `StdinPromptAuthManager` that holds a set of protected tool names — it
-//! fast-paths `true` for anything not in the set and prompts y/N on stdin
-//! for the rest.
+//! [`SendEmailTool`] overrides `requires_approval` to return `true`, so the
+//! runner emits an [`AgentEvent::ApprovalRequest`] on the event stream before
+//! the tool runs. The consumer handles that event on a separate task (the
+//! "auth loop") and prompts the user on stdin for a y/N decision.
 //!
 //! Run with:
 //! ```bash
 //! GEMINI_API_KEY=your_key cargo run --example mpsc_auth_flow
 //! ```
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
-use agent_rig::auth::AuthManager;
 use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
@@ -60,6 +57,10 @@ impl Tool for SendEmailTool {
         &self.definition
     }
 
+    fn requires_approval(&self, _args: &Value) -> bool {
+        true
+    }
+
     /// Resolves the raw args into a proposal carrying a `preview` string the
     /// authorization prompt can show. The other fields are passed through so
     /// `apply` still has everything it needs.
@@ -93,37 +94,6 @@ impl Tool for SendEmailTool {
     }
 }
 
-/// Prompts via stdin for tool calls whose name is in `protected`. Calls to
-/// any other tool are filtered out by `requires_authorization` and never
-/// reach `authorize`.
-///
-/// `authorize` may be called concurrently when the model returns multiple
-/// protected tool calls in one turn; stdin can't be safely read by multiple
-/// tasks at once and interleaved prompts would be unreadable, so the whole
-/// prompt-and-read sequence runs under a mutex.
-struct StdinPromptAuthManager {
-    protected: HashSet<String>,
-}
-
-impl StdinPromptAuthManager {
-    fn new<I, S>(protected: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        Self {
-            protected: protected.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-#[async_trait]
-impl AuthManager for StdinPromptAuthManager {
-    fn requires_authorization(&self, name: &str, _args: &Value) -> bool {
-        self.protected.contains(name)
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
@@ -145,9 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("send_email")
         .build();
 
-    let auth_manager = Arc::new(StdinPromptAuthManager::new(["send_email"]));
-    let runner =
-        AgentRunner::with_registry(Arc::new(model), registry).with_auth_manager(auth_manager);
+    let runner = AgentRunner::with_registry(Arc::new(model), registry);
 
     let question =
         "Send an email to bob@example.com with subject 'Lunch' and body 'See you at noon.'";
@@ -161,20 +129,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCallStart {
                 tool_name, args, ..
             } => {
-                println!("\n[runner] started:   {name}({args})");
+                println!("\n[runner] started:   {tool_name}({args})");
             }
             AgentEvent::ToolCallUpdate {
                 tool_name, details, ..
             } => {
-                println!("\n[runner] update:   {name}({details:?})");
+                println!("\n[runner] update:   {tool_name}({details:?})");
             }
             AgentEvent::ToolCallFinish {
                 tool_name, result, ..
             } => match result {
-                ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
-                ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
-                ToolCallResult::Denied => println!("[runner] denied:    {name}"),
-                ToolCallResult::Unknown => println!("[runner] unknown:   {name}"),
+                ToolCallResult::Ok(value) => println!("[runner] finished:  {tool_name} → {value}"),
+                ToolCallResult::Err(error) => {
+                    println!("[runner] error:     {tool_name} → {error:?}")
+                }
+                ToolCallResult::Denied => println!("[runner] denied:    {tool_name}"),
+                ToolCallResult::Unknown => println!("[runner] unknown:   {tool_name}"),
             },
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),
             AgentEvent::ThinkingDelta(_) => {}
@@ -191,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or("(no preview)");
                 println!(
                     "\n[auth]  Tool '{}' (id {}) wants to run:",
-                    request.tool_name, request.tool_id
+                    request.tool_name, request.tool_call_id
                 );
                 println!("[auth]    {preview}");
                 print!("[auth]  Approve? [y/N]: ");

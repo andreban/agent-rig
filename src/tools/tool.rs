@@ -145,15 +145,36 @@ pub trait Tool: Send + Sync {
         Ok(self.definition().name.clone())
     }
 
+    /// Returns `true` if this tool call requires the consumer's approval before it runs.
+    ///
+    /// When `true`, the runner emits an
+    /// [`AgentEvent::ApprovalRequest`](crate::runner::AgentEvent::ApprovalRequest) on its
+    /// event stream and blocks the call until the consumer responds via
+    /// [`ApprovalRequest::respond`](crate::tools::ApprovalRequest::respond). A denied
+    /// call surfaces as [`ToolCallResult::Denied`](crate::runner::ToolCallResult::Denied)
+    /// on the matching `ToolCallFinish` event, with the tool never invoked.
+    ///
+    /// `args` are the raw model-supplied arguments; inspect them to make the gate
+    /// conditional on argument content.
+    ///
+    /// The default returns `false` — calls run without prompting the consumer. Override
+    /// and return `true` for any tool that should present a confirmation prompt before
+    /// executing.
+    ///
+    /// Must be non-blocking — no I/O, no locks, no awaits.
+    fn requires_approval(&self, _args: &Value) -> bool {
+        false
+    }
+
     /// Plans the call without committing side effects, returning a *proposal*:
-    /// a JSON value that both the [`AuthManager`](crate::auth::AuthManager) and
-    /// [`apply`](Tool::apply) read from.
+    /// a JSON value that both the approval prompt and [`apply`](Tool::apply) read from.
     ///
     /// A tool call runs in two phases. `propose` resolves the model's raw
     /// `args` into the concrete thing that will happen — for an edit tool, it
     /// reads the file and computes the new contents, returning something like
     /// `{ "path": …, "old_text": …, "new_text": … }`. The runner shows that
-    /// proposal to the `AuthManager` (which can render a diff from it), and if
+    /// proposal to the consumer via [`AgentEvent::ApprovalRequest`](crate::runner::AgentEvent::ApprovalRequest)
+    /// (which can render a diff from it), and if
     /// approved hands the *same* value to `apply` (which writes `new_text`).
     /// Because one value drives both, what the approver sees and what executes
     /// can never drift apart.

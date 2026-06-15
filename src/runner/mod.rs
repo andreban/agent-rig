@@ -3,8 +3,8 @@
 
 //! Drives an [`Agent`] against an [`LlmModel`] until it produces a final reply.
 //!
-//! [`AgentRunner`] owns the model, the [`ToolRegistry`], and (optionally) an
-//! [`AuthManager`]. Calling [`AgentRunner::run`] spawns the agentic loop on a
+//! [`AgentRunner`] owns the model and the [`ToolRegistry`]. Calling
+//! [`AgentRunner::run`] spawns the agentic loop on a
 //! background task and returns a [`Stream`] of [`AgentEvent`]s — text and
 //! reasoning deltas, plus the lifecycle of each tool call.
 //!
@@ -28,10 +28,9 @@ use tracing::debug;
 
 use crate::{
     Agent,
-    auth::{ApprovalRequest, AuthManager},
     error::Error,
     model::{LlmModel, Message, ModelRequest, ModelStreamChunk, ToolCall},
-    tools::{ProgressDetails, ProgressReporter, ToolDefinition, ToolRegistry},
+    tools::{ApprovalRequest, ProgressDetails, ProgressReporter, ToolDefinition, ToolRegistry},
 };
 
 mod events;
@@ -95,10 +94,8 @@ impl ProgressReporter for ToolProgress<'_> {
 /// Drives an agent against an [`LlmModel`] and a [`ToolRegistry`].
 ///
 /// Construct one with [`AgentRunner::new`] (no tools) or
-/// [`AgentRunner::with_registry`] (with tools), optionally chaining
-/// [`AgentRunner::with_auth_manager`] to gate tool execution. Call
-/// [`AgentRunner::run`] to start the agentic loop and consume the returned
-/// stream until it ends.
+/// [`AgentRunner::with_registry`] (with tools). Call [`AgentRunner::run`] to
+/// start the agentic loop and consume the returned stream until it ends.
 ///
 /// `AgentRunner` is cheap to clone — internals are behind [`Arc`] — so a
 /// single runner can be shared across tasks.
@@ -106,7 +103,6 @@ impl ProgressReporter for ToolProgress<'_> {
 pub struct AgentRunner {
     model: Arc<dyn LlmModel>,
     registry: Arc<ToolRegistry>,
-    auth_manager: Option<Arc<dyn AuthManager>>,
 }
 
 impl AgentRunner {
@@ -115,26 +111,12 @@ impl AgentRunner {
         AgentRunner {
             model,
             registry: Arc::new(ToolRegistry::new()),
-            auth_manager: None,
         }
     }
 
     /// Creates a runner that uses `model` and the supplied [`ToolRegistry`].
     pub fn with_registry(model: Arc<dyn LlmModel>, registry: Arc<ToolRegistry>) -> Self {
-        AgentRunner {
-            model,
-            registry,
-            auth_manager: None,
-        }
-    }
-
-    /// Sets the [`AuthManager`] consulted before every tool call.
-    ///
-    /// With no manager set, no authorization is performed and all calls run.
-    /// The manager decides which calls require approval and how to obtain it.
-    pub fn with_auth_manager(mut self, auth_manager: Arc<dyn AuthManager>) -> Self {
-        self.auth_manager = Some(auth_manager);
-        self
+        AgentRunner { model, registry }
     }
 
     /// Runs `agent` starting from `thread` and returns the event stream.
@@ -382,11 +364,8 @@ impl AgentRunner {
                     },
                 };
 
-                // Authorization gate: the sync check decides whether to consult
-                // the async decision path. If no manager is configured, no gating.
-                if let Some(auth) = &self.auth_manager
-                    && auth.requires_authorization(&call.name, &call.args)
-                {
+                // Authorization gate: consult the tool's own approval requirement.
+                if tool.requires_approval(&call.args) {
                     let (respond_tx, respond_rx) = oneshot::channel();
                     // Emit the handle. FIFO guarantees the consumer processes ToolCallStart first.
                     let _ = tx
