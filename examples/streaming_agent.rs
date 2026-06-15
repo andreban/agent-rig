@@ -12,7 +12,7 @@
 //! The example wires up a calculator agent that must use an `add` tool to
 //! answer the question. Every event is printed as it happens:
 //!
-//! - `ToolCallStarted` / `ToolCallFinished` — printed when the agent invokes
+//! - `ToolCallStart` / `ToolCallFinish` — printed when the agent invokes
 //!   the tool.
 //! - `TextDelta` — printed incrementally as the model generates its answer.
 //! - `ThinkingDelta` — printed if the model emits reasoning tokens (requires
@@ -117,13 +117,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::TextDelta(chunk) => {
                 print!("{chunk}");
             }
-            AgentEvent::ToolCallStarted { name, args, .. } => {
+            AgentEvent::ToolCallStart { tool_name, args, .. } => {
                 println!("[runner] tool call started: {name}({args})");
             }
-            AgentEvent::ToolCallUpdate { name, details, .. } => {
+            AgentEvent::ToolCallUpdate {
+                tool_name, details, ..
+            } => {
                 println!("[runner] tool call started: {name}({details:?})");
             }
-            AgentEvent::ToolCallFinished { name, result, .. } => match result {
+            AgentEvent::ToolCallFinish {
+                tool_name, result, ..
+            } => match result {
                 ToolCallResult::Ok(value) => {
                     println!("[runner] tool call finished: {name} → {value}")
                 }
@@ -136,8 +140,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Usage(usage) => println!("[runner] token usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
-            AgentEvent::StartTurn => {}
-            AgentEvent::EndTurn { .. } => {}
+            AgentEvent::TurnStart => {}
+            AgentEvent::TurnFinish { .. } => {}
             AgentEvent::ApprovalRequest(request) => {
                 request.respond(true);
             }

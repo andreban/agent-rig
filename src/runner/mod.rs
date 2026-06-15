@@ -84,8 +84,8 @@ impl ProgressReporter for ToolProgress<'_> {
         let _ = self
             .tx
             .send(AgentEvent::ToolCallUpdate {
-                tool_id: self.tool_id.clone(),
-                name: self.name.clone(),
+                tool_call_id: self.tool_id.clone(),
+                tool_name: self.name.clone(),
                 details,
             })
             .await;
@@ -228,7 +228,7 @@ impl AgentRunner {
         mut thread: Vec<Message>,
         cancel: CancellationToken,
     ) {
-        let _ = tx.send(AgentEvent::StartTurn).await;
+        let _ = tx.send(AgentEvent::TurnStart).await;
         let tools: Vec<ToolDefinition> = self.registry.definitions();
 
         loop {
@@ -290,7 +290,7 @@ impl AgentRunner {
                 if !reply.is_empty() {
                     thread.push(Message::assistant(reply));
                 }
-                let _ = tx.send(AgentEvent::EndTurn { thread }).await;
+                let _ = tx.send(AgentEvent::TurnFinish { thread }).await;
                 return;
             }
 
@@ -319,13 +319,13 @@ impl AgentRunner {
         // Append the tool calls as a single assistant turn.
         thread.push(Message::tool_calls(tool_calls.clone()));
 
-        // Each future runs the full lifecycle for one call: emit Started,
-        // authorization check (if required), execute, emit Finished / Denied.
-        // Hallucinated calls skip Started but still produce a synthetic result
+        // Each future runs the full lifecycle for one call: emit ToolCallStart,
+        // authorization check (if required), execute, emit ToolCallFinish / Denied.
+        // Hallucinated calls skip ToolCallStart but still produce a synthetic result
         // so the assistant turn and tool-result messages remain paired. Each
         // call also races against `cancel`; on cancellation the future
         // resolves to a synthetic `Err("cancelled")` result without emitting
-        // `Finished`, keeping the assistant-turn / tool-result pairing intact.
+        // ToolCallFinish, keeping the assistant-turn / tool-result pairing intact.
         let tool_futures = tool_calls.into_iter().map(|call| {
             let cancel = cancel.clone();
             async move {
@@ -335,9 +335,9 @@ impl AgentRunner {
                 };
 
                 let _ = tx
-                    .send(AgentEvent::ToolCallStarted {
-                        tool_id: call.id.clone(),
-                        name: call.name.clone(),
+                    .send(AgentEvent::ToolCallStart {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
                         args: call.args.clone(),
                         title: tool.title(&call.args).unwrap_or(call.name.clone()),
                     })
@@ -371,9 +371,9 @@ impl AgentRunner {
                         Err(error) => {
                             let result = ToolCallResult::Err(error);
                             let _ = tx
-                                .send(AgentEvent::ToolCallFinished {
-                                    tool_id: call.id.clone(),
-                                    name: call.name.clone(),
+                                .send(AgentEvent::ToolCallFinish {
+                                    tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
                                     result: result.clone(),
                                 })
                                 .await;
@@ -388,7 +388,7 @@ impl AgentRunner {
                     && auth.requires_authorization(&call.name, &call.args)
                 {
                     let (respond_tx, respond_rx) = oneshot::channel();
-                    // Emit the handle. FIFO guarantees the consumer processes ToolCallStarted first.
+                    // Emit the handle. FIFO guarantees the consumer processes ToolCallStart first.
                     let _ = tx
                         .send(AgentEvent::ApprovalRequest(ApprovalRequest::new(
                             call.id.clone(),
@@ -411,9 +411,9 @@ impl AgentRunner {
                     if !allowed {
                         let result = ToolCallResult::Denied;
                         let _ = tx
-                            .send(AgentEvent::ToolCallFinished {
-                                tool_id: call.id.clone(),
-                                name: call.name.clone(),
+                            .send(AgentEvent::ToolCallFinish {
+                                tool_call_id: call.id.clone(),
+                                tool_name: call.name.clone(),
                                 result: result.clone(),
                             })
                             .await;
@@ -425,7 +425,7 @@ impl AgentRunner {
                 let event: ToolCallResult = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => {
-                        // No Finished — the run is about to terminate with
+                        // No ToolCallFinish — the run is about to terminate with
                         // a single Cancelled event.
                         return (
                             call,
@@ -437,9 +437,9 @@ impl AgentRunner {
 
                 debug!(tool = call.name, "tool call complete");
                 let _ = tx
-                    .send(AgentEvent::ToolCallFinished {
-                        tool_id: call.id.clone(),
-                        name: call.name.clone(),
+                    .send(AgentEvent::ToolCallFinish {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
                         result: event.clone(),
                     })
                     .await;

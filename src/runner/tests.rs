@@ -178,20 +178,20 @@ async fn tool_call_then_text_completes_the_loop() {
 
     let events = collect(&runner, agent("Looper"), "go").await;
 
-    // StartTurn, then Started + Finished + TextDelta. Both lifecycle events
+    // TurnStart, then ToolCallStart + ToolCallFinish + TextDelta. Both lifecycle events
     // carry the model's call id ("c1") so consumers can correlate them.
-    assert!(matches!(events[0], AgentEvent::StartTurn));
+    assert!(matches!(events[0], AgentEvent::TurnStart));
     assert!(matches!(
         events[1],
-        AgentEvent::ToolCallStarted { ref tool_id, ref name, .. } if tool_id == "c1" && name == "echo"
+        AgentEvent::ToolCallStart { ref tool_call_id, ref tool_name, .. } if tool_call_id == "c1" && tool_name == "echo"
     ));
     assert!(matches!(
         events[2],
-        AgentEvent::ToolCallFinished {
-            ref tool_id,
-            ref name,
+        AgentEvent::ToolCallFinish {
+            ref tool_call_id,
+            ref tool_name,
             result: ToolCallResult::Ok(_),
-        } if tool_id == "c1" && name == "echo"
+        } if tool_call_id == "c1" && tool_name == "echo"
     ));
     assert!(matches!(events[3], AgentEvent::TextDelta(ref t) if t == "done"));
 
@@ -216,12 +216,12 @@ async fn unknown_tool_produces_synthetic_result_with_no_events() {
 
     let events = collect(&runner, agent("a"), "go").await;
 
-    // Hallucinated tool calls are silent — no Started, no Finished — but
+    // Hallucinated tool calls are silent — no ToolCallStart, no ToolCallFinish — but
     // the synthetic tool-result message is still appended to the thread
     // so the assistant turn and the tool-result remain paired.
     assert!(!events.iter().any(|e| matches!(
         e,
-        AgentEvent::ToolCallStarted { .. } | AgentEvent::ToolCallFinished { .. }
+        AgentEvent::ToolCallStart { .. } | AgentEvent::ToolCallFinish { .. }
     )));
     let second_request = &model.requests()[1];
     let last_msg = second_request.messages.last().unwrap();
@@ -244,11 +244,11 @@ async fn tool_error_is_reported_via_finished_event() {
     let events = collect(&runner, agent("a"), "go").await;
     let finished = events
         .iter()
-        .find(|e| matches!(e, AgentEvent::ToolCallFinished { .. }))
+        .find(|e| matches!(e, AgentEvent::ToolCallFinish { .. }))
         .unwrap();
     assert!(matches!(
         finished,
-        AgentEvent::ToolCallFinished {
+        AgentEvent::ToolCallFinish {
             result: ToolCallResult::Err(_),
             ..
         }
@@ -303,7 +303,7 @@ async fn collect_with_approvals(
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::ApprovalRequest(req) => {
-                outcome.approval_names.push(req.name.clone());
+                outcome.approval_names.push(req.tool_name.clone());
                 outcome.approval_proposals.push(req.proposal.clone());
                 req.respond(decisions.pop_front().unwrap_or(true));
             }
@@ -326,23 +326,23 @@ async fn auth_denial_skips_tool_execution() {
 
     let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![false]).await;
 
-    // Started is emitted before the approval gate, so a denied call still
-    // produces Started followed by Finished(Denied); only the underlying tool
+    // ToolCallStart is emitted before the approval gate, so a denied call still
+    // produces ToolCallStart followed by ToolCallFinish(Denied); only the underlying tool
     // is skipped.
     assert!(
         outcome
             .events
             .iter()
-            .any(|e| matches!(e, AgentEvent::ToolCallStarted { .. }))
+            .any(|e| matches!(e, AgentEvent::ToolCallStart { .. }))
     );
     let finished = outcome
         .events
         .iter()
-        .find(|e| matches!(e, AgentEvent::ToolCallFinished { .. }))
+        .find(|e| matches!(e, AgentEvent::ToolCallFinish { .. }))
         .unwrap();
     assert!(matches!(
         finished,
-        AgentEvent::ToolCallFinished {
+        AgentEvent::ToolCallFinish {
             result: ToolCallResult::Denied,
             ..
         }
@@ -357,7 +357,7 @@ async fn auth_denial_skips_tool_execution() {
 
 #[tokio::test]
 async fn started_reaches_consumer_before_approval_request() {
-    // Regression test for #64: the consumer must observe `ToolCallStarted`
+    // Regression test for #64: the consumer must observe `ToolCallStart`
     // before the `ApprovalRequest` for the same call, so a frontend can
     // correlate the approval prompt with the announced tool call. Because both
     // events now travel the same FIFO stream, this ordering holds structurally
@@ -375,7 +375,7 @@ async fn started_reaches_consumer_before_approval_request() {
     let mut stream = runner.run(&agent("a"), vec![Message::user("go")]);
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted { .. } => order.push("started"),
+            AgentEvent::ToolCallStart { .. } => order.push("started"),
             AgentEvent::ApprovalRequest(req) => {
                 order.push("approval");
                 req.respond(true);
@@ -389,7 +389,7 @@ async fn started_reaches_consumer_before_approval_request() {
     assert_eq!(
         (started, approval),
         (Some(0), Some(1)),
-        "ToolCallStarted must reach the consumer before the ApprovalRequest: {order:?}"
+        "ToolCallStart must reach the consumer before the ApprovalRequest: {order:?}"
     );
 }
 
@@ -505,15 +505,15 @@ async fn propose_error_skips_approval_and_apply() {
 
     let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![]).await;
 
-    // A propose failure surfaces as Finished(Err) ...
+    // A propose failure surfaces as ToolCallFinish(Err) ...
     let finished = outcome
         .events
         .iter()
-        .find(|e| matches!(e, AgentEvent::ToolCallFinished { .. }))
+        .find(|e| matches!(e, AgentEvent::ToolCallFinish { .. }))
         .unwrap();
     assert!(matches!(
         finished,
-        AgentEvent::ToolCallFinished {
+        AgentEvent::ToolCallFinish {
             result: ToolCallResult::Err(_),
             ..
         }
@@ -539,14 +539,14 @@ async fn thinking_chunks_are_forwarded() {
         .map(|e| match e {
             AgentEvent::ThinkingDelta(_) => "thinking",
             AgentEvent::TextDelta(_) => "text",
-            AgentEvent::ToolCallStarted { .. } => "started",
+            AgentEvent::ToolCallStart { .. } => "started",
             AgentEvent::ToolCallUpdate { .. } => "updated",
-            AgentEvent::ToolCallFinished { .. } => "finished",
+            AgentEvent::ToolCallFinish { .. } => "finished",
             AgentEvent::Usage(_) => "usage",
             AgentEvent::Cancelled => "cancelled",
             AgentEvent::Error(_) => "error",
-            AgentEvent::StartTurn => "start_turn",
-            AgentEvent::EndTurn { .. } => "end_turn",
+            AgentEvent::TurnStart => "start_turn",
+            AgentEvent::TurnFinish { .. } => "end_turn",
             AgentEvent::ApprovalRequest(_) => "approval_request",
         })
         .collect();
@@ -864,16 +864,16 @@ async fn cancellation_during_tool_phase_skips_finished_and_emits_cancelled() {
         .expect("consumer task should not panic");
 
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, AgentEvent::ToolCallStarted { name, .. } if name == "slow")),
-        "Started must have fired before cancellation: {events:?}"
+        events.iter().any(
+            |e| matches!(e, AgentEvent::ToolCallStart { tool_name, .. } if tool_name == "slow")
+        ),
+        "ToolCallStart must have fired before cancellation: {events:?}"
     );
     assert!(
         !events
             .iter()
-            .any(|e| matches!(e, AgentEvent::ToolCallFinished { .. })),
-        "Finished must NOT fire on cancellation: {events:?}"
+            .any(|e| matches!(e, AgentEvent::ToolCallFinish { .. })),
+        "ToolCallFinish must NOT fire on cancellation: {events:?}"
     );
     assert!(
         matches!(events.last(), Some(AgentEvent::Cancelled)),

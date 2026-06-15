@@ -107,13 +107,25 @@ where
 {
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted { name, args, .. } => {
+            AgentEvent::ToolCallStart {
+                tool_name: name,
+                args,
+                ..
+            } => {
                 println!("[{label}] started:   {name}({args})");
             }
-            AgentEvent::ToolCallUpdate { name, details, .. } => {
+            AgentEvent::ToolCallUpdate {
+                tool_name: name,
+                details,
+                ..
+            } => {
                 println!("[{label}] update:   {name}({details:?})");
             }
-            AgentEvent::ToolCallFinished { name, result, .. } => match result {
+            AgentEvent::ToolCallFinish {
+                tool_name: name,
+                result,
+                ..
+            } => match result {
                 ToolCallResult::Ok(value) => println!("[{label}] finished:  {name} → {value}"),
                 ToolCallResult::Err(error) => println!("[{label}] error:     {name} → {error:?}"),
                 ToolCallResult::Denied => println!("[{label}] denied:    {name}"),
@@ -124,8 +136,8 @@ where
             AgentEvent::Usage(usage) => println!("\n[{label}] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[{label}] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[{label}] cancelled"),
-            AgentEvent::StartTurn => {}
-            AgentEvent::EndTurn { .. } => {}
+            AgentEvent::TurnStart => {}
+            AgentEvent::TurnFinish { .. } => {}
             AgentEvent::ApprovalRequest(request) => {
                 request.respond(true);
             }

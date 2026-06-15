@@ -6,7 +6,7 @@
 //! [`AgentEvent`] is the union of things the runner reports as it drives the
 //! agentic loop; [`RunEvent`] tags one of those with the identity of the
 //! run that produced it ([`run_id`](RunEvent::run_id)). [`ToolCallResult`] is
-//! the outcome carried by [`AgentEvent::ToolCallFinished`].
+//! the outcome carried by [`AgentEvent::ToolCallFinish`].
 //!
 //! [`AgentRunner`]: super::AgentRunner
 
@@ -21,7 +21,7 @@ use crate::tools::ProgressDetails;
 ///
 /// Reported back to the model as the tool result on the next turn (via
 /// [`From<ToolCallResult> for Value`](#impl-From<ToolCallResult>-for-Value))
-/// and surfaced to the consumer inside [`AgentEvent::ToolCallFinished`].
+/// and surfaced to the consumer inside [`AgentEvent::ToolCallFinish`].
 #[derive(Clone, Debug)]
 pub enum ToolCallResult {
     /// The tool ran and returned this JSON value.
@@ -31,8 +31,8 @@ pub enum ToolCallResult {
     /// The [`AuthManager`](crate::auth::AuthManager) denied the call; the tool
     /// was not invoked.
     Denied,
-    /// The model called a tool that is not registered. No `Started` /
-    /// `Finished` events are emitted in this case, but a synthetic
+    /// The model called a tool that is not registered. No [`ToolCallStart`](AgentEvent::ToolCallStart) /
+    /// [`ToolCallFinish`](AgentEvent::ToolCallFinish) events are emitted in this case, but a synthetic
     /// result is still sent back to the model so the assistant turn and
     /// tool-result messages stay paired.
     Unknown,
@@ -67,18 +67,18 @@ impl From<Result<Value, Error>> for ToolCallResult {
 ///   [`TextDelta`](AgentEvent::TextDelta) carry chunks as the provider streams
 ///   them. Concatenating every `TextDelta` reconstructs the final reply.
 /// - Tool lifecycle:
-///   [`ToolCallStarted`](AgentEvent::ToolCallStarted) fires before a tool
+///   [`ToolCallStart`](AgentEvent::ToolCallStart) fires before a tool
 ///   runs — and, for a gated call, before its authorization prompt, so a
 ///   frontend can correlate the prompt with the announced call — while
-///   [`ToolCallFinished`](AgentEvent::ToolCallFinished) fires once it
+///   [`ToolCallFinish`](AgentEvent::ToolCallFinish) fires once it
 ///   resolves. Hallucinated tool calls (no matching registry entry) emit
 ///   *neither* event; see [`ToolCallResult::Unknown`].
 /// - [`Usage`](AgentEvent::Usage) reports token counts for one model call.
 ///   A run that performs `N` model calls produces up to `N` `Usage`
 ///   events; consumers sum across them to derive per-run totals.
-/// - [`StartTurn`](AgentEvent::StartTurn) is emitted as the first event of
+/// - [`TurnStart`](AgentEvent::TurnStart) is emitted as the first event of
 ///   every run, before any model output.
-/// - [`EndTurn`](AgentEvent::EndTurn) is emitted as the last event on normal
+/// - [`TurnFinish`](AgentEvent::TurnFinish) is emitted as the last event on normal
 ///   completion and carries the full conversation thread (including any
 ///   [`ToolCalls`](crate::model::MessageContent::ToolCalls) and tool-result
 ///   messages appended during the run). Use it to carry state forward into
@@ -90,30 +90,30 @@ impl From<Result<Value, Error>> for ToolCallResult {
 #[derive(Debug)]
 pub enum AgentEvent {
     /// A registered tool is about to run with these arguments.
-    ToolCallStarted {
+    ToolCallStart {
         /// Provider-assigned call identifier, matching
         /// [`ToolCall::id`](crate::model::ToolCall::id). Use it to correlate
-        /// this event with its [`ToolCallFinished`](AgentEvent::ToolCallFinished)
+        /// this event with its [`ToolCallFinish`](AgentEvent::ToolCallFinish)
         /// — events from parallel calls in the same turn may interleave.
-        tool_id: String,
+        tool_call_id: String,
         /// Name of the tool being invoked.
-        name: String,
+        tool_name: String,
         /// The JSON arguments the model passed.
         args: Value,
         /// The display information for the tool being invoked.
         title: String,
     },
     /// A running tool reported incremental progress before it resolved.
-    /// Fires zero or more times between [`ToolCallStarted`](AgentEvent::ToolCallStarted)
-    /// and [`ToolCallFinished`](AgentEvent::ToolCallFinished) for the same call.
+    /// Fires zero or more times between [`ToolCallStart`](AgentEvent::ToolCallStart)
+    /// and [`ToolCallFinish`](AgentEvent::ToolCallFinish) for the same call.
     ToolCallUpdate {
         /// Provider-assigned call identifier, matching
         /// [`ToolCall::id`](crate::model::ToolCall::id). Use it to correlate
-        /// this update with its `Started`/`Finished` events — events from
+        /// this update with its `ToolCallStart`/`ToolCallFinish` events — events from
         /// parallel calls in the same turn may interleave.
-        tool_id: String,
+        tool_call_id: String,
         /// Name of the tool being invoked.
-        name: String,
+        tool_name: String,
         /// The progress payload. Either a tool-defined JSON value
         /// ([`ProgressDetails::Other`]) or, when the tool is an
         /// [`AgentTool`](crate::tools::AgentTool), a forwarded event from the
@@ -122,15 +122,15 @@ pub enum AgentEvent {
     },
     /// A tool call resolved with [`ToolCallResult`]. Fires after the tool
     /// returns, errors, or is denied.
-    ToolCallFinished {
+    ToolCallFinish {
         /// Provider-assigned call identifier, matching the
-        /// [`ToolCallStarted`](AgentEvent::ToolCallStarted) `id` (and
+        /// [`ToolCallStart`](AgentEvent::ToolCallStart) `id` (and
         /// [`ToolCall::id`](crate::model::ToolCall::id)). Use it to pair this
-        /// event with its `Started` — events from parallel calls in the same
+        /// event with its `ToolCallStart` — events from parallel calls in the same
         /// turn may interleave.
-        tool_id: String,
+        tool_call_id: String,
         /// Name of the tool that resolved.
-        name: String,
+        tool_name: String,
         /// Outcome of the call.
         result: ToolCallResult,
     },
@@ -147,7 +147,7 @@ pub enum AgentEvent {
     Usage(TokenUsage),
     /// The run has begun. Emitted as the first event of every run, before any
     /// model output.
-    StartTurn,
+    TurnStart,
     /// The run completed normally (no tool calls in the final model turn).
     ///
     /// Carries the full conversation thread as it stood when the loop exited,
@@ -159,7 +159,7 @@ pub enum AgentEvent {
     /// [`Error`](AgentEvent::Error) paths.
     ///
     /// [`AgentRunner::run`]: super::AgentRunner::run
-    EndTurn {
+    TurnFinish {
         /// The conversation thread at the point the loop exited.
         thread: Vec<Message>,
     },
@@ -182,7 +182,7 @@ pub enum AgentEvent {
     /// [`ApprovalRequest::respond`]; the call is blocked until it does.
     /// Emitted only for calls an [`AuthManager`](crate::auth::AuthManager)
     /// reports as requiring authorization, and always after the
-    /// [`ToolCallStarted`](AgentEvent::ToolCallStarted) for the same call.
+    /// [`ToolCallStart`](AgentEvent::ToolCallStart) for the same call.
     ApprovalRequest(ApprovalRequest),
 }
 

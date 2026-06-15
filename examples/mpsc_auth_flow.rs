@@ -158,13 +158,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted { name, args, .. } => {
+            AgentEvent::ToolCallStart {
+                tool_name, args, ..
+            } => {
                 println!("\n[runner] started:   {name}({args})");
             }
-            AgentEvent::ToolCallUpdate { name, details, .. } => {
+            AgentEvent::ToolCallUpdate {
+                tool_name, details, ..
+            } => {
                 println!("\n[runner] update:   {name}({details:?})");
             }
-            AgentEvent::ToolCallFinished { name, result, .. } => match result {
+            AgentEvent::ToolCallFinish {
+                tool_name, result, ..
+            } => match result {
                 ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
                 ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
                 ToolCallResult::Denied => println!("[runner] denied:    {name}"),
@@ -175,8 +181,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Usage(usage) => println!("\n[runner] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
-            AgentEvent::StartTurn => {}
-            AgentEvent::EndTurn { .. } => {}
+            AgentEvent::TurnStart => {}
+            AgentEvent::TurnFinish { .. } => {}
             AgentEvent::ApprovalRequest(request) => {
                 // The tool resolved the call into a proposal; show its human-readable
                 // `preview` rather than the raw args.
@@ -185,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or("(no preview)");
                 println!(
                     "\n[auth]  Tool '{}' (id {}) wants to run:",
-                    request.name, request.tool_id
+                    request.tool_name, request.tool_id
                 );
                 println!("[auth]    {preview}");
                 print!("[auth]  Approve? [y/N]: ");

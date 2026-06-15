@@ -13,7 +13,7 @@
 //! - Measuring wall-clock time: ~500 ms total instead of the ~1 500 ms that
 //!   sequential execution would take.
 //!
-//! All `ToolCallStarted` events fire before any `ToolCallFinished` event,
+//! All `ToolCallStart` events fire before any `ToolCallFinish` event,
 //! confirming that the calls are in flight simultaneously.
 //!
 //! Run with:
@@ -125,9 +125,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted {
-                tool_id,
-                name,
+            AgentEvent::ToolCallStart {
+                tool_call_id,
+                tool_name,
                 args,
                 ..
             } => {
@@ -135,17 +135,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             AgentEvent::ToolCallUpdate {
-                tool_id,
-                name,
+                tool_call_id,
+                tool_name,
                 details,
             } => {
                 println!("[runner] started:   #{tool_id} {name}({details:?})");
             }
             // Events from parallel calls interleave, so pair finished with
             // started by `id` rather than by `name`.
-            AgentEvent::ToolCallFinished {
-                tool_id,
-                name,
+            AgentEvent::ToolCallFinish {
+                tool_call_id,
+                tool_name,
                 result,
             } => match result {
                 ToolCallResult::Ok(value) => {
@@ -162,8 +162,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Usage(usage) => println!("\n[runner] usage:     {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
-            AgentEvent::StartTurn => {}
-            AgentEvent::EndTurn { .. } => {}
+            AgentEvent::TurnStart => {}
+            AgentEvent::TurnFinish { .. } => {}
             AgentEvent::ApprovalRequest(request) => {
                 request.respond(true);
             }
