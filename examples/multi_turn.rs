@@ -5,7 +5,7 @@
 //! [`AgentRunner`].
 //!
 //! Each turn appends the user input to the thread and passes it to the runner.
-//! When the run completes, [`AgentEvent::EndTurn`] delivers the full updated
+//! When the run completes, [`AgentEvent::TurnFinish`] delivers the full updated
 //! thread — including any tool-call / tool-result pairs and the final assistant
 //! message — ready to pass straight back on the next turn. No manual message
 //! reconstruction needed.
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     print!("{chunk}");
                     io::stdout().flush()?;
                 }
-                AgentEvent::EndTurn {
+                AgentEvent::TurnFinish {
                     thread: updated, ..
                 } => {
                     thread = updated;

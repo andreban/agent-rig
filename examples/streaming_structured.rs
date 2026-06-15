@@ -10,8 +10,8 @@
 //!
 //! Every event is printed as it arrives:
 //! - `ThinkingDelta`      — dim grey reasoning tokens
-//! - `ToolCallStarted`    — printed before the tool runs
-//! - `ToolCallFinished`   — printed after the tool returns
+//! - `ToolCallStart`      — printed before the tool runs
+//! - `ToolCallFinish`     — printed after the tool returns
 //! - `TextDelta`          — the (JSON) answer arriving incrementally
 //!
 //! After the stream ends, the accumulated text is deserialized into
@@ -161,18 +161,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print!("{chunk}");
                 output.push_str(&chunk);
             }
-            AgentEvent::ToolCallStarted { name, args, .. } => {
+            AgentEvent::ToolCallStart { tool_name, args, .. } => {
                 if in_thinking {
                     println!("\x1b[0m");
                     in_thinking = false;
                 }
                 println!("[tool →] {name}({args})");
             }
-            AgentEvent::ToolCallUpdate { name, details, .. } => {
+            AgentEvent::ToolCallUpdate {
+                tool_name, details, ..
+            } => {
                 println!("[tool →] {name}({details:?})");
             }
 
-            AgentEvent::ToolCallFinished { name, result, .. } => match result {
+            AgentEvent::ToolCallFinish {
+                tool_name, result, ..
+            } => match result {
                 ToolCallResult::Ok(value) => println!("[tool ←] {name} = {value}"),
                 ToolCallResult::Err(error) => println!("[tool ✗] {name} → {error:?}"),
                 ToolCallResult::Denied => println!("[tool ⨯] {name} denied"),
@@ -181,8 +185,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Usage(usage) => println!("[usage] {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
-            AgentEvent::StartTurn => {}
-            AgentEvent::EndTurn { .. } => {}
+            AgentEvent::TurnStart => {}
+            AgentEvent::TurnFinish { .. } => {}
             AgentEvent::ApprovalRequest(request) => {
                 request.respond(true);
             }

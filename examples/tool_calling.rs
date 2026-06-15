@@ -156,13 +156,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = runner.run(&agent, vec![Message::user(question)]);
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStarted { name, args, .. } => {
+            AgentEvent::ToolCallStart { tool_name, args, .. } => {
                 println!("[runner] started:   {name}({args})");
             }
-            AgentEvent::ToolCallUpdate { name, details, .. } => {
+            AgentEvent::ToolCallUpdate {
+                tool_name, details, ..
+            } => {
                 println!("[runner] update:   {name}({details:?})");
             }
-            AgentEvent::ToolCallFinished { name, result, .. } => match result {
+            AgentEvent::ToolCallFinish {
+                tool_name, result, ..
+            } => match result {
                 ToolCallResult::Ok(value) => println!("[runner] finished:  {name} → {value}"),
                 ToolCallResult::Err(error) => println!("[runner] error:     {name} → {error:?}"),
                 ToolCallResult::Denied => println!("[runner] denied:    {name}"),
@@ -173,8 +177,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("[runner] usage:     {usage:?}"),
             AgentEvent::Cancelled => println!("[runner] cancelled"),
-            AgentEvent::StartTurn => {}
-            AgentEvent::EndTurn { .. } => {}
+            AgentEvent::TurnStart => {}
+            AgentEvent::TurnFinish { .. } => {}
             AgentEvent::ApprovalRequest(request) => {
                 request.respond(true);
             }

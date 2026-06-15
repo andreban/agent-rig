@@ -132,7 +132,7 @@ pub trait Tool: Send + Sync {
     fn definition(&self) -> &ToolDefinition;
 
     /// Returns a short, human-readable title for a specific invocation,
-    /// surfaced on [`AgentEvent::ToolCallStarted`].
+    /// surfaced on [`AgentEvent::ToolCallStart`].
     ///
     /// `args` is the raw tool-call JSON. The default returns the tool's name
     /// and ignores `args`; override it to derive a more descriptive label (for
@@ -140,7 +140,7 @@ pub trait Tool: Send + Sync {
     /// signals the arguments could not be interpreted — the runner falls back
     /// to the tool name.
     ///
-    /// [`AgentEvent::ToolCallStarted`]: crate::runner::AgentEvent::ToolCallStarted
+    /// [`AgentEvent::ToolCallStart`]: crate::runner::AgentEvent::ToolCallStart
     fn title(&self, _args: &Value) -> Result<String, Error> {
         Ok(self.definition().name.clone())
     }

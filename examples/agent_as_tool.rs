@@ -100,13 +100,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("{prefix} text:     {chunk:?}");
                 answer.push_str(&chunk);
             }
-            AgentEvent::ToolCallStarted { name, args, .. } => {
+            AgentEvent::ToolCallStart {
+                tool_name, args, ..
+            } => {
                 println!("{prefix} started:  {name}({args})");
             }
-            AgentEvent::ToolCallUpdate { name, details, .. } => {
+            AgentEvent::ToolCallUpdate {
+                tool_name, details, ..
+            } => {
                 println!("{prefix} update:  {name}({details:?})");
             }
-            AgentEvent::ToolCallFinished { name, result, .. } => match result {
+            AgentEvent::ToolCallFinish {
+                tool_name, result, ..
+            } => match result {
                 ToolCallResult::Ok(value) => {
                     println!("{prefix} ok:       {name} → {value}")
                 }
@@ -129,8 +135,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             AgentEvent::Cancelled => {
                 println!("{prefix} cancelled")
             }
-            AgentEvent::StartTurn => {}
-            AgentEvent::EndTurn { .. } => {}
+            AgentEvent::TurnStart => {}
+            AgentEvent::TurnFinish { .. } => {}
             AgentEvent::ApprovalRequest(request) => {
                 request.respond(true);
             }

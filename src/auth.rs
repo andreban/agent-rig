@@ -15,9 +15,9 @@ use tokio::sync::oneshot;
 /// emits this as [`AgentEvent::ApprovalRequest`](crate::runner::AgentEvent::ApprovalRequest)
 /// and then blocks the call until the consumer answers. Because the request
 /// travels the same FIFO stream as
-/// [`ToolCallStarted`](crate::runner::AgentEvent::ToolCallStarted), the
-/// consumer is guaranteed to have already seen the `ToolCallStarted` for the
-/// same [`tool_id`](Self::tool_id) — the two can be correlated by id without
+/// [`ToolCallStart`](crate::runner::AgentEvent::ToolCallStart), the
+/// consumer is guaranteed to have already seen the `ToolCallStart` for the
+/// same [`tool_call_id`](Self::tool_call_id) — the two can be correlated by id without
 /// any out-of-band coordination.
 ///
 /// The consumer **must** consume the request, by calling [`respond`](Self::respond)
@@ -27,12 +27,12 @@ use tokio::sync::oneshot;
 #[derive(Debug)]
 pub struct ApprovalRequest {
     /// The tool call's identifier — the same id reported on
-    /// [`ToolCallStarted`](crate::runner::AgentEvent::ToolCallStarted) and
-    /// `ToolCallFinished`. Use it to correlate the prompt with the announced
+    /// [`ToolCallStart`](crate::runner::AgentEvent::ToolCallStart) and
+    /// [`ToolCallFinish`](crate::runner::AgentEvent::ToolCallFinish). Use it to correlate the prompt with the announced
     /// call.
-    pub tool_id: String,
+    pub tool_call_id: String,
     /// The name of the tool the model wants to invoke.
-    pub name: String,
+    pub tool_name: String,
     /// The raw JSON arguments the model requested.
     pub args: Value,
     /// What the tool resolved [`args`](Self::args) into via
@@ -51,15 +51,15 @@ impl ApprovalRequest {
     /// Constructed by the runner; consumers receive ready-made requests on the
     /// event stream.
     pub(crate) fn new(
-        tool_id: String,
-        name: String,
+        tool_call_id: String,
+        tool_name: String,
         args: Value,
         proposal: Value,
         resolver: oneshot::Sender<bool>,
     ) -> Self {
         Self {
-            tool_id,
-            name,
+            tool_call_id,
+            tool_name,
             args,
             proposal,
             resolver,
@@ -87,7 +87,7 @@ impl ApprovalRequest {
 /// machinery to obtain it (CLI prompt, UI dialog, policy file, remote service)
 /// live with the consumer, not in this trait — keeping the prompt in-stream is
 /// what lets a frontend correlate it with the already-announced
-/// [`ToolCallStarted`](crate::runner::AgentEvent::ToolCallStarted).
+/// [`ToolCallStart`](crate::runner::AgentEvent::ToolCallStart).
 #[async_trait]
 pub trait AuthManager: Send + Sync {
     /// Cheap, synchronous gate: should this call prompt the consumer for

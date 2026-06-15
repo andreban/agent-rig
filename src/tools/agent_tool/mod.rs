@@ -86,7 +86,7 @@ impl Tool for AgentTool {
                 result += text;
             }
             match next.agent_event {
-                AgentEvent::StartTurn | AgentEvent::EndTurn { .. } | AgentEvent::Cancelled => {}
+                AgentEvent::TurnStart | AgentEvent::TurnFinish { .. } | AgentEvent::Cancelled => {}
                 AgentEvent::Error(e) => return Err(e),
                 _ => {
                     let details = ProgressDetails::AgentUpdate(Box::new(next.agent_event));
