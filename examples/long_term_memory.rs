@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -73,7 +73,7 @@ impl Tool for RememberFactTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let fact = args["fact"]
             .as_str()
             .ok_or_else(|| Error::Agent("missing 'fact' argument".to_string()))?
@@ -124,7 +124,7 @@ impl Tool for RecallFactTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _progress: &dyn ProgressReporter, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let query = args["query"]
             .as_str()
             .ok_or_else(|| Error::Agent("missing 'query' argument".to_string()))?
@@ -147,7 +147,12 @@ impl Tool for RecallFactTool {
     }
 }
 
-async fn run_once(runner: &AgentRunner, agent: &Agent, input: &str) -> String {
+async fn run_once(
+    runner: &AgentRunner,
+    agent: &Agent,
+    registry: &Arc<ToolRegistry>,
+    input: &str,
+) -> String {
     let mut reply = String::new();
     let mut stream = runner.run(agent, vec![Message::user(input)]);
     while let Some(event) = stream.next().await {
@@ -155,6 +160,16 @@ async fn run_once(runner: &AgentRunner, agent: &Agent, input: &str) -> String {
             AgentEvent::TextDelta(chunk) => reply.push_str(&chunk),
             AgentEvent::Usage(usage) => println!("[runner] usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
+            AgentEvent::ToolCall(call) => {
+                let result = match registry.get(&call.tool_name) {
+                    Some(tool) => tool
+                        .apply(call.args.clone(), call.cancellation_token.clone())
+                        .await
+                        .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
+                    None => Value::from("Unknown tool"),
+                };
+                call.resolve(result);
+            }
             _ => {}
         }
     }
@@ -194,18 +209,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("recall_fact")
         .build();
 
-    let runner = AgentRunner::with_registry(Arc::new(GeminiModel::new(api_key, MODEL)), registry);
+    let runner = AgentRunner::with_tools(
+        Arc::new(GeminiModel::new(api_key, MODEL)),
+        registry.definitions(),
+    );
 
     println!("=== Session 1 ===\n");
     let input1 = "My dog's name is Barnaby.";
     println!("User: {input1}");
-    let reply1 = run_once(&runner, &agent, input1).await;
+    let reply1 = run_once(&runner, &agent, &registry, input1).await;
     println!("Assistant: {reply1}\n");
 
     println!("=== Session 2 (new session — no conversation history) ===\n");
     let input2 = "Do you remember what kind of pet I have and its name?";
     println!("User: {input2}");
-    let reply2 = run_once(&runner, &agent, input2).await;
+    let reply2 = run_once(&runner, &agent, &registry, input2).await;
     println!("Assistant: {reply2}\n");
 
     Ok(())

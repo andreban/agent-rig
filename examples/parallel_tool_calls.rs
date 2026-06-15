@@ -26,8 +26,8 @@ use std::time::Instant;
 
 use agent_rig::error::Error;
 use agent_rig::model::Message;
-use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
-use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -70,12 +70,7 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn apply(
-        &self,
-        args: Value,
-        _progress: &dyn ProgressReporter,
-        _cancel: CancellationToken,
-    ) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown").to_string();
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -114,7 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("get_temperature")
         .build();
 
-    let runner = AgentRunner::with_registry(Arc::new(GeminiModel::new(api_key, MODEL)), registry);
+    let runner = AgentRunner::with_tools(
+        Arc::new(GeminiModel::new(api_key, MODEL)),
+        registry.definitions(),
+    );
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
     println!("Question: {question}");
@@ -125,42 +123,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStart {
-                tool_call_id,
-                tool_name,
-                args,
-                ..
-            } => {
-                println!("[runner] started:   #{tool_call_id} {tool_name}({args})");
+            AgentEvent::ToolCall(call) => {
+                println!(
+                    "[runner] started:   #{} {}({})",
+                    call.tool_call_id, call.tool_name, call.args
+                );
+                let tool_name = call.tool_name.clone();
+                let tool_call_id = call.tool_call_id.clone();
+                let registry = registry.clone();
+                // Spawn each tool call so they run in parallel.
+                tokio::spawn(async move {
+                    let result = match registry.get(&tool_name) {
+                        Some(tool) => tool
+                            .apply(call.args.clone(), call.cancellation_token.clone())
+                            .await
+                            .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
+                        None => Value::from("Unknown tool"),
+                    };
+                    println!("[runner] finished:  #{tool_call_id} {tool_name} → {result}");
+                    call.resolve(result);
+                });
             }
-
-            AgentEvent::ToolCallUpdate {
-                tool_call_id,
-                tool_name,
-                details,
-            } => {
-                println!("[runner] started:   #{tool_call_id} {tool_name}({details:?})");
-            }
-            // Events from parallel calls interleave, so pair finished with
-            // started by `id` rather than by `name`.
-            AgentEvent::ToolCallFinish {
-                tool_call_id,
-                tool_name,
-                result,
-            } => match result {
-                ToolCallResult::Ok(value) => {
-                    println!("[runner] finished:  #{tool_call_id} {tool_name} → {value}")
-                }
-                ToolCallResult::Err(error) => {
-                    println!("[runner] error:     #{tool_call_id} {tool_name} → {error:?}")
-                }
-                ToolCallResult::Denied => {
-                    println!("[runner] denied:    #{tool_call_id} {tool_name}")
-                }
-                ToolCallResult::Unknown => {
-                    println!("[runner] unknown:   #{tool_call_id} {tool_name}")
-                }
-            },
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("\n[runner] usage:     {usage:?}"),
@@ -168,9 +151,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
             AgentEvent::TurnStart => {}
             AgentEvent::TurnFinish { .. } => {}
-            AgentEvent::ApprovalRequest(request) => {
-                request.respond(true);
-            }
         }
     }
 

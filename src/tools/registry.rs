@@ -19,7 +19,7 @@ use crate::tools::tool::{Tool, ToolDefinition};
 /// use agent_rig::tools::ToolRegistry;
 ///
 /// # use async_trait::async_trait;
-/// # use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition};
+/// # use agent_rig::tools::{Tool, ToolDefinition};
 /// # use agent_rig::error::Error;
 /// # use schemars::json_schema;
 /// # struct MyTool {
@@ -41,7 +41,7 @@ use crate::tools::tool::{Tool, ToolDefinition};
 /// #     fn definition(&self) -> &ToolDefinition {
 /// #         &self.definition
 /// #     }
-/// #     async fn apply(&self, _: serde_json::Value, _: &dyn ProgressReporter, _: tokio_util::sync::CancellationToken)
+/// #     async fn apply(&self, _: serde_json::Value,  _: tokio_util::sync::CancellationToken)
 /// #         -> Result<serde_json::Value, Error> { Ok(serde_json::json!({})) }
 /// # }
 /// let registry = Arc::new(
@@ -89,7 +89,7 @@ impl ToolRegistry {
     }
 
     /// Returns the tool registered under `name`, or `None` if not found.
-    pub(crate) fn get(&self, name: &str) -> Option<&dyn Tool> {
+    pub fn get(&self, name: &str) -> Option<&dyn Tool> {
         self.tools.get(name).map(|t| t.as_ref())
     }
 }
@@ -104,7 +104,6 @@ impl Default for ToolRegistry {
 mod tests {
     use super::*;
     use crate::error::Error;
-    use crate::tools::ProgressReporter;
     use async_trait::async_trait;
     use schemars::json_schema;
     use serde_json::{Value, json};
@@ -122,7 +121,6 @@ mod tests {
         async fn apply(
             &self,
             _proposal: Value,
-            _progress: &dyn ProgressReporter,
             _cancel: tokio_util::sync::CancellationToken,
         ) -> Result<Value, Error> {
             Ok(json!({}))

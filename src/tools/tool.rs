@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::{error::Error, runner::AgentEvent};
+use crate::error::Error;
 
 /// Describes a tool to the model: its name, purpose, and parameter schema.
 ///
@@ -33,44 +33,6 @@ pub struct ToolDefinition {
     pub parameters: Schema,
 }
 
-/// Receives incremental progress updates emitted by a tool mid-call.
-///
-/// The runner passes a `&dyn ProgressReporter` into [`Tool::propose`] and
-/// [`Tool::apply`]; each
-/// [`update`](ProgressReporter::update) emits a `ToolCallUpdate` event on the
-/// run's event stream. Tool authors do not implement this — the runner
-/// supplies the implementation.
-#[async_trait]
-pub trait ProgressReporter: Send + Sync {
-    /// Emits a progress update carrying a [`ProgressDetails`] payload.
-    ///
-    /// Delivery is guaranteed but applies backpressure: if the run's event
-    /// channel is full, this awaits until the consumer drains it, so a slow
-    /// consumer can throttle a chatty tool.
-    async fn update(&self, details: ProgressDetails);
-}
-
-/// The payload carried by a progress update emitted through
-/// [`ProgressReporter::update`] and surfaced on
-/// [`AgentEvent::ToolCallUpdate`](crate::runner::AgentEvent::ToolCallUpdate).
-///
-/// Most tools report progress with [`Other`](ProgressDetails::Other), wrapping
-/// whatever JSON best describes their current state. The
-/// [`AgentUpdate`](ProgressDetails::AgentUpdate) variant is produced by
-/// [`AgentTool`](crate::tools::AgentTool) to relay a nested child agent's own
-/// events upward, giving the parent consumer visibility into the child run.
-#[derive(Debug)]
-pub enum ProgressDetails {
-    /// An event from a nested child agent, forwarded by
-    /// [`AgentTool`](crate::tools::AgentTool) so the parent run can observe the
-    /// child's progress. Boxed because [`AgentEvent`] embeds `ProgressDetails`,
-    /// which would otherwise make the type infinitely sized.
-    AgentUpdate(Box<AgentEvent>),
-    /// A tool-defined JSON payload describing the tool's current state. This is
-    /// what most tools emit from [`Tool::apply`].
-    Other(Value),
-}
-
 /// A callable tool that an agent can invoke during inference.
 ///
 /// `Tool` is the object-safe trait the [`ToolRegistry`](crate::tools::ToolRegistry)
@@ -87,7 +49,7 @@ pub enum ProgressDetails {
 /// ```no_run
 /// use async_trait::async_trait;
 /// use agent_rig::error::Error;
-/// use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition};
+/// use agent_rig::tools::{Tool, ToolDefinition};
 /// use schemars::json_schema;
 /// use serde_json::{Value, json};
 /// use tokio_util::sync::CancellationToken;
@@ -119,7 +81,6 @@ pub enum ProgressDetails {
 ///     async fn apply(
 ///         &self,
 ///         proposal: Value,
-///         _progress: &dyn ProgressReporter,
 ///         _cancel: CancellationToken,
 ///     ) -> Result<Value, Error> {
 ///         Ok(json!({ "echo": proposal }))
@@ -191,12 +152,7 @@ pub trait Tool: Send + Sync {
     /// richer proposal.
     ///
     /// `progress` and `cancel` behave as described on [`apply`](Tool::apply).
-    async fn propose(
-        &self,
-        args: &Value,
-        _progress: &dyn ProgressReporter,
-        _cancel: CancellationToken,
-    ) -> Result<Value, Error> {
+    async fn propose(&self, args: &Value, _cancel: CancellationToken) -> Result<Value, Error> {
         Ok(args.clone())
     }
 
@@ -222,10 +178,5 @@ pub trait Tool: Send + Sync {
     /// [`progress.update(details)`](ProgressReporter::update) to emit a
     /// `ToolCallUpdate` event for this call. Delivery is guaranteed but
     /// awaits, so it applies backpressure under a slow consumer.
-    async fn apply(
-        &self,
-        proposal: Value,
-        progress: &dyn ProgressReporter,
-        cancel: CancellationToken,
-    ) -> Result<Value, Error>;
+    async fn apply(&self, proposal: Value, cancel: CancellationToken) -> Result<Value, Error>;
 }

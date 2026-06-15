@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use agent_rig::error::Error;
 use agent_rig::model::Message;
-use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
-use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -23,6 +23,7 @@ use schemars::json_schema;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
@@ -64,12 +65,7 @@ impl Tool for SendEmailTool {
     /// Resolves the raw args into a proposal carrying a `preview` string the
     /// authorization prompt can show. The other fields are passed through so
     /// `apply` still has everything it needs.
-    async fn propose(
-        &self,
-        args: &Value,
-        _progress: &dyn ProgressReporter,
-        _cancel: CancellationToken,
-    ) -> Result<Value, Error> {
+    async fn propose(&self, args: &Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let to = args["to"].as_str().unwrap_or("");
         let subject = args["subject"].as_str().unwrap_or("");
         let body = args["body"].as_str().unwrap_or("");
@@ -81,12 +77,7 @@ impl Tool for SendEmailTool {
         }))
     }
 
-    async fn apply(
-        &self,
-        proposal: Value,
-        _progress: &dyn ProgressReporter,
-        _cancel: CancellationToken,
-    ) -> Result<Value, Error> {
+    async fn apply(&self, proposal: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let to = proposal["to"].as_str().unwrap_or("");
         let subject = proposal["subject"].as_str().unwrap_or("");
         println!("[tool]  pretending to send email to {to} (subject: {subject:?})");
@@ -115,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("send_email")
         .build();
 
-    let runner = AgentRunner::with_registry(Arc::new(model), registry);
+    let runner = AgentRunner::with_tools(Arc::new(model), registry.definitions());
 
     let question =
         "Send an email to bob@example.com with subject 'Lunch' and body 'See you at noon.'";
@@ -126,26 +117,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStart {
-                tool_name, args, ..
-            } => {
-                println!("\n[runner] started:   {tool_name}({args})");
-            }
-            AgentEvent::ToolCallUpdate {
-                tool_name, details, ..
-            } => {
-                println!("\n[runner] update:   {tool_name}({details:?})");
-            }
-            AgentEvent::ToolCallFinish {
-                tool_name, result, ..
-            } => match result {
-                ToolCallResult::Ok(value) => println!("[runner] finished:  {tool_name} → {value}"),
-                ToolCallResult::Err(error) => {
-                    println!("[runner] error:     {tool_name} → {error:?}")
-                }
-                ToolCallResult::Denied => println!("[runner] denied:    {tool_name}"),
-                ToolCallResult::Unknown => println!("[runner] unknown:   {tool_name}"),
-            },
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("\n[runner] usage:     {usage:?}"),
@@ -153,15 +124,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
             AgentEvent::TurnStart => {}
             AgentEvent::TurnFinish { .. } => {}
-            AgentEvent::ApprovalRequest(request) => {
+            AgentEvent::ToolCall(tool_call) => {
+                info!(?tool_call, "AgentEvent::ToolCall");
+                let Some(tool) = registry.get(&tool_call.tool_name) else {
+                    tool_call.resolve(Value::from("Unknown Tool"));
+                    continue;
+                };
+
+                let Ok(proposal) = tool
+                    .propose(&tool_call.args, tool_call.cancellation_token.clone())
+                    .await
+                else {
+                    tool_call.resolve(Value::from("Tool error"));
+                    continue;
+                };
+
                 // The tool resolved the call into a proposal; show its human-readable
                 // `preview` rather than the raw args.
-                let preview = request.proposal["preview"]
-                    .as_str()
-                    .unwrap_or("(no preview)");
+                let preview = proposal["preview"].as_str().unwrap_or("(no preview)");
                 println!(
                     "\n[auth]  Tool '{}' (id {}) wants to run:",
-                    request.tool_name, request.tool_call_id
+                    tool_call.tool_name, tool_call.tool_call_id
                 );
                 println!("[auth]    {preview}");
                 print!("[auth]  Approve? [y/N]: ");
@@ -170,12 +153,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let mut line = String::new();
                 let mut stdin = BufReader::new(tokio::io::stdin());
+
                 if let Err(e) = stdin.read_line(&mut line).await {
                     eprintln!("[auth]  stdin error: {e}");
-                    request.respond(false);
-                } else {
-                    let result = matches!(line.trim().to_lowercase().as_str(), "y" | "yes");
-                    request.respond(result);
+                    tool_call.resolve(Value::from("Tool calll authorization failed."));
+                    continue;
+                };
+
+                let result = matches!(line.trim().to_lowercase().as_str(), "y" | "yes");
+                if !result {
+                    tool_call.resolve(Value::from("User rejected approval of the tool call"));
+                    continue;
+                }
+
+                let result = tool
+                    .apply(proposal, tool_call.cancellation_token.clone())
+                    .await;
+                match result {
+                    Ok(result) => tool_call.resolve(result),
+                    Err(e) => tool_call.resolve(format!("Error: {e}")),
                 }
             }
         }

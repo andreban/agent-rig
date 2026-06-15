@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use agent_rig::error::Error;
 use agent_rig::model::Message;
-use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
-use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -64,12 +64,7 @@ impl Tool for AddTool {
         &self.definition
     }
 
-    async fn apply(
-        &self,
-        args: Value,
-        _progress: &dyn ProgressReporter,
-        _cancel: CancellationToken,
-    ) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let a = args["a"].as_i64().unwrap_or(0);
         let b = args["b"].as_i64().unwrap_or(0);
         println!("[tool]  add({a}, {b}) = {}", a + b);
@@ -104,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("add")
         .build();
 
-    let runner = AgentRunner::with_registry(Arc::new(model), registry);
+    let runner = AgentRunner::with_tools(Arc::new(model), registry.definitions());
 
     println!("Question: What is 1234 + 5678?\n");
 
@@ -117,36 +112,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::TextDelta(chunk) => {
                 print!("{chunk}");
             }
-            AgentEvent::ToolCallStart {
-                tool_name, args, ..
-            } => {
-                println!("[runner] tool call started: {tool_name}({args})");
+            AgentEvent::ToolCall(call) => {
+                println!(
+                    "[runner] tool call started: {}({})",
+                    call.tool_name, call.args
+                );
+                let result = match registry.get(&call.tool_name) {
+                    Some(tool) => tool
+                        .apply(call.args.clone(), call.cancellation_token.clone())
+                        .await
+                        .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
+                    None => Value::from("Unknown tool"),
+                };
+                println!("[runner] tool call finished: {} → {result}", call.tool_name);
+                call.resolve(result);
             }
-            AgentEvent::ToolCallUpdate {
-                tool_name, details, ..
-            } => {
-                println!("[runner] tool call started: {tool_name}({details:?})");
-            }
-            AgentEvent::ToolCallFinish {
-                tool_name, result, ..
-            } => match result {
-                ToolCallResult::Ok(value) => {
-                    println!("[runner] tool call finished: {tool_name} → {value}")
-                }
-                ToolCallResult::Err(error) => {
-                    println!("[runner] tool call error: {tool_name} → {error:?}")
-                }
-                ToolCallResult::Denied => println!("[runner] tool call denied: {tool_name}"),
-                ToolCallResult::Unknown => println!("[runner] tool call unknown: {tool_name}"),
-            },
             AgentEvent::Usage(usage) => println!("[runner] token usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
             AgentEvent::TurnStart => {}
             AgentEvent::TurnFinish { .. } => {}
-            AgentEvent::ApprovalRequest(request) => {
-                request.respond(true);
-            }
         }
     }
 
