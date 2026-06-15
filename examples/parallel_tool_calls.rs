@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args,
                 ..
             } => {
-                println!("[runner] started:   #{tool_id} {name}({args})");
+                println!("[runner] started:   #{tool_call_id} {tool_name}({args})");
             }
 
             AgentEvent::ToolCallUpdate {
@@ -139,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tool_name,
                 details,
             } => {
-                println!("[runner] started:   #{tool_id} {name}({details:?})");
+                println!("[runner] started:   #{tool_call_id} {tool_name}({details:?})");
             }
             // Events from parallel calls interleave, so pair finished with
             // started by `id` rather than by `name`.
@@ -149,13 +149,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 result,
             } => match result {
                 ToolCallResult::Ok(value) => {
-                    println!("[runner] finished:  #{tool_id} {name} → {value}")
+                    println!("[runner] finished:  #{tool_call_id} {tool_name} → {value}")
                 }
                 ToolCallResult::Err(error) => {
-                    println!("[runner] error:     #{tool_id} {name} → {error:?}")
+                    println!("[runner] error:     #{tool_call_id} {tool_name} → {error:?}")
                 }
-                ToolCallResult::Denied => println!("[runner] denied:    #{tool_id} {name}"),
-                ToolCallResult::Unknown => println!("[runner] unknown:   #{tool_id} {name}"),
+                ToolCallResult::Denied => {
+                    println!("[runner] denied:    #{tool_call_id} {tool_name}")
+                }
+                ToolCallResult::Unknown => {
+                    println!("[runner] unknown:   #{tool_call_id} {tool_name}")
+                }
             },
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),
             AgentEvent::ThinkingDelta(_) => {}

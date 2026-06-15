@@ -12,10 +12,9 @@
 
 use serde_json::Value;
 
-use crate::auth::ApprovalRequest;
 use crate::error::Error;
 use crate::model::{Message, TokenUsage};
-use crate::tools::ProgressDetails;
+use crate::tools::{ApprovalRequest, ProgressDetails};
 
 /// Outcome of executing a single tool call.
 ///
@@ -28,7 +27,7 @@ pub enum ToolCallResult {
     Ok(Value),
     /// The tool failed. The error is surfaced to the model as a string.
     Err(Error),
-    /// The [`AuthManager`](crate::auth::AuthManager) denied the call; the tool
+    /// The consumer denied the [`ApprovalRequest`] for this call; the tool
     /// was not invoked.
     Denied,
     /// The model called a tool that is not registered. No [`ToolCallStart`](AgentEvent::ToolCallStart) /
@@ -180,9 +179,9 @@ pub enum AgentEvent {
     /// A tool call needs the consumer's approval before it runs. Carries an
     /// [`ApprovalRequest`] the consumer answers with
     /// [`ApprovalRequest::respond`]; the call is blocked until it does.
-    /// Emitted only for calls an [`AuthManager`](crate::auth::AuthManager)
-    /// reports as requiring authorization, and always after the
-    /// [`ToolCallStart`](AgentEvent::ToolCallStart) for the same call.
+    /// Emitted only when the tool's
+    /// [`requires_approval`](crate::tools::Tool::requires_approval) returns `true`,
+    /// and always after the [`ToolCallStart`](AgentEvent::ToolCallStart) for the same call.
     ApprovalRequest(ApprovalRequest),
 }
 

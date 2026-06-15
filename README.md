@@ -9,7 +9,7 @@ Define your agent once and run it against any supported LLM backend — swap pro
 - **Provider-agnostic API** — same `Agent` + `AgentRunner` code works with Google Gemini, Ollama, or any custom `LlmModel` implementation
 - **Streaming agentic loop** — the runner spawns a background task and yields `AgentEvent`s (text deltas, thinking tokens, tool-call lifecycle) until the model produces a final reply
 - **Concurrent tool execution** — multiple tool calls in a single model turn are executed in parallel; tool-result messages are paired back to the model in request order
-- **Authorization hook** — plug in an `AuthManager` to gate tool calls (e.g. user approval prompts for destructive actions)
+- **Per-tool approval** — override `Tool::requires_approval` to gate individual tool calls (e.g. user approval prompts for destructive actions)
 - **Structured output** — constrain model output to a JSON Schema
 - **Agent composition** — wrap any agent as a `Tool` with `AgentTool` so a parent agent can delegate to child agents
 - **Serializable agents** — `Agent` derives `Serialize`/`Deserialize` for file-based configuration
@@ -234,34 +234,28 @@ while let Some(event) = stream.next().await {
 
 ### Authorization
 
-Implement `AuthManager` to gate tool calls. The runner consults the manager for every call: `requires_authorization` is a cheap synchronous filter; `authorize` is the async decision (`true` to allow, `false` to deny). Before authorization the runner calls the tool's `propose`, so `authorize` also receives the resolved `proposal` — the concrete action (e.g. a path plus old/new contents to diff). Show that instead of the raw `args`.
+Override `requires_approval` on `Tool` to gate calls before they execute. The runner calls it before every invocation: returning `true` causes the runner to emit `AgentEvent::ApprovalRequest` on the event stream and block until the consumer calls `ApprovalRequest::respond`. The approval request carries the `proposal` returned by `Tool::propose` — the resolved action (e.g. path plus old/new contents for an edit tool) — so the consumer can show a meaningful diff instead of raw JSON args.
 
 ```rust
-use std::sync::Arc;
-use std::collections::HashSet;
-use async_trait::async_trait;
-use agent_rig::auth::AuthManager;
+use agent_rig::tools::{Tool, ToolDefinition};
 use serde_json::Value;
 
-struct ProtectedTools { names: HashSet<String> }
+struct SendEmailTool { /* ... */ }
 
-#[async_trait]
-impl AuthManager for ProtectedTools {
-    fn requires_authorization(&self, name: &str, _args: &Value) -> bool {
-        self.names.contains(name)
+impl Tool for SendEmailTool {
+    fn definition(&self) -> &ToolDefinition { /* ... */ }
+
+    fn requires_approval(&self, _args: &Value) -> bool {
+        true  // always prompt before sending
     }
 
-    async fn authorize(&self, id: &str, name: &str, _args: &Value, proposal: &Value) -> bool {
-        // Prompt the user with the resolved action, call a policy service, etc.
-        prompt_user(id, name, proposal).await
+    async fn apply(&self, proposal: Value, /* ... */) -> Result<Value, Error> {
+        // only reached after consumer approves
     }
 }
-
-let runner = AgentRunner::with_registry(Arc::new(model), registry)
-    .with_auth_manager(Arc::new(ProtectedTools { names: ["send_email".into()].into() }));
 ```
 
-When a call is denied the runner emits `ToolCallFinished { result: ToolCallResult::Denied, .. }` and feeds a synthetic "denied" result back to the model so the next turn stays paired with the original tool-call message.
+In the event loop, handle `AgentEvent::ApprovalRequest` and call `request.respond(true)` to allow or `request.respond(false)` to deny. A denied call surfaces as `ToolCallFinish { result: ToolCallResult::Denied, .. }` and feeds a synthetic "denied" result back to the model so the next turn stays paired with the original tool-call message.
 
 For a working CLI prompt, see [`examples/mpsc_auth_flow.rs`](examples/mpsc_auth_flow.rs).
 
@@ -402,13 +396,12 @@ graph TD
     AR[AgentRunner] -->|spawns task, yields events| A[Agent<br/><i>pure blueprint</i>]
     AR -->|holds| LM[LlmModel<br/><i>Arc&lt;dyn&gt;</i>]
     AR -->|holds| TR[ToolRegistry<br/><i>Arc</i>]
-    AR -->|optional| AM[AuthManager<br/><i>Arc&lt;dyn&gt;</i>]
     LM -->|implements| GM[GeminiModel]
     LM -->|implements| OM[OllamaModel]
     LM -->|implements| MORE[more providers…]
 ```
 
-`Agent` is a pure data blueprint with no model reference — it holds the name, instructions, optional output schema, and the list of tool names the agent may use. `AgentRunner` owns an `Arc<dyn LlmModel>`, a `ToolRegistry`, and (optionally) an `AuthManager`. The runner is cheap to `Clone` (internals are behind `Arc`) so a single runner can be shared across tasks.
+`Agent` is a pure data blueprint with no model reference — it holds the name, instructions, optional output schema, and the list of tool names the agent may use. `AgentRunner` owns an `Arc<dyn LlmModel>` and a `ToolRegistry`. The runner is cheap to `Clone` (internals are behind `Arc`) so a single runner can be shared across tasks.
 
 ### Core Types
 
@@ -421,8 +414,8 @@ graph TD
 | `Tool` / `ToolDefinition` | Async trait for callable tools; JSON Schema parameters |
 | `ToolRegistry` | Registry of `Tool` and `AgentTool` entries, keyed by name |
 | `AgentTool` | Wraps an `AgentRunner` + `Agent` as a tool for agent composition |
-| `AuthManager` | Trait for gating tool calls before execution |
-| `AgentEvent` | Stream event: `TextDelta`, `ThinkingDelta`, `ToolCallStarted`, `ToolCallFinished`, `Error` |
+| `ApprovalRequest` | Approval gate carried on the event stream; tools opt in via `Tool::requires_approval` |
+| `AgentEvent` | Stream event: `TextDelta`, `ThinkingDelta`, `ToolCallStart`, `ToolCallFinish`, `ApprovalRequest`, `Error` |
 | `RunEvent` | `AgentEvent` tagged with `run_id` and optional `parent` run id (for sub-agent invocations) |
 | `ToolCallResult` | Outcome of a tool call: `Ok(Value)`, `Err(Error)`, `Denied`, `Unknown` |
 | `Error` | `Provider(String)` or `Agent(String)` |

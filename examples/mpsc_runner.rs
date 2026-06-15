@@ -108,27 +108,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCallStart {
                 tool_name, args, ..
             } => {
-                println!("[runner[{run_id}]] started:   {name}({args})");
+                println!("[runner[{run_id}]] started:   {tool_name}({args})");
             }
             AgentEvent::ToolCallUpdate {
                 tool_name, details, ..
             } => {
-                println!("[runner[{run_id}]] started:   {name}({details:?})");
+                println!("[runner[{run_id}]] started:   {tool_name}({details:?})");
             }
             AgentEvent::ToolCallFinish {
                 tool_name, result, ..
             } => match result {
                 ToolCallResult::Ok(result) => {
-                    println!("[runner[{run_id}]] finished:  {name} → {result}");
+                    println!("[runner[{run_id}]] finished:  {tool_name} → {result}");
                 }
                 ToolCallResult::Err(error) => {
-                    println!("[runner[{run_id}]] finished:  {name} → {error:?}");
+                    println!("[runner[{run_id}]] finished:  {tool_name} → {error:?}");
                 }
                 ToolCallResult::Denied => {
-                    println!("[runner[{run_id}]] denied:    {name}");
+                    println!("[runner[{run_id}]] denied:    {tool_name}");
                 }
                 ToolCallResult::Unknown => {
-                    println!("[runner[{run_id}]] unknown:    {name}");
+                    println!("[runner[{run_id}]] unknown:    {tool_name}");
                 }
             },
             AgentEvent::TextDelta(chunk) => {

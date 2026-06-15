@@ -99,6 +99,7 @@ struct EchoTool {
     definition: ToolDefinition,
     result: Result<serde_json::Value, Error>,
     calls: Arc<Mutex<Vec<serde_json::Value>>>,
+    approval_required: bool,
 }
 
 impl EchoTool {
@@ -117,6 +118,20 @@ impl EchoTool {
                 definition: Self::definition(name),
                 result: Ok(json!({"ok": true})),
                 calls: calls.clone(),
+                approval_required: false,
+            },
+            calls,
+        )
+    }
+
+    fn requiring_approval(name: &'static str) -> (Self, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                definition: Self::definition(name),
+                result: Ok(json!({"ok": true})),
+                calls: calls.clone(),
+                approval_required: true,
             },
             calls,
         )
@@ -127,6 +142,7 @@ impl EchoTool {
             definition: Self::definition(name),
             result: Err(Error::Agent(msg.to_string())),
             calls: Arc::new(Mutex::new(Vec::new())),
+            approval_required: false,
         }
     }
 }
@@ -135,6 +151,10 @@ impl EchoTool {
 impl Tool for EchoTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
+    }
+
+    fn requires_approval(&self, _args: &Value) -> bool {
+        self.approval_required
     }
 
     async fn apply(
@@ -255,26 +275,6 @@ async fn tool_error_is_reported_via_finished_event() {
     ));
 }
 
-/// Auth manager whose `requires_authorization` returns a fixed answer. The
-/// allow/deny decision now lives with the consumer, which responds to each
-/// [`AgentEvent::ApprovalRequest`] — see [`collect_with_approvals`].
-struct ScriptedAuth {
-    required: bool,
-}
-
-impl ScriptedAuth {
-    fn new(required: bool) -> Arc<Self> {
-        Arc::new(Self { required })
-    }
-}
-
-#[async_trait]
-impl AuthManager for ScriptedAuth {
-    fn requires_authorization(&self, _name: &str, _args: &Value) -> bool {
-        self.required
-    }
-}
-
 /// What [`collect_with_approvals`] observed: the non-approval events, plus the
 /// name and proposal of every [`AgentEvent::ApprovalRequest`] seen, in order.
 struct ApprovalOutcome {
@@ -315,14 +315,13 @@ async fn collect_with_approvals(
 
 #[tokio::test]
 async fn auth_denial_skips_tool_execution() {
-    let (tool, calls) = EchoTool::ok("echo");
+    let (tool, calls) = EchoTool::requiring_approval("echo");
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    let auth = ScriptedAuth::new(true);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "echo", json!({})),
         final_response("ok"),
     ]);
-    let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
+    let runner = AgentRunner::with_registry(model, registry);
 
     let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![false]).await;
 
@@ -362,14 +361,13 @@ async fn started_reaches_consumer_before_approval_request() {
     // correlate the approval prompt with the announced tool call. Because both
     // events now travel the same FIFO stream, this ordering holds structurally
     // — no out-of-band flush barrier needed.
-    let (tool, _calls) = EchoTool::ok("echo");
+    let (tool, _calls) = EchoTool::requiring_approval("echo");
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    let auth = ScriptedAuth::new(true);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "echo", json!({})),
         final_response("ok"),
     ]);
-    let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth);
+    let runner = AgentRunner::with_registry(model, registry);
 
     let mut order = Vec::<&str>::new();
     let mut stream = runner.run(&agent("a"), vec![Message::user("go")]);
@@ -397,13 +395,12 @@ async fn started_reaches_consumer_before_approval_request() {
 async fn auth_fast_path_skips_approval() {
     let (tool, calls) = EchoTool::ok("echo");
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    // requires_authorization returns false — no ApprovalRequest must be emitted.
-    let auth = ScriptedAuth::new(false);
+    // EchoTool.requires_approval() returns false — no ApprovalRequest is emitted.
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "echo", json!({})),
         final_response("ok"),
     ]);
-    let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
+    let runner = AgentRunner::with_registry(model, registry);
 
     let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![]).await;
 
@@ -418,10 +415,11 @@ struct ProposingTool {
     /// The proposal `propose` returns; `Err` makes it fail before auth.
     proposal: Result<Value, Error>,
     applied: Arc<Mutex<Vec<Value>>>,
+    approval_required: bool,
 }
 
 impl ProposingTool {
-    fn new(proposal: Result<Value, Error>) -> (Self, Arc<Mutex<Vec<Value>>>) {
+    fn new(proposal: Result<Value, Error>, approval_required: bool) -> (Self, Arc<Mutex<Vec<Value>>>) {
         let applied = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
@@ -432,6 +430,7 @@ impl ProposingTool {
                 },
                 proposal,
                 applied: applied.clone(),
+                approval_required,
             },
             applied,
         )
@@ -442,6 +441,10 @@ impl ProposingTool {
 impl Tool for ProposingTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
+    }
+
+    fn requires_approval(&self, _args: &Value) -> bool {
+        self.approval_required
     }
 
     async fn propose(
@@ -469,14 +472,13 @@ impl Tool for ProposingTool {
 #[tokio::test]
 async fn proposal_is_forwarded_to_approval_and_apply() {
     let resolved = json!({"path": "f.rs", "old_text": "a", "new_text": "b"});
-    let (tool, applied) = ProposingTool::new(Ok(resolved.clone()));
+    let (tool, applied) = ProposingTool::new(Ok(resolved.clone()), true);
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    let auth = ScriptedAuth::new(true);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "proposing", json!({"raw": "args"})),
         final_response("ok"),
     ]);
-    let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
+    let runner = AgentRunner::with_registry(model, registry);
 
     let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![true]).await;
 
@@ -494,14 +496,13 @@ async fn proposal_is_forwarded_to_approval_and_apply() {
 
 #[tokio::test]
 async fn propose_error_skips_approval_and_apply() {
-    let (tool, applied) = ProposingTool::new(Err(Error::Agent("cannot plan".to_string())));
+    let (tool, applied) = ProposingTool::new(Err(Error::Agent("cannot plan".to_string())), true);
     let registry = Arc::new(ToolRegistry::new().register(tool));
-    let auth = ScriptedAuth::new(true);
     let model = ScriptedModel::new(vec![
         tool_call_response("c1", "proposing", json!({})),
         final_response("ok"),
     ]);
-    let runner = AgentRunner::with_registry(model, registry).with_auth_manager(auth.clone());
+    let runner = AgentRunner::with_registry(model, registry);
 
     let outcome = collect_with_approvals(&runner, agent("a"), "go", vec![]).await;
 
