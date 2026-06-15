@@ -19,18 +19,18 @@ use std::{
 };
 
 use futures_util::{Stream, StreamExt, future::join_all};
+use serde_json::Value;
 use tokio::sync::{
     mpsc::{self, Sender, error::SendError},
     oneshot,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::{
     Agent,
-    error::Error,
     model::{LlmModel, Message, ModelRequest, ModelStreamChunk, ToolCall},
-    tools::{ApprovalRequest, ProgressDetails, ProgressReporter, ToolDefinition, ToolRegistry},
+    tools::{ToolCallRequest, ToolDefinition},
 };
 
 mod events;
@@ -68,29 +68,6 @@ impl RunEmitter {
     }
 }
 
-/// [`ProgressReporter`] implementation handed to each tool call. Each
-/// [`update`](ProgressReporter::update) emits a `ToolCallUpdate` for this
-/// specific call on the run's event stream, awaiting delivery.
-struct ToolProgress<'a> {
-    tx: &'a RunEmitter,
-    tool_id: String,
-    name: String,
-}
-
-#[async_trait::async_trait]
-impl ProgressReporter for ToolProgress<'_> {
-    async fn update(&self, details: ProgressDetails) {
-        let _ = self
-            .tx
-            .send(AgentEvent::ToolCallUpdate {
-                tool_call_id: self.tool_id.clone(),
-                tool_name: self.name.clone(),
-                details,
-            })
-            .await;
-    }
-}
-
 /// Drives an agent against an [`LlmModel`] and a [`ToolRegistry`].
 ///
 /// Construct one with [`AgentRunner::new`] (no tools) or
@@ -102,7 +79,7 @@ impl ProgressReporter for ToolProgress<'_> {
 #[derive(Clone)]
 pub struct AgentRunner {
     model: Arc<dyn LlmModel>,
-    registry: Arc<ToolRegistry>,
+    tools: Vec<ToolDefinition>,
 }
 
 impl AgentRunner {
@@ -110,13 +87,13 @@ impl AgentRunner {
     pub fn new(model: Arc<dyn LlmModel>) -> Self {
         AgentRunner {
             model,
-            registry: Arc::new(ToolRegistry::new()),
+            tools: vec![],
         }
     }
 
     /// Creates a runner that uses `model` and the supplied [`ToolRegistry`].
-    pub fn with_registry(model: Arc<dyn LlmModel>, registry: Arc<ToolRegistry>) -> Self {
-        AgentRunner { model, registry }
+    pub fn with_tools(model: Arc<dyn LlmModel>, tools: Vec<ToolDefinition>) -> Self {
+        AgentRunner { model, tools }
     }
 
     /// Runs `agent` starting from `thread` and returns the event stream.
@@ -211,7 +188,6 @@ impl AgentRunner {
         cancel: CancellationToken,
     ) {
         let _ = tx.send(AgentEvent::TurnStart).await;
-        let tools: Vec<ToolDefinition> = self.registry.definitions();
 
         loop {
             // Top-of-loop checkpoint: short-circuit before building the
@@ -226,7 +202,7 @@ impl AgentRunner {
                 messages: thread.clone(),
                 system: Some(agent.instructions().to_string()),
                 output_schema: agent.output_schema().cloned(),
-                tools: tools.clone(),
+                tools: self.tools.clone(),
             };
 
             let mut model_stream = self.model.generate_stream(request);
@@ -298,131 +274,32 @@ impl AgentRunner {
         thread: &mut Vec<Message>,
         cancel: &CancellationToken,
     ) {
-        // Append the tool calls as a single assistant turn.
         thread.push(Message::tool_calls(tool_calls.clone()));
-
-        // Each future runs the full lifecycle for one call: emit ToolCallStart,
-        // authorization check (if required), execute, emit ToolCallFinish / Denied.
-        // Hallucinated calls skip ToolCallStart but still produce a synthetic result
-        // so the assistant turn and tool-result messages remain paired. Each
-        // call also races against `cancel`; on cancellation the future
-        // resolves to a synthetic `Err("cancelled")` result without emitting
-        // ToolCallFinish, keeping the assistant-turn / tool-result pairing intact.
         let tool_futures = tool_calls.into_iter().map(|call| {
+            info!("Invoking tool '{}' with args '{:?}'", call.name, call.args);
             let cancel = cancel.clone();
             async move {
-                // Hallucinated tool: produce a synthetic message, no events.
-                let Some(tool) = self.registry.get(&call.name) else {
-                    return (call, ToolCallResult::Unknown);
-                };
-
+                let (resolve_tx, resolve_rx) = oneshot::channel();
                 let _ = tx
-                    .send(AgentEvent::ToolCallStart {
-                        tool_call_id: call.id.clone(),
-                        tool_name: call.name.clone(),
-                        args: call.args.clone(),
-                        title: tool.title(&call.args).unwrap_or(call.name.clone()),
-                    })
+                    .send(AgentEvent::ToolCall(ToolCallRequest::new(
+                        call.id.clone(),
+                        call.name.clone(),
+                        call.args.clone(),
+                        cancel.clone(),
+                        resolve_tx,
+                    )))
                     .await;
 
-                // Progress sink for this call. Each `update` awaits delivery
-                // on the event channel, so a slow consumer applies backpressure
-                // to a chatty tool. Created before `propose` so the planning
-                // phase can report progress too.
-                let progress = ToolProgress {
-                    tx,
-                    tool_id: call.id.clone(),
-                    name: call.name.clone(),
-                };
-
-                // Propose phase: resolve the call into a proposal without
-                // committing side effects. Runs unconditionally (its result is
-                // what `apply` executes) and before authorization, so the
-                // approval prompt can show the resolved action. A propose error
-                // aborts the call before authorization is ever requested.
-                let proposal = tokio::select! {
+                let result = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => {
-                        return (
-                            call,
-                            ToolCallResult::Err(Error::Agent("cancelled".into())),
-                        );
+                        return (call, Value::from("Cancelled"));
                     }
-                    result = tool.propose(&call.args, &progress, cancel.clone()) => match result {
-                        Ok(proposal) => proposal,
-                        Err(error) => {
-                            let result = ToolCallResult::Err(error);
-                            let _ = tx
-                                .send(AgentEvent::ToolCallFinish {
-                                    tool_call_id: call.id.clone(),
-                                    tool_name: call.name.clone(),
-                                    result: result.clone(),
-                                })
-                                .await;
-                            return (call, result);
-                        }
-                    },
+                    res = resolve_rx => res.unwrap_or(Value::from(format!("Tool call {} failed", call.name))),
                 };
 
-                // Authorization gate: consult the tool's own approval requirement.
-                if tool.requires_approval(&call.args) {
-                    let (respond_tx, respond_rx) = oneshot::channel();
-                    // Emit the handle. FIFO guarantees the consumer processes ToolCallStart first.
-                    let _ = tx
-                        .send(AgentEvent::ApprovalRequest(ApprovalRequest::new(
-                            call.id.clone(),
-                            call.name.clone(),
-                            call.args.clone(),
-                            proposal.clone(),
-                            respond_tx,
-                        )))
-                        .await;
-
-                    let allowed = tokio::select! {
-                        biased;
-                        _ = cancel.cancelled() => {
-                            return (call, ToolCallResult::Err(Error::Agent("cancelled".into())));
-                        }
-                        res = respond_rx => res.unwrap_or(false),
-                    };
-                    debug!(allowed, "Permission response");
-
-                    if !allowed {
-                        let result = ToolCallResult::Denied;
-                        let _ = tx
-                            .send(AgentEvent::ToolCallFinish {
-                                tool_call_id: call.id.clone(),
-                                tool_name: call.name.clone(),
-                                result: result.clone(),
-                            })
-                            .await;
-                        return (call, result);
-                    }
-                }
-
-                // Apply phase: execute the approved proposal.
-                let event: ToolCallResult = tokio::select! {
-                    biased;
-                    _ = cancel.cancelled() => {
-                        // No ToolCallFinish — the run is about to terminate with
-                        // a single Cancelled event.
-                        return (
-                            call,
-                            ToolCallResult::Err(Error::Agent("cancelled".into())),
-                        );
-                    }
-                    result = tool.apply(proposal, &progress, cancel.clone()) => result.into(),
-                };
-
-                debug!(tool = call.name, "tool call complete");
-                let _ = tx
-                    .send(AgentEvent::ToolCallFinish {
-                        tool_call_id: call.id.clone(),
-                        tool_name: call.name.clone(),
-                        result: event.clone(),
-                    })
-                    .await;
-                (call, event)
+                info!("Tool '{}' responded with result '{:?}'", call.name, result);
+                (call, result)
             }
         });
 
@@ -434,7 +311,7 @@ impl AgentRunner {
             thread.push(Message::tool_result(
                 call.id,
                 call.name,
-                result.into(),
+                result,
                 call.provider_metadata,
             ));
         }

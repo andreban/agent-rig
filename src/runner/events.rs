@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::model::{Message, TokenUsage};
-use crate::tools::{ApprovalRequest, ProgressDetails};
+use crate::tools::ToolCallRequest;
 
 /// Outcome of executing a single tool call.
 ///
@@ -88,51 +88,7 @@ impl From<Result<Value, Error>> for ToolCallResult {
 ///   in the final model turn).
 #[derive(Debug)]
 pub enum AgentEvent {
-    /// A registered tool is about to run with these arguments.
-    ToolCallStart {
-        /// Provider-assigned call identifier, matching
-        /// [`ToolCall::id`](crate::model::ToolCall::id). Use it to correlate
-        /// this event with its [`ToolCallFinish`](AgentEvent::ToolCallFinish)
-        /// — events from parallel calls in the same turn may interleave.
-        tool_call_id: String,
-        /// Name of the tool being invoked.
-        tool_name: String,
-        /// The JSON arguments the model passed.
-        args: Value,
-        /// The display information for the tool being invoked.
-        title: String,
-    },
-    /// A running tool reported incremental progress before it resolved.
-    /// Fires zero or more times between [`ToolCallStart`](AgentEvent::ToolCallStart)
-    /// and [`ToolCallFinish`](AgentEvent::ToolCallFinish) for the same call.
-    ToolCallUpdate {
-        /// Provider-assigned call identifier, matching
-        /// [`ToolCall::id`](crate::model::ToolCall::id). Use it to correlate
-        /// this update with its `ToolCallStart`/`ToolCallFinish` events — events from
-        /// parallel calls in the same turn may interleave.
-        tool_call_id: String,
-        /// Name of the tool being invoked.
-        tool_name: String,
-        /// The progress payload. Either a tool-defined JSON value
-        /// ([`ProgressDetails::Other`]) or, when the tool is an
-        /// [`AgentTool`](crate::tools::AgentTool), a forwarded event from the
-        /// nested child agent ([`ProgressDetails::AgentUpdate`]).
-        details: ProgressDetails,
-    },
-    /// A tool call resolved with [`ToolCallResult`]. Fires after the tool
-    /// returns, errors, or is denied.
-    ToolCallFinish {
-        /// Provider-assigned call identifier, matching the
-        /// [`ToolCallStart`](AgentEvent::ToolCallStart) `id` (and
-        /// [`ToolCall::id`](crate::model::ToolCall::id)). Use it to pair this
-        /// event with its `ToolCallStart` — events from parallel calls in the same
-        /// turn may interleave.
-        tool_call_id: String,
-        /// Name of the tool that resolved.
-        tool_name: String,
-        /// Outcome of the call.
-        result: ToolCallResult,
-    },
+    ToolCall(ToolCallRequest),
     /// A chunk of the model's reasoning/thinking output, if the provider
     /// supports extended thinking.
     ThinkingDelta(String),
@@ -176,13 +132,6 @@ pub enum AgentEvent {
     Cancelled,
     /// The provider returned an error. The stream ends after this event.
     Error(crate::error::Error),
-    /// A tool call needs the consumer's approval before it runs. Carries an
-    /// [`ApprovalRequest`] the consumer answers with
-    /// [`ApprovalRequest::respond`]; the call is blocked until it does.
-    /// Emitted only when the tool's
-    /// [`requires_approval`](crate::tools::Tool::requires_approval) returns `true`,
-    /// and always after the [`ToolCallStart`](AgentEvent::ToolCallStart) for the same call.
-    ApprovalRequest(ApprovalRequest),
 }
 
 /// An [`AgentEvent`] tagged with the identity of the run that produced it.

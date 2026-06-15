@@ -14,7 +14,7 @@ use std::sync::Arc;
 use agent_rig::Agent;
 use agent_rig::model::Message;
 use agent_rig::models::gemini::GeminiModel;
-use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
+use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{AgentTool, ToolDefinition, ToolRegistry};
 use futures_util::StreamExt;
 use schemars::json_schema;
@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let registry = Arc::new(ToolRegistry::new().register(summariser_tool(&api_key)));
 
     let parent_model = GeminiModel::builder(&api_key, MODEL).build();
-    let parent_runner = AgentRunner::with_registry(Arc::new(parent_model), registry);
+    let parent_runner = AgentRunner::with_tools(Arc::new(parent_model), registry.definitions());
 
     let parent_agent = Agent::builder()
         .name("Orchestrator")
@@ -100,32 +100,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("{prefix} text:     {chunk:?}");
                 answer.push_str(&chunk);
             }
-            AgentEvent::ToolCallStart {
-                tool_name, args, ..
-            } => {
-                println!("{prefix} started:  {tool_name}({args})");
+            AgentEvent::ToolCall(call) => {
+                println!("{prefix} started:  {}({})", call.tool_name, call.args);
+                let tool_name = call.tool_name.clone();
+                let result = match registry.get(&call.tool_name) {
+                    Some(tool) => tool
+                        .apply(call.args.clone(), call.cancellation_token.clone())
+                        .await
+                        .unwrap_or_else(|e| serde_json::Value::from(format!("Tool error: {e}"))),
+                    None => serde_json::Value::from("Unknown tool"),
+                };
+                println!("{prefix} ok:       {tool_name} → {result}");
+                call.resolve(result);
             }
-            AgentEvent::ToolCallUpdate {
-                tool_name, details, ..
-            } => {
-                println!("{prefix} update:  {tool_name}({details:?})");
-            }
-            AgentEvent::ToolCallFinish {
-                tool_name, result, ..
-            } => match result {
-                ToolCallResult::Ok(value) => {
-                    println!("{prefix} ok:       {tool_name} → {value}")
-                }
-                ToolCallResult::Err(error) => {
-                    println!("{prefix} err:      {tool_name} → {error}")
-                }
-                ToolCallResult::Denied => {
-                    println!("{prefix} denied:   {tool_name}")
-                }
-                ToolCallResult::Unknown => {
-                    println!("{prefix} unknown:  {tool_name}")
-                }
-            },
             AgentEvent::Usage(usage) => {
                 println!("{prefix} usage:    {usage:?}")
             }
@@ -137,9 +124,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             AgentEvent::TurnStart => {}
             AgentEvent::TurnFinish { .. } => {}
-            AgentEvent::ApprovalRequest(request) => {
-                request.respond(true);
-            }
         }
     }
     println!("\n--- final answer ---\n{answer}");

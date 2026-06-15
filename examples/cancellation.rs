@@ -22,8 +22,8 @@ use std::time::Duration;
 
 use agent_rig::error::Error;
 use agent_rig::model::Message;
-use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
-use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -65,12 +65,7 @@ impl Tool for SlowUploadTool {
         &self.definition
     }
 
-    async fn apply(
-        &self,
-        args: Value,
-        _progress: &dyn ProgressReporter,
-        cancel: CancellationToken,
-    ) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, cancel: CancellationToken) -> Result<Value, Error> {
         let path = args["path"].as_str().unwrap_or("unknown");
         println!("[tool]  upload({path}) starting (5s)…");
         tokio::select! {
@@ -86,10 +81,10 @@ impl Tool for SlowUploadTool {
     }
 }
 
-fn build_runner(api_key: String) -> (AgentRunner, Agent) {
+fn build_runner(api_key: String) -> (AgentRunner, Agent, Arc<ToolRegistry>) {
     let model = GeminiModel::new(api_key, MODEL);
     let registry = Arc::new(ToolRegistry::new().register(SlowUploadTool::default()));
-    let runner = AgentRunner::with_registry(Arc::new(model), registry);
+    let runner = AgentRunner::with_tools(Arc::new(model), registry.definitions());
     let agent = Agent::builder()
         .name("Uploader")
         .instructions(
@@ -98,39 +93,27 @@ fn build_runner(api_key: String) -> (AgentRunner, Agent) {
         )
         .tool("upload")
         .build();
-    (runner, agent)
+    (runner, agent, registry)
 }
 
-async fn drain<S>(label: &str, mut stream: S)
+async fn drain<S>(label: &str, registry: Arc<ToolRegistry>, mut stream: S)
 where
     S: StreamExt<Item = agent_rig::runner::RunEvent> + Unpin,
 {
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStart {
-                tool_name: name,
-                args,
-                ..
-            } => {
-                println!("[{label}] started:   {name}({args})");
+            AgentEvent::ToolCall(call) => {
+                println!("[{label}] started:   {}({})", call.tool_name, call.args);
+                let result = match registry.get(&call.tool_name) {
+                    Some(tool) => tool
+                        .apply(call.args.clone(), call.cancellation_token.clone())
+                        .await
+                        .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
+                    None => Value::from("Unknown tool"),
+                };
+                println!("[{label}] finished:  {} → {result}", call.tool_name);
+                call.resolve(result);
             }
-            AgentEvent::ToolCallUpdate {
-                tool_name: name,
-                details,
-                ..
-            } => {
-                println!("[{label}] update:   {name}({details:?})");
-            }
-            AgentEvent::ToolCallFinish {
-                tool_name: name,
-                result,
-                ..
-            } => match result {
-                ToolCallResult::Ok(value) => println!("[{label}] finished:  {name} → {value}"),
-                ToolCallResult::Err(error) => println!("[{label}] error:     {name} → {error:?}"),
-                ToolCallResult::Denied => println!("[{label}] denied:    {name}"),
-                ToolCallResult::Unknown => println!("[{label}] unknown:   {name}"),
-            },
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),
             AgentEvent::ThinkingDelta(_) => {}
             AgentEvent::Usage(usage) => println!("\n[{label}] usage:     {usage:?}"),
@@ -138,9 +121,6 @@ where
             AgentEvent::Cancelled => println!("\n[{label}] cancelled"),
             AgentEvent::TurnStart => {}
             AgentEvent::TurnFinish { .. } => {}
-            AgentEvent::ApprovalRequest(request) => {
-                request.respond(true);
-            }
         }
     }
 }
@@ -155,9 +135,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // (1) Drop the stream after a short delay.
     println!("=== (1) Cancel by dropping the returned stream ===");
-    let (runner, agent) = build_runner(api_key.clone());
+    let (runner, agent, registry) = build_runner(api_key.clone());
     let stream = runner.run(&agent, vec![Message::user("upload /tmp/report.pdf")]);
-    let drainer = tokio::spawn(drain("drop", stream));
+    let drainer = tokio::spawn(drain("drop", registry, stream));
     tokio::time::sleep(Duration::from_millis(1500)).await;
     // Abort the consumer task; dropping the JoinHandle does NOT drop the
     // stream — we need to drop the future the task owns. The cleanest
@@ -169,14 +149,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // (2) Explicit CancellationToken from a sibling task.
     println!("=== (2) Cancel via an external CancellationToken ===");
-    let (runner, agent) = build_runner(api_key.clone());
+    let (runner, agent, registry) = build_runner(api_key.clone());
     let cancel = CancellationToken::new();
     let stream = runner.run_with_cancellation(
         &agent,
         vec![Message::user("upload /var/log/app.log")],
         cancel.clone(),
     );
-    let drainer = tokio::spawn(drain("token", stream));
+    let drainer = tokio::spawn(drain("token", registry, stream));
     tokio::time::sleep(Duration::from_millis(1500)).await;
     cancel.cancel();
     let _ = drainer.await;
@@ -184,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // (3) Deadline via tokio::time::timeout composed with (2).
     println!("=== (3) Deadline via tokio::time::timeout ===");
-    let (runner, agent) = build_runner(api_key);
+    let (runner, agent, registry) = build_runner(api_key);
     let cancel = CancellationToken::new();
     let stream = runner.run_with_cancellation(
         &agent,
@@ -198,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(Duration::from_millis(1500)).await;
         deadline_cancel.cancel();
     });
-    drain("deadline", stream).await;
+    drain("deadline", registry, stream).await;
 
     Ok(())
 }

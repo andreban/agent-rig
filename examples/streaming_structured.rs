@@ -26,8 +26,8 @@ use std::sync::Arc;
 
 use agent_rig::error::Error;
 use agent_rig::model::Message;
-use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
-use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -37,6 +37,7 @@ use schemars::json_schema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
@@ -86,12 +87,7 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn apply(
-        &self,
-        args: Value,
-        _progress: &dyn ProgressReporter,
-        _cancel: CancellationToken,
-    ) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");
         let celsius = match city.to_lowercase().as_str() {
             "london" => 12.0,
@@ -116,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = GeminiModel::builder(api_key, MODEL)
         .thinking_config(ThinkingConfig {
             include_thoughts: true,
-            thinking_level: Some(ThinkingLevel::High),
+            thinking_level: Some(ThinkingLevel::Low),
             ..Default::default()
         })
         .build();
@@ -135,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .output_schema(schemars::schema_for!(WeatherReport))
         .build();
 
-    let runner = AgentRunner::with_registry(Arc::new(model), registry);
+    let runner = AgentRunner::with_tools(Arc::new(model), registry.definitions());
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
     println!("Question: {question}\n");
@@ -161,37 +157,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print!("{chunk}");
                 output.push_str(&chunk);
             }
-            AgentEvent::ToolCallStart {
-                tool_name, args, ..
-            } => {
-                if in_thinking {
-                    println!("\x1b[0m");
-                    in_thinking = false;
-                }
-                println!("[tool →] {tool_name}({args})");
+            AgentEvent::ToolCall(call) => {
+                info!(?call, "AgentEvent::ToolCall");
+                let Some(tool) = registry.get(&call.tool_name) else {
+                    call.resolve(Value::from("Unknown Tool"));
+                    continue;
+                };
+                let result = match tool
+                    .apply(call.args.clone(), call.cancellation_token.clone())
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => Value::from(format!("Tool Error: {error}")),
+                };
+                call.resolve(result);
             }
-            AgentEvent::ToolCallUpdate {
-                tool_name, details, ..
-            } => {
-                println!("[tool →] {tool_name}({details:?})");
-            }
-
-            AgentEvent::ToolCallFinish {
-                tool_name, result, ..
-            } => match result {
-                ToolCallResult::Ok(value) => println!("[tool ←] {tool_name} = {value}"),
-                ToolCallResult::Err(error) => println!("[tool ✗] {tool_name} → {error:?}"),
-                ToolCallResult::Denied => println!("[tool ⨯] {tool_name} denied"),
-                ToolCallResult::Unknown => println!("[tool ?] {tool_name} unknown"),
-            },
             AgentEvent::Usage(usage) => println!("[usage] {usage:?}"),
             AgentEvent::Error(error) => eprintln!("\n[runner] stream error: {error}"),
             AgentEvent::Cancelled => println!("\n[runner] cancelled"),
             AgentEvent::TurnStart => {}
             AgentEvent::TurnFinish { .. } => {}
-            AgentEvent::ApprovalRequest(request) => {
-                request.respond(true);
-            }
         }
     }
 

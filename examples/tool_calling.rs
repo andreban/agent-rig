@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use agent_rig::error::Error;
 use agent_rig::model::Message;
-use agent_rig::runner::{AgentEvent, AgentRunner, ToolCallResult};
-use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
+use agent_rig::runner::{AgentEvent, AgentRunner};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -60,12 +60,7 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn apply(
-        &self,
-        args: Value,
-        _progress: &dyn ProgressReporter,
-        _cancel: CancellationToken,
-    ) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let city = args["city"].as_str().unwrap_or("unknown");
         let celsius = match city.to_lowercase().as_str() {
             "london" => 15.0,
@@ -109,12 +104,7 @@ impl Tool for CelsiusToFahrenheitTool {
         &self.definition
     }
 
-    async fn apply(
-        &self,
-        args: Value,
-        _progress: &dyn ProgressReporter,
-        _cancel: CancellationToken,
-    ) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
         let celsius = args["celsius"].as_f64().unwrap_or(0.0);
         let fahrenheit = celsius * 9.0 / 5.0 + 32.0;
         println!("[tool] celsius_to_fahrenheit({celsius}) → {fahrenheit}°F");
@@ -147,7 +137,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool("celsius_to_fahrenheit")
         .build();
 
-    let runner = AgentRunner::with_registry(Arc::new(GeminiModel::new(api_key, MODEL)), registry);
+    let runner = AgentRunner::with_tools(
+        Arc::new(GeminiModel::new(api_key, MODEL)),
+        registry.definitions(),
+    );
 
     let question = "What is the current temperature in Tokyo in Fahrenheit?";
     println!("Question: {question}\n");
@@ -156,26 +149,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = runner.run(&agent, vec![Message::user(question)]);
     while let Some(event) = stream.next().await {
         match event.agent_event {
-            AgentEvent::ToolCallStart {
-                tool_name, args, ..
-            } => {
-                println!("[runner] started:   {tool_name}({args})");
+            AgentEvent::ToolCall(call) => {
+                println!("[runner] started:   {}({})", call.tool_name, call.args);
+                let result = match registry.get(&call.tool_name) {
+                    Some(tool) => tool
+                        .apply(call.args.clone(), call.cancellation_token.clone())
+                        .await
+                        .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
+                    None => Value::from("Unknown tool"),
+                };
+                println!("[runner] finished:  {} → {result}", call.tool_name);
+                call.resolve(result);
             }
-            AgentEvent::ToolCallUpdate {
-                tool_name, details, ..
-            } => {
-                println!("[runner] update:   {tool_name}({details:?})");
-            }
-            AgentEvent::ToolCallFinish {
-                tool_name, result, ..
-            } => match result {
-                ToolCallResult::Ok(value) => println!("[runner] finished:  {tool_name} → {value}"),
-                ToolCallResult::Err(error) => {
-                    println!("[runner] error:     {tool_name} → {error:?}")
-                }
-                ToolCallResult::Denied => println!("[runner] denied:    {tool_name}"),
-                ToolCallResult::Unknown => println!("[runner] unknown:   {tool_name}"),
-            },
             AgentEvent::TextDelta(chunk) => answer.push_str(&chunk),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             AgentEvent::ThinkingDelta(_) => {}
@@ -183,9 +168,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::Cancelled => println!("[runner] cancelled"),
             AgentEvent::TurnStart => {}
             AgentEvent::TurnFinish { .. } => {}
-            AgentEvent::ApprovalRequest(request) => {
-                request.respond(true);
-            }
         }
     }
 
