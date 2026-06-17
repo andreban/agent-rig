@@ -9,4 +9,4 @@ mod tool;
 pub use agent_tool::AgentTool;
 pub use registry::ToolRegistry;
 pub use request::ToolCallRequest;
-pub use tool::{Tool, ToolDefinition};
+pub use tool::{Tool, ToolDefinition, ToolResult};

@@ -19,8 +19,7 @@ use crate::tools::tool::{Tool, ToolDefinition};
 /// use agent_rig::tools::ToolRegistry;
 ///
 /// # use async_trait::async_trait;
-/// # use agent_rig::tools::{Tool, ToolDefinition};
-/// # use agent_rig::error::Error;
+/// # use agent_rig::tools::{Tool, ToolDefinition, ToolResult};
 /// # use schemars::json_schema;
 /// # struct MyTool {
 /// #     definition: ToolDefinition,
@@ -42,7 +41,7 @@ use crate::tools::tool::{Tool, ToolDefinition};
 /// #         &self.definition
 /// #     }
 /// #     async fn apply(&self, _: serde_json::Value,  _: tokio_util::sync::CancellationToken)
-/// #         -> Result<serde_json::Value, Error> { Ok(serde_json::json!({})) }
+/// #         -> ToolResult { ToolResult::ok(serde_json::json!({})) }
 /// # }
 /// let registry = Arc::new(
 ///     ToolRegistry::new()
@@ -103,7 +102,7 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Error;
+    use crate::{error::Error, tools::tool::ToolResult};
     use async_trait::async_trait;
     use schemars::json_schema;
     use serde_json::{Value, json};
@@ -122,8 +121,8 @@ mod tests {
             &self,
             _proposal: Value,
             _cancel: tokio_util::sync::CancellationToken,
-        ) -> Result<Value, Error> {
-            Ok(json!({}))
+        ) -> ToolResult {
+            ToolResult::Ok(json!({}))
         }
     }
 

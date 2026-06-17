@@ -1,10 +1,12 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 use std::time::Instant;
 
-use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -47,7 +49,7 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
         let city = args["city"].as_str().unwrap_or("unknown").to_string();
 
         // Simulate a 500 ms network round-trip.
@@ -61,7 +63,7 @@ impl Tool for GetTemperatureTool {
         };
 
         println!("[tool]  get_temperature({city}) → {celsius}°C  (after 500 ms delay)");
-        Ok(json!({ "city": city, "celsius": celsius }))
+        ToolResult::ok(json!({ "city": city, "celsius": celsius }))
     }
 }
 
@@ -104,13 +106,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "[runner[{run_id}]] started:   {}({})",
                     call.tool_name, call.args
                 );
-                let result = match registry.get(&call.tool_name) {
-                    Some(tool) => tool
-                        .apply(call.args.clone(), call.cancellation_token.clone())
-                        .await
-                        .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
-                    None => Value::from("Unknown tool"),
+
+                let Some(tool) = registry.get(&call.tool_name) else {
+                    call.resolve(ToolResult::error("Unknown tool"));
+                    continue;
                 };
+
+                let result = tool
+                    .apply(call.args.clone(), call.cancellation_token.clone())
+                    .await;
+
                 println!(
                     "[runner[{run_id}]] finished:  {} → {result}",
                     call.tool_name

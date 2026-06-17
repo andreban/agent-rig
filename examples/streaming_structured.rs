@@ -24,10 +24,9 @@
 
 use std::sync::Arc;
 
-use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -87,7 +86,7 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
         let city = args["city"].as_str().unwrap_or("unknown");
         let celsius = match city.to_lowercase().as_str() {
             "london" => 12.0,
@@ -96,7 +95,7 @@ impl Tool for GetTemperatureTool {
             "new york" => 18.0,
             _ => 20.0,
         };
-        Ok(json!({ "city": city, "celsius": celsius }))
+        ToolResult::ok(json!({ "city": city, "celsius": celsius }))
     }
 }
 
@@ -160,16 +159,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCall(call) => {
                 info!(?call, "AgentEvent::ToolCall");
                 let Some(tool) = registry.get(&call.tool_name) else {
-                    call.resolve(Value::from("Unknown Tool"));
+                    call.resolve(ToolResult::error("Unknown Tool"));
                     continue;
                 };
-                let result = match tool
+                let result = tool
                     .apply(call.args.clone(), call.cancellation_token.clone())
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(error) => Value::from(format!("Tool Error: {error}")),
-                };
+                    .await;
                 call.resolve(result);
             }
             AgentEvent::Usage(usage) => println!("[usage] {usage:?}"),

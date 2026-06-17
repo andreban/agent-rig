@@ -3,16 +3,18 @@
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::{
     agent::Agent,
-    error::Error,
     model::Message,
     runner::{AgentEvent, AgentRunner},
-    tools::{Tool, tool::ToolDefinition},
+    tools::{
+        Tool,
+        tool::{ToolDefinition, ToolResult},
+    },
 };
 
 /// Wraps a child [`Agent`] (plus its [`AgentRunner`]) so it can be invoked
@@ -68,13 +70,11 @@ impl Tool for AgentTool {
     /// [`AgentRunner::run_with_cancellation`], so cancelling the parent run
     /// cancels every nested agent in the tree.
     #[instrument(skip(self, proposal, cancel), fields(tool = self.definition.name))]
-    async fn apply(
-        &self,
-        proposal: serde_json::Value,
-        cancel: CancellationToken,
-    ) -> Result<Value, Error> {
-        let input = serde_json::to_string(&proposal)
-            .map_err(|e| Error::Agent(format!("failed to serialize args: {e}")))?;
+    async fn apply(&self, proposal: Value, cancel: CancellationToken) -> ToolResult {
+        let input = match serde_json::to_string(&proposal) {
+            Ok(input) => input,
+            Err(e) => return ToolResult::Err(e.to_string().into()),
+        };
 
         let mut result = String::new();
         let mut stream =
@@ -86,14 +86,14 @@ impl Tool for AgentTool {
             }
             match next.agent_event {
                 AgentEvent::TurnStart | AgentEvent::TurnFinish { .. } | AgentEvent::Cancelled => {}
-                AgentEvent::Error(e) => return Err(e),
+                AgentEvent::Error(e) => return ToolResult::Err(e.to_string().into()),
                 _ => {
                     // let details = ProgressDetails::AgentUpdate(Box::new(next.agent_event));
                     // let _ = progress.update(details).await;
                 }
             }
         }
-        Ok(json!({"output": result }))
+        ToolResult::Ok(result.into())
     }
 }
 

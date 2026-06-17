@@ -14,10 +14,9 @@
 
 use std::sync::Arc;
 
-use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -60,7 +59,7 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
         let city = args["city"].as_str().unwrap_or("unknown");
         let celsius = match city.to_lowercase().as_str() {
             "london" => 15.0,
@@ -69,7 +68,7 @@ impl Tool for GetTemperatureTool {
             _ => 20.0,
         };
         println!("[tool] get_temperature({city}) → {celsius}°C");
-        Ok(json!({ "city": city, "celsius": celsius }))
+        ToolResult::Ok(json!({ "city": city, "celsius": celsius }))
     }
 }
 
@@ -104,11 +103,11 @@ impl Tool for CelsiusToFahrenheitTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
         let celsius = args["celsius"].as_f64().unwrap_or(0.0);
         let fahrenheit = celsius * 9.0 / 5.0 + 32.0;
         println!("[tool] celsius_to_fahrenheit({celsius}) → {fahrenheit}°F");
-        Ok(json!({ "fahrenheit": fahrenheit }))
+        ToolResult::Ok(json!({ "fahrenheit": fahrenheit }))
     }
 }
 
@@ -151,13 +150,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match event.agent_event {
             AgentEvent::ToolCall(call) => {
                 println!("[runner] started:   {}({})", call.tool_name, call.args);
-                let result = match registry.get(&call.tool_name) {
-                    Some(tool) => tool
-                        .apply(call.args.clone(), call.cancellation_token.clone())
-                        .await
-                        .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
-                    None => Value::from("Unknown tool"),
+                let Some(tool) = registry.get(&call.tool_name) else {
+                    call.resolve(ToolResult::error("Unknown tool"));
+                    continue;
                 };
+                let result = tool
+                    .apply(call.args.clone(), call.cancellation_token.clone())
+                    .await;
                 println!("[runner] finished:  {} → {result}", call.tool_name);
                 call.resolve(result);
             }

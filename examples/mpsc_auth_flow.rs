@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 //! Demonstrates the per-tool approval flow via [`Tool::requires_approval`].
 //!
 //! [`SendEmailTool`] overrides `requires_approval` to return `true`, so the
@@ -12,10 +15,9 @@
 
 use std::sync::Arc;
 
-use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -65,11 +67,11 @@ impl Tool for SendEmailTool {
     /// Resolves the raw args into a proposal carrying a `preview` string the
     /// authorization prompt can show. The other fields are passed through so
     /// `apply` still has everything it needs.
-    async fn propose(&self, args: &Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn propose(&self, args: &Value, _cancel: CancellationToken) -> ToolResult {
         let to = args["to"].as_str().unwrap_or("");
         let subject = args["subject"].as_str().unwrap_or("");
         let body = args["body"].as_str().unwrap_or("");
-        Ok(json!({
+        ToolResult::ok(json!({
             "to": to,
             "subject": subject,
             "body": body,
@@ -77,11 +79,11 @@ impl Tool for SendEmailTool {
         }))
     }
 
-    async fn apply(&self, proposal: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, proposal: Value, _cancel: CancellationToken) -> ToolResult {
         let to = proposal["to"].as_str().unwrap_or("");
         let subject = proposal["subject"].as_str().unwrap_or("");
         println!("[tool]  pretending to send email to {to} (subject: {subject:?})");
-        Ok(json!({ "status": "sent", "to": to }))
+        ToolResult::ok(json!({ "status": "sent", "to": to }))
     }
 }
 
@@ -127,15 +129,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCall(tool_call) => {
                 info!(?tool_call, "AgentEvent::ToolCall");
                 let Some(tool) = registry.get(&tool_call.tool_name) else {
-                    tool_call.resolve(Value::from("Unknown Tool"));
+                    tool_call.resolve(ToolResult::error("Unknown Tool"));
                     continue;
                 };
 
-                let Ok(proposal) = tool
+                let proposal = tool
                     .propose(&tool_call.args, tool_call.cancellation_token.clone())
-                    .await
-                else {
-                    tool_call.resolve(Value::from("Tool error"));
+                    .await;
+
+                let ToolResult::Ok(proposal) = proposal else {
+                    tool_call.resolve(proposal);
                     continue;
                 };
 
@@ -169,10 +172,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let result = tool
                     .apply(proposal, tool_call.cancellation_token.clone())
                     .await;
-                match result {
-                    Ok(result) => tool_call.resolve(result),
-                    Err(e) => tool_call.resolve(format!("Error: {e}")),
-                }
+
+                tool_call.resolve(result);
             }
         }
     }

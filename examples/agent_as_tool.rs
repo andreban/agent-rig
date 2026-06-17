@@ -18,6 +18,7 @@ use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{AgentTool, ToolDefinition, ToolRegistry};
 use futures_util::StreamExt;
 use schemars::json_schema;
+use serde_json::Value;
 use std::error::Error;
 use tracing_subscriber::EnvFilter;
 
@@ -107,8 +108,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Some(tool) => tool
                         .apply(call.args.clone(), call.cancellation_token.clone())
                         .await
-                        .unwrap_or_else(|e| serde_json::Value::from(format!("Tool error: {e}"))),
-                    None => serde_json::Value::from("Unknown tool"),
+                        .into(),
+                    None => Value::from("Unknown tool"),
                 };
                 println!("{prefix} ok:       {tool_name} → {result}");
                 call.resolve(result);

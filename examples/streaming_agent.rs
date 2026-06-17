@@ -20,10 +20,9 @@
 
 use std::sync::Arc;
 
-use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -64,11 +63,11 @@ impl Tool for AddTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
         let a = args["a"].as_i64().unwrap_or(0);
         let b = args["b"].as_i64().unwrap_or(0);
         println!("[tool]  add({a}, {b}) = {}", a + b);
-        Ok(json!({ "result": a + b }))
+        ToolResult::ok(json!({ "result": a + b }))
     }
 }
 
@@ -117,13 +116,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "[runner] tool call started: {}({})",
                     call.tool_name, call.args
                 );
-                let result = match registry.get(&call.tool_name) {
-                    Some(tool) => tool
-                        .apply(call.args.clone(), call.cancellation_token.clone())
-                        .await
-                        .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
-                    None => Value::from("Unknown tool"),
+
+                let Some(tool) = registry.get(&call.tool_name) else {
+                    call.resolve(ToolResult::error("Unknown tool"));
+                    continue;
                 };
+
+                let result = tool
+                    .apply(call.args.clone(), call.cancellation_token.clone())
+                    .await;
                 println!("[runner] tool call finished: {} → {result}", call.tool_name);
                 call.resolve(result);
             }

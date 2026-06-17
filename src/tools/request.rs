@@ -1,3 +1,6 @@
+// Copyright 2026 Andre Cipriani Bandarra
+// SPDX-License-Identifier: Apache-2.0
+
 use serde_json::Value;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;

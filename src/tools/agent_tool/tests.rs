@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::error::Error;
 use crate::model::{LlmModel, MessageContent, ModelRequest, ModelResponse};
+use serde_json::json;
 use async_trait::async_trait;
 use schemars::json_schema;
 use std::collections::VecDeque;
@@ -73,15 +75,17 @@ fn build_agent_tool(model: Arc<ScriptedModel>) -> AgentTool {
 /// `AgentTool::apply` always wraps the child's text reply in
 /// `{"output": "..."}` regardless of what the child agent actually emitted.
 #[tokio::test]
-async fn call_wraps_accumulated_text_in_output_object() {
+async fn call_returns_accumulated_text_as_success() {
     let model = ScriptedModel::new(vec![text_only("hello world")]);
     let tool = build_agent_tool(model);
 
     let result = tool
         .apply(json!({"text": "anything"}), CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(result, json!({ "output": "hello world" }));
+        .await;
+    let ToolResult::Ok(output) = result else {
+        panic!("expected Ok, got {result:?}");
+    };
+    assert_eq!(output, json!("hello world"));
 }
 
 /// The JSON args become the child run's user message verbatim (after
@@ -93,8 +97,7 @@ async fn call_passes_args_as_serialized_json_user_message() {
 
     let _ = tool
         .apply(json!({"text": "hello", "n": 42}), CancellationToken::new())
-        .await
-        .unwrap();
+        .await;
 
     let requests = model.requests();
     assert_eq!(requests.len(), 1);

@@ -22,10 +22,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -73,17 +72,20 @@ impl Tool for RememberFactTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
-        let fact = args["fact"]
-            .as_str()
-            .ok_or_else(|| Error::Agent("missing 'fact' argument".to_string()))?
-            .to_string();
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
+        let fact = match args.get("fact") {
+            Some(fact) => fact,
+            None => return ToolResult::error("missing 'fact' argument"),
+        };
+
         println!("[memory] storing: \"{fact}\"");
-        self.store
-            .lock()
-            .map_err(|e| Error::Agent(format!("lock poisoned: {e}")))?
-            .push(fact);
-        Ok(json!({ "status": "saved" }))
+        match self.store.lock() {
+            Ok(mut lock) => {
+                lock.push(fact.to_string());
+                ToolResult::ok(json!({ "status": "saved" }))
+            }
+            Err(e) => ToolResult::error(e.to_string()),
+        }
     }
 }
 
@@ -124,16 +126,17 @@ impl Tool for RecallFactTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
-        let query = args["query"]
-            .as_str()
-            .ok_or_else(|| Error::Agent("missing 'query' argument".to_string()))?
-            .to_lowercase();
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
+        let query = match args.get("query") {
+            Some(query) => query.to_string().to_lowercase(),
+            None => return ToolResult::error("missing 'query' argument"),
+        };
+
         let terms: Vec<&str> = query.split_whitespace().collect();
-        let store = self
-            .store
-            .lock()
-            .map_err(|e| Error::Agent(format!("lock poisoned: {e}")))?;
+        let store = match self.store.lock() {
+            Ok(store) => store,
+            Err(e) => return ToolResult::error(format!("lock poisoned: {e}")),
+        };
         let results: Vec<&str> = store
             .iter()
             .filter(|fact| {
@@ -143,7 +146,7 @@ impl Tool for RecallFactTool {
             .map(String::as_str)
             .collect();
         println!("[memory] recall(\"{query}\") → {} result(s)", results.len());
-        Ok(json!({ "results": results }))
+        ToolResult::ok(json!({ "results": results }))
     }
 }
 
@@ -162,11 +165,11 @@ async fn run_once(
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             AgentEvent::ToolCall(call) => {
                 let result = match registry.get(&call.tool_name) {
-                    Some(tool) => tool
-                        .apply(call.args.clone(), call.cancellation_token.clone())
-                        .await
-                        .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
-                    None => Value::from("Unknown tool"),
+                    Some(tool) => {
+                        tool.apply(call.args.clone(), call.cancellation_token.clone())
+                            .await
+                    }
+                    None => ToolResult::error("Unknown tool"),
                 };
                 call.resolve(result);
             }
