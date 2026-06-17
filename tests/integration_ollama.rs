@@ -6,7 +6,7 @@ use std::sync::Arc;
 use agent_rig::error::Error;
 use agent_rig::model::{LlmModel, Message, ModelRequest};
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::ollama::OllamaModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -44,10 +44,10 @@ impl Tool for AddTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
         let a = args["a"].as_i64().unwrap_or(0);
         let b = args["b"].as_i64().unwrap_or(0);
-        Ok(json!({ "result": a + b }))
+        ToolResult::ok(json!({ "result": a + b }))
     }
 }
 

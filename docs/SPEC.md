@@ -212,10 +212,9 @@ pub trait Tool: Send + Sync {
     /// a reference to it rather than rebuilding one per call.
     fn definition(&self) -> &ToolDefinition;
     /// Human-readable display label for a specific invocation. Defaults to the
-    /// tool name; override to surface argument-dependent labels. Returns `Err`
-    /// when the args cannot be interpreted (the runner falls back to the name).
-    fn title(&self, args: &serde_json::Value) -> Result<String, Error> {
-        Ok(self.definition().name.clone())
+    /// tool name; override to surface argument-dependent labels.
+    fn title(&self, args: &serde_json::Value) -> String {
+        self.definition().name.clone()
     }
     /// Returns `true` if this call requires the consumer's approval before it
     /// runs. When `true`, the runner emits `AgentEvent::ApprovalRequest` and
@@ -232,14 +231,23 @@ pub trait Tool: Send + Sync {
         args: &serde_json::Value,
         progress: &dyn ProgressReporter,
         cancel: tokio_util::sync::CancellationToken,
-    ) -> Result<serde_json::Value, Error> { Ok(args.clone()) }
+    ) -> ToolResult { ToolResult::Ok(args.clone()) }
     /// Executes the approved `proposal` (the value `propose` returned).
     async fn apply(
         &self,
         proposal: serde_json::Value,
         progress: &dyn ProgressReporter,
         cancel: tokio_util::sync::CancellationToken,
-    ) -> Result<serde_json::Value, Error>;
+    ) -> ToolResult;
+}
+
+// A tool outcome carrying untyped JSON. Errors are *soft*: an `Err` is sent
+// back to the model as data, not raised as a control-flow error. Converting to
+// a `serde_json::Value` (before the result reaches the model) envelopes the
+// payload — `Ok(v)` → `{"success": v}`, `Err(v)` → `{"error": v}`.
+pub enum ToolResult {
+    Ok(serde_json::Value),
+    Err(serde_json::Value),
 }
 
 // src/tools/registry.rs
@@ -257,6 +265,8 @@ impl ToolRegistry {
 `ToolDefinition` is the runtime-only contract between agent and model. It is never stored in `Agent` — it lives in the `ToolRegistry` alongside its implementation and is resolved at run time. `parameters` is a `schemars::Schema`, typically built with the `schemars::json_schema!` macro.
 
 `Tool` is the object-safe trait the registry stores: its arguments and results are raw `serde_json::Value`s. A call runs in two phases. `propose` resolves the model's raw `args` into a *proposal* — the concrete thing that will happen — without side effects; it returns a single JSON value. If `requires_approval` returns `true`, the runner emits an `AgentEvent::ApprovalRequest` carrying the proposal and blocks until the consumer responds. Because one value drives both the prompt and the execution, what the consumer sees and what runs can never drift. An edit tool's `propose` reads the file and returns `{ path, old_text, new_text }`; the consumer renders a diff from `ApprovalRequest::proposal` and `apply` writes `new_text`. `propose` has a default that returns `args` unchanged, so a tool that needs no planning only implements `apply`. The proposal is opaque to the runner — rendering it for a human is the consumer's responsibility.
+
+Both `propose` and `apply` return a `ToolResult` — `Ok(value)` on success, `Err(value)` for a failure the model should see. Tool errors are *soft*: an `Err` is not a control-flow failure that aborts the run; converting the `ToolResult` into the JSON the model receives envelopes the payload as `{"success": …}` or `{"error": …}` so the model can tell them apart and react. The two arms of `propose` flow to different places, though: an `Ok` proposal is handed to `apply`, while only an `Err` is resolved back to the model.
 
 A single registry can hold tools of different shapes because everything is stored as `Box<dyn Tool>`. `register` accepts any `Tool` and boxes it directly — there is no separate wrapper type.
 
@@ -342,7 +352,7 @@ Registered via `ToolRegistry::register_agent`. `AgentTool` lives in `src/tools/a
 
 1. Serializes the proposal to a JSON string and passes it as the user message of a fresh run on the inner `AgentRunner`. `AgentTool` keeps the default `propose`, so the proposal is the model's raw args.
 2. Drives the child's event stream internally: every event is forwarded through the parent's `RunEmitter` (a child emitter is created so events carry the child's `run_id` and the parent's `parent` link), and `TextDelta` chunks are accumulated into a string.
-3. Returns the accumulated text wrapped as `{"output": "..."}` — this JSON value becomes the tool result the parent model sees on its next turn.
+3. Returns the accumulated text as `ToolResult::Ok` — the parent model sees it (enveloped as `{"success": "..."}`) as the tool result on its next turn. A child-run error is returned as `ToolResult::Err` rather than aborting the parent.
 
 The `cancel` token is forwarded to the child via `run_with_cancellation`, so cancelling the parent (either by dropping its stream or by firing its external token) cancels every nested agent in the tree.
 

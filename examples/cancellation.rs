@@ -20,10 +20,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_rig::error::Error;
 use agent_rig::model::Message;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry};
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -65,17 +64,17 @@ impl Tool for SlowUploadTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, cancel: CancellationToken) -> Result<Value, Error> {
+    async fn apply(&self, args: Value, cancel: CancellationToken) -> ToolResult {
         let path = args["path"].as_str().unwrap_or("unknown");
         println!("[tool]  upload({path}) starting (5s)…");
         tokio::select! {
             _ = cancel.cancelled() => {
                 println!("[tool]  upload({path}) aborted on cancellation");
-                Err(Error::Agent("upload cancelled".into()))
+                ToolResult::error("upload cancelled")
             }
             _ = tokio::time::sleep(Duration::from_secs(5)) => {
                 println!("[tool]  upload({path}) finished");
-                Ok(json!({ "uploaded": path }))
+                ToolResult::ok(json!({ "uploaded": path }))
             }
         }
     }
@@ -105,11 +104,11 @@ where
             AgentEvent::ToolCall(call) => {
                 println!("[{label}] started:   {}({})", call.tool_name, call.args);
                 let result = match registry.get(&call.tool_name) {
-                    Some(tool) => tool
-                        .apply(call.args.clone(), call.cancellation_token.clone())
-                        .await
-                        .unwrap_or_else(|e| Value::from(format!("Tool error: {e}"))),
-                    None => Value::from("Unknown tool"),
+                    Some(tool) => {
+                        tool.apply(call.args.clone(), call.cancellation_token.clone())
+                            .await
+                    }
+                    None => ToolResult::error("Unknown tool"),
                 };
                 println!("[{label}] finished:  {} → {result}", call.tool_name);
                 call.resolve(result);

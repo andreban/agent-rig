@@ -1,14 +1,12 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
-
 use async_trait::async_trait;
 
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt::Display;
 use tokio_util::sync::CancellationToken;
-
-use crate::error::Error;
 
 /// Describes a tool to the model: its name, purpose, and parameter schema.
 ///
@@ -33,6 +31,67 @@ pub struct ToolDefinition {
     pub parameters: Schema,
 }
 
+/// The outcome of a [`Tool`] call: a success payload or an error, each
+/// carrying arbitrary JSON.
+///
+/// Tool errors are *soft*. An [`Err`](ToolResult::Err) is not a control-flow
+/// failure that aborts the run — it is sent back to the model as data so it
+/// can react (retry, apologise, pick a different approach). Converting a
+/// `ToolResult` into a [`Value`] — which happens before the result reaches the
+/// model — wraps the payload in an envelope so the model can tell the two
+/// apart:
+///
+/// - [`Ok(v)`](ToolResult::Ok) becomes `{"success": v}`
+/// - [`Err(v)`](ToolResult::Err) becomes `{"error": v}`
+///
+/// The [`Display`] impl produces the same envelope as compact JSON.
+#[derive(Debug)]
+#[must_use]
+pub enum ToolResult {
+    /// A successful call. The payload is the tool's output and reaches the
+    /// model under a `"success"` key.
+    Ok(Value),
+    /// A failed call. The payload describes the error and reaches the model
+    /// under an `"error"` key; it does **not** abort the run.
+    Err(Value),
+}
+
+impl ToolResult {
+    /// Builds an [`Ok`](ToolResult::Ok) from anything convertible into a [`Value`].
+    pub fn ok<T: Into<Value>>(result: T) -> Self {
+        ToolResult::Ok(result.into())
+    }
+
+    /// Builds an [`Err`](ToolResult::Err) from anything convertible into a [`Value`].
+    pub fn error<T: Into<Value>>(error: T) -> Self {
+        ToolResult::Err(error.into())
+    }
+
+    fn key(&self) -> &'static str {
+        match self {
+            ToolResult::Ok(_) => "success",
+            ToolResult::Err(_) => "error",
+        }
+    }
+}
+
+impl From<ToolResult> for Value {
+    fn from(result: ToolResult) -> Value {
+        let key = result.key(); // borrow ends here (&'static str)
+        let (ToolResult::Ok(v) | ToolResult::Err(v)) = result; // now free to move v out
+        let mut map = serde_json::Map::new();
+        map.insert(key.to_string(), v);
+        Value::Object(map)
+    }
+}
+
+impl Display for ToolResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (ToolResult::Ok(v) | ToolResult::Err(v)) = self;
+        write!(f, r#"{{"{}": {}}}"#, self.key(), v)
+    }
+}
+
 /// A callable tool that an agent can invoke during inference.
 ///
 /// `Tool` is the object-safe trait the [`ToolRegistry`](crate::tools::ToolRegistry)
@@ -48,8 +107,7 @@ pub struct ToolDefinition {
 ///
 /// ```no_run
 /// use async_trait::async_trait;
-/// use agent_rig::error::Error;
-/// use agent_rig::tools::{Tool, ToolDefinition};
+/// use agent_rig::tools::{Tool, ToolDefinition, ToolResult};
 /// use schemars::json_schema;
 /// use serde_json::{Value, json};
 /// use tokio_util::sync::CancellationToken;
@@ -82,8 +140,8 @@ pub struct ToolDefinition {
 ///         &self,
 ///         proposal: Value,
 ///         _cancel: CancellationToken,
-///     ) -> Result<Value, Error> {
-///         Ok(json!({ "echo": proposal }))
+///     ) -> ToolResult {
+///         ToolResult::ok(json!({ "echo": proposal }))
 ///     }
 /// }
 /// ```
@@ -102,8 +160,8 @@ pub trait Tool: Send + Sync {
     /// to the tool name.
     ///
     /// [`AgentEvent::ToolCallStart`]: crate::runner::AgentEvent::ToolCallStart
-    fn title(&self, _args: &Value) -> Result<String, Error> {
-        Ok(self.definition().name.clone())
+    fn title(&self, _args: &Value) -> String {
+        self.definition().name.clone()
     }
 
     /// Returns `true` if this tool call requires the consumer's approval before it runs.
@@ -147,13 +205,20 @@ pub trait Tool: Send + Sync {
     /// mutate. Returning `Err` aborts the call before authorization is ever
     /// requested and surfaces the error to the model.
     ///
+    /// Although both arms are a [`ToolResult`], they flow to different places.
+    /// An [`Ok`](ToolResult::Ok) holds the *proposal* and must be handed to
+    /// [`apply`](Tool::apply); only an [`Err`](ToolResult::Err) is resolved
+    /// back to the model. Do not resolve an `Ok` proposal to the model
+    /// directly — that would report the raw args as if the tool had already
+    /// run.
+    ///
     /// The default returns the `args` unchanged, which is right for any tool
     /// whose call needs no planning. Override it to resolve `args` into a
     /// richer proposal.
     ///
     /// `progress` and `cancel` behave as described on [`apply`](Tool::apply).
-    async fn propose(&self, args: &Value, _cancel: CancellationToken) -> Result<Value, Error> {
-        Ok(args.clone())
+    async fn propose(&self, args: &Value, _cancel: CancellationToken) -> ToolResult {
+        ToolResult::Ok(args.clone())
     }
 
     /// Executes an approved proposal.
@@ -178,5 +243,5 @@ pub trait Tool: Send + Sync {
     /// [`progress.update(details)`](ProgressReporter::update) to emit a
     /// `ToolCallUpdate` event for this call. Delivery is guaranteed but
     /// awaits, so it applies backpressure under a slow consumer.
-    async fn apply(&self, proposal: Value, cancel: CancellationToken) -> Result<Value, Error>;
+    async fn apply(&self, proposal: Value, cancel: CancellationToken) -> ToolResult;
 }
