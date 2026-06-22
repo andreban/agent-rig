@@ -102,15 +102,15 @@ where
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::ToolCall(call) => {
-                println!("[{label}] started:   {}({})", call.tool_name, call.args);
-                let result = match registry.get(&call.tool_name) {
+                println!("[{label}] started:   {}({})", call.details.name, call.details.args);
+                let result = match registry.get(&call.details.name) {
                     Some(tool) => {
-                        tool.apply(call.args.clone(), call.cancellation_token.clone())
+                        tool.apply(call.details.args.clone(), call.cancellation_token.clone())
                             .await
                     }
                     None => ToolResult::error("Unknown tool"),
                 };
-                println!("[{label}] finished:  {} → {result}", call.tool_name);
+                println!("[{label}] finished:  {} → {result}", call.details.name);
                 call.resolve(result);
             }
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),

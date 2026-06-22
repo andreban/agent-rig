@@ -5,8 +5,13 @@ use async_trait::async_trait;
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fmt::Display;
+use std::{
+    sync::Arc,
+    fmt::Display
+};
 use tokio_util::sync::CancellationToken;
+
+use crate::model::ToolCall;
 
 /// Describes a tool to the model: its name, purpose, and parameter schema.
 ///
@@ -217,8 +222,8 @@ pub trait Tool: Send + Sync {
     /// richer proposal.
     ///
     /// `progress` and `cancel` behave as described on [`apply`](Tool::apply).
-    async fn propose(&self, args: &Value, _cancel: CancellationToken) -> ToolResult {
-        ToolResult::Ok(args.clone())
+    async fn propose(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+        ToolResult::Ok(tool_call.args.clone())
     }
 
     /// Executes an approved proposal.

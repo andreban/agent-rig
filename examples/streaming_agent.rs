@@ -112,20 +112,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print!("{chunk}");
             }
             AgentEvent::ToolCall(call) => {
-                println!(
-                    "[runner] tool call started: {}({})",
-                    call.tool_name, call.args
-                );
+                println!("[runner] tool call started: {:?}", call.details);
 
-                let Some(tool) = registry.get(&call.tool_name) else {
+                let Some(tool) = registry.get(&call.details.name) else {
                     call.resolve(ToolResult::error("Unknown tool"));
                     continue;
                 };
 
                 let result = tool
-                    .apply(call.args.clone(), call.cancellation_token.clone())
+                    .apply(call.details.args.clone(), call.cancellation_token.clone())
                     .await;
-                println!("[runner] tool call finished: {} → {result}", call.tool_name);
+                println!("[runner] tool call finished: {} → {result}", call.details.name);
                 call.resolve(result);
             }
             AgentEvent::Usage(usage) => println!("[runner] token usage: {usage:?}"),

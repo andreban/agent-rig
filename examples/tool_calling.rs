@@ -149,15 +149,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::ToolCall(call) => {
-                println!("[runner] started:   {}({})", call.tool_name, call.args);
-                let Some(tool) = registry.get(&call.tool_name) else {
+                println!("[runner] started:   {}({})", call.details.name, call.details.args);
+                let Some(tool) = registry.get(&call.details.name) else {
                     call.resolve(ToolResult::error("Unknown tool"));
                     continue;
                 };
                 let result = tool
-                    .apply(call.args.clone(), call.cancellation_token.clone())
+                    .apply(call.details.args.clone(), call.cancellation_token.clone())
                     .await;
-                println!("[runner] finished:  {} → {result}", call.tool_name);
+                println!("[runner] finished:  {} → {result}", call.details.name);
                 call.resolve(result);
             }
             AgentEvent::TextDelta(chunk) => answer.push_str(&chunk),

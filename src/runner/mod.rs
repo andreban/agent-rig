@@ -282,9 +282,7 @@ impl AgentRunner {
                 let (resolve_tx, resolve_rx) = oneshot::channel();
                 let _ = tx
                     .send(AgentEvent::ToolCall(ToolCallRequest::new(
-                        call.id.clone(),
-                        call.name.clone(),
-                        call.args.clone(),
+                        call.clone(),
                         cancel.clone(),
                         resolve_tx,
                     )))

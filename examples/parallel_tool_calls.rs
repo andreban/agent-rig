@@ -125,10 +125,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCall(call) => {
                 println!(
                     "[runner] started:   #{} {}({})",
-                    call.tool_call_id, call.tool_name, call.args
+                    call.details.id, call.details.name, call.details.args
                 );
-                let tool_name = call.tool_name.clone();
-                let tool_call_id = call.tool_call_id.clone();
+                let tool_name = call.details.name.clone();
+                let tool_call_id = call.details.id.clone();
                 let registry = registry.clone();
                 // Spawn each tool call so they run in parallel.
                 tokio::spawn(async move {
@@ -138,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     let result = tool
-                        .apply(call.args.clone(), call.cancellation_token.clone())
+                        .apply(call.details.args.clone(), call.cancellation_token.clone())
                         .await;
                     println!("[runner] finished:  #{tool_call_id} {tool_name} → {result}");
                     call.resolve(result);

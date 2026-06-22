@@ -164,9 +164,9 @@ async fn run_once(
             AgentEvent::Usage(usage) => println!("[runner] usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             AgentEvent::ToolCall(call) => {
-                let result = match registry.get(&call.tool_name) {
+                let result = match registry.get(&call.details.name) {
                     Some(tool) => {
-                        tool.apply(call.args.clone(), call.cancellation_token.clone())
+                        tool.apply(call.details.args.clone(), call.cancellation_token.clone())
                             .await
                     }
                     None => ToolResult::error("Unknown tool"),

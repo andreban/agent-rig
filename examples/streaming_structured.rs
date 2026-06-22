@@ -158,12 +158,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             AgentEvent::ToolCall(call) => {
                 info!(?call, "AgentEvent::ToolCall");
-                let Some(tool) = registry.get(&call.tool_name) else {
+                let Some(tool) = registry.get(&call.details.name) else {
                     call.resolve(ToolResult::error("Unknown Tool"));
                     continue;
                 };
                 let result = tool
-                    .apply(call.args.clone(), call.cancellation_token.clone())
+                    .apply(call.details.args.clone(), call.cancellation_token.clone())
                     .await;
                 call.resolve(result);
             }
