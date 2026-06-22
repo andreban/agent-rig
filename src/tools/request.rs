@@ -18,12 +18,12 @@ pub struct ToolCallRequest {
 
 impl ToolCallRequest {
     pub fn new(
-        tool_call: ToolCall,
+        tool_call: Arc<ToolCall>,
         cancellation_token: CancellationToken,
         resolver: oneshot::Sender<Value>,
     ) -> Self {
         Self {
-            details: Arc::new(tool_call),
+            details: tool_call,
             cancellation_token,
             resolver,
         }

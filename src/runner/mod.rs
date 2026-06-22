@@ -206,7 +206,7 @@ impl AgentRunner {
             };
 
             let mut model_stream = self.model.generate_stream(request);
-            let mut tool_calls: Vec<ToolCall> = Vec::new();
+            let mut tool_calls: Vec<Arc<ToolCall>> = Vec::new();
             let mut reply = String::new();
             loop {
                 tokio::select! {
@@ -230,7 +230,7 @@ impl AgentRunner {
                                 let _ = tx.send(AgentEvent::TextDelta(t)).await;
                             }
                             Ok(ModelStreamChunk::ToolCall(call)) => {
-                                tool_calls.push(call);
+                                tool_calls.push(Arc::new(call));
                             }
                             Ok(ModelStreamChunk::Usage(usage)) => {
                                 let _ = tx.send(AgentEvent::Usage(usage)).await;
@@ -270,7 +270,7 @@ impl AgentRunner {
     async fn handle_tool_calls(
         &self,
         tx: &RunEmitter,
-        tool_calls: Vec<ToolCall>,
+        tool_calls: Vec<Arc<ToolCall>>,
         thread: &mut Vec<Message>,
         cancel: &CancellationToken,
     ) {
@@ -306,12 +306,7 @@ impl AgentRunner {
         // the model requested them — even though events may interleave.
         let results = join_all(tool_futures).await;
         for (call, result) in results {
-            thread.push(Message::tool_result(
-                call.id,
-                call.name,
-                result,
-                call.provider_metadata,
-            ));
+            thread.push(Message::tool_result(call, result));
         }
     }
 }

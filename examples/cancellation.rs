@@ -102,7 +102,10 @@ where
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::ToolCall(call) => {
-                println!("[{label}] started:   {}({})", call.details.name, call.details.args);
+                println!(
+                    "[{label}] started:   {}({})",
+                    call.details.name, call.details.args
+                );
                 let result = match registry.get(&call.details.name) {
                     Some(tool) => {
                         tool.apply(call.details.args.clone(), call.cancellation_token.clone())

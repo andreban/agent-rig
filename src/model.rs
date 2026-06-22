@@ -10,6 +10,7 @@
 //! drives [`LlmModel`] in a loop until the model produces no more tool calls.
 
 use std::pin::Pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::stream::Stream;
@@ -39,19 +40,11 @@ pub enum MessageContent {
     /// All tool calls issued by the model in one assistant turn. Grouped
     /// together so provider adapters can reconstruct a single message with
     /// multiple call parts (Gemini) or a `tool_calls` array (Ollama).
-    ToolCalls(Vec<ToolCall>),
+    ToolCalls(Vec<Arc<ToolCall>>),
     /// The result of executing one tool (one message per result).
     ToolResult {
-        /// The ID from the originating [`ToolCall`].
-        id: String,
-        /// Tool name.
-        name: String,
-        /// Return value as a JSON value.
+        tool_call: Arc<ToolCall>,
         result: serde_json::Value,
-        /// Opaque provider metadata copied from the originating [`ToolCall`].
-        /// Used by Gemini to echo `thought_signature`; other providers ignore it.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        provider_metadata: Option<serde_json::Value>,
     },
 }
 
@@ -98,7 +91,7 @@ impl Message {
     }
 
     /// Creates an assistant message representing all tool calls from one model turn.
-    pub fn tool_calls(calls: Vec<ToolCall>) -> Self {
+    pub fn tool_calls(calls: Vec<Arc<ToolCall>>) -> Self {
         Self {
             role: Role::Assistant,
             content: MessageContent::ToolCalls(calls),
@@ -106,20 +99,10 @@ impl Message {
     }
 
     /// Creates a message carrying the result of one tool execution.
-    pub fn tool_result(
-        id: String,
-        name: String,
-        result: serde_json::Value,
-        provider_metadata: Option<serde_json::Value>,
-    ) -> Self {
+    pub fn tool_result(tool_call: Arc<ToolCall>, result: serde_json::Value) -> Self {
         Self {
             role: Role::User,
-            content: MessageContent::ToolResult {
-                id,
-                name,
-                result,
-                provider_metadata,
-            },
+            content: MessageContent::ToolResult { tool_call, result },
         }
     }
 }

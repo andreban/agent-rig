@@ -261,13 +261,9 @@ impl GeminiModel {
                                 .collect(),
                         ),
                     },
-                    MessageContent::ToolResult {
-                        id,
-                        name,
-                        result,
-                        provider_metadata,
-                    } => {
-                        let thought_signature = provider_metadata
+                    MessageContent::ToolResult { tool_call, result } => {
+                        let thought_signature = tool_call
+                            .provider_metadata
                             .as_ref()
                             .and_then(|m| m["thought_signature"].as_str())
                             .map(|s| s.to_string());
@@ -275,8 +271,8 @@ impl GeminiModel {
                             role: Some(Role::User),
                             parts: Some(vec![Part {
                                 data: PartData::FunctionResponse(FunctionResponse {
-                                    id: Some(id.clone()),
-                                    name: name.clone(),
+                                    id: Some(tool_call.id.clone()),
+                                    name: tool_call.name.clone(),
                                     response: ensure_object_response(result.clone()),
                                     parts: None,
                                     will_continue: None,

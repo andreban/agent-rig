@@ -5,10 +5,7 @@ use async_trait::async_trait;
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    sync::Arc,
-    fmt::Display
-};
+use std::{fmt::Display, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::ToolCall;

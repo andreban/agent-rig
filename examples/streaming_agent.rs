@@ -122,7 +122,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let result = tool
                     .apply(call.details.args.clone(), call.cancellation_token.clone())
                     .await;
-                println!("[runner] tool call finished: {} → {result}", call.details.name);
+                println!(
+                    "[runner] tool call finished: {} → {result}",
+                    call.details.name
+                );
                 call.resolve(result);
             }
             AgentEvent::Usage(usage) => println!("[runner] token usage: {usage:?}"),

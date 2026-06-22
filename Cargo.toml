@@ -15,7 +15,7 @@ ollama-rs = { git = "https://github.com/andreban/ollama-rs", optional = true }
 geologia = { git = "https://github.com/andreban/geologia", optional = true }
 async-trait = "0.1"
 futures-util = "0.3"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }

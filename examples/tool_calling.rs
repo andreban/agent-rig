@@ -149,7 +149,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::ToolCall(call) => {
-                println!("[runner] started:   {}({})", call.details.name, call.details.args);
+                println!(
+                    "[runner] started:   {}({})",
+                    call.details.name, call.details.args
+                );
                 let Some(tool) = registry.get(&call.details.name) else {
                     call.resolve(ToolResult::error("Unknown tool"));
                     continue;

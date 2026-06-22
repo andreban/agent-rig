@@ -134,7 +134,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 let proposal = tool
-                    .propose(tool_call.details.clone(), tool_call.cancellation_token.clone())
+                    .propose(
+                        tool_call.details.clone(),
+                        tool_call.cancellation_token.clone(),
+                    )
                     .await;
 
                 let ToolResult::Ok(proposal) = proposal else {

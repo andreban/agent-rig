@@ -204,7 +204,7 @@ async fn turn_finish_thread_contains_full_history() {
     assert!(matches!(&thread[0].content, MessageContent::Text(t) if t == "hello"));
     assert!(matches!(&thread[1].content, MessageContent::ToolCalls(_)));
     assert!(
-        matches!(&thread[2].content, MessageContent::ToolResult { name, .. } if name == "greet")
+        matches!(&thread[2].content, MessageContent::ToolResult { tool_call, .. } if tool_call.name == "greet")
     );
     assert!(matches!(&thread[3].content, MessageContent::Text(t) if t == "done"));
 }
