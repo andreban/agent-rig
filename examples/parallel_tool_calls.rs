@@ -13,8 +13,8 @@
 //! - Measuring wall-clock time: ~500 ms total instead of the ~1 500 ms that
 //!   sequential execution would take.
 //!
-//! All `ToolCallStart` events fire before any `ToolCallFinish` event,
-//! confirming that the calls are in flight simultaneously.
+//! All `AgentEvent::ToolCall` events are yielded in immediate succession before
+//! the tools complete execution, confirming that the calls are in flight simultaneously.
 //!
 //! Run with:
 //! ```bash

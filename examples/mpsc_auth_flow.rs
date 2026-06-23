@@ -162,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if let Err(e) = stdin.read_line(&mut line).await {
                     eprintln!("[auth]  stdin error: {e}");
-                    tool_call.resolve(Value::from("Tool calll authorization failed."));
+                    tool_call.resolve(Value::from("Tool call authorization failed."));
                     continue;
                 };
 
