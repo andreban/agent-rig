@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build();
     let runner = AgentRunner::new(Arc::new(model));
 
-    let mut thread: Vec<Message> = Vec::new();
+    let mut thread: Vec<Arc<Message>> = Vec::new();
     let stdin = io::stdin();
 
     println!("Multi-turn chat (Ctrl-C or Ctrl-D to quit)\n");
@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        thread.push(Message::user(input));
+        thread.push(Arc::new(Message::user(input)));
 
         print!("Assistant: ");
         io::stdout().flush()?;

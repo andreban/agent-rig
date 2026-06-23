@@ -1,6 +1,8 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -79,7 +81,7 @@ impl Tool for AgentTool {
         let mut result = String::new();
         let mut stream =
             self.runner
-                .run_with_cancellation(&self.agent, vec![Message::user(input)], cancel);
+                .run_with_cancellation(&self.agent, vec![Arc::new(Message::user(input))], cancel);
         while let Some(next) = stream.next().await {
             if let AgentEvent::TextDelta(text) = &next.agent_event {
                 result += text;

@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let runner = AgentRunner::new(Arc::new(model));
 
-    let mut stream = runner.run(&agent, vec![Message::user("learn about AI agents")]);
+    let mut stream = runner.run(&agent, vec![Arc::new(Message::user("learn about AI agents"))]);
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),

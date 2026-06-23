@@ -76,7 +76,7 @@ async fn text_only_emits_start_delta_finish() {
     let runner = AgentRunner::new(model);
 
     let mut events = vec![];
-    let mut stream = runner.run(&agent(), vec![Message::user("hi")]);
+    let mut stream = runner.run(&agent(), vec![Arc::new(Message::user("hi"))]);
     while let Some(ev) = stream.next().await {
         events.push(ev.agent_event);
     }
@@ -98,7 +98,7 @@ async fn thinking_delta_is_forwarded() {
     let runner = AgentRunner::new(model);
 
     let mut events = vec![];
-    let mut stream = runner.run(&agent(), vec![Message::user("hi")]);
+    let mut stream = runner.run(&agent(), vec![Arc::new(Message::user("hi"))]);
     while let Some(ev) = stream.next().await {
         events.push(ev.agent_event);
     }
@@ -123,7 +123,7 @@ async fn usage_event_is_forwarded() {
     let runner = AgentRunner::new(model);
 
     let mut events = vec![];
-    let mut stream = runner.run(&agent(), vec![Message::user("hi")]);
+    let mut stream = runner.run(&agent(), vec![Arc::new(Message::user("hi"))]);
     while let Some(ev) = stream.next().await {
         events.push(ev.agent_event);
     }
@@ -147,7 +147,7 @@ async fn model_error_emits_error_event_and_closes_stream() {
     let runner = AgentRunner::new(model);
 
     let mut events = vec![];
-    let mut stream = runner.run(&agent(), vec![Message::user("hi")]);
+    let mut stream = runner.run(&agent(), vec![Arc::new(Message::user("hi"))]);
     while let Some(ev) = stream.next().await {
         events.push(ev.agent_event);
     }
@@ -166,7 +166,7 @@ async fn tool_call_resolved_triggers_second_turn() {
     let runner = AgentRunner::new(model.clone());
 
     let mut text_chunks = vec![];
-    let mut stream = runner.run(&agent(), vec![Message::user("what is 1+2?")]);
+    let mut stream = runner.run(&agent(), vec![Arc::new(Message::user("what is 1+2?"))]);
     while let Some(ev) = stream.next().await {
         match ev.agent_event {
             AgentEvent::ToolCall(call) => call.resolve(json!({"sum": 3})),
@@ -187,8 +187,8 @@ async fn turn_finish_thread_contains_full_history() {
     ]);
     let runner = AgentRunner::new(model);
 
-    let user_msg = Message::user("hello");
-    let mut finish_thread: Option<Vec<Message>> = None;
+    let user_msg = Arc::new(Message::user("hello"));
+    let mut finish_thread: Option<Vec<Arc<Message>>> = None;
     let mut stream = runner.run(&agent(), vec![user_msg]);
     while let Some(ev) = stream.next().await {
         match ev.agent_event {
@@ -204,7 +204,7 @@ async fn turn_finish_thread_contains_full_history() {
     assert!(matches!(&thread[0].content, MessageContent::Text(t) if t == "hello"));
     assert!(matches!(&thread[1].content, MessageContent::ToolCalls(_)));
     assert!(
-        matches!(&thread[2].content, MessageContent::ToolResult { name, .. } if name == "greet")
+        matches!(&thread[2].content, MessageContent::ToolResult { tool_call, .. } if tool_call.name == "greet")
     );
     assert!(matches!(&thread[3].content, MessageContent::Text(t) if t == "done"));
 }
@@ -226,7 +226,7 @@ async fn multiple_tool_calls_all_resolved_in_one_turn() {
     let runner = AgentRunner::new(model.clone());
 
     let mut tool_calls_seen = 0usize;
-    let mut stream = runner.run(&agent(), vec![Message::user("do both")]);
+    let mut stream = runner.run(&agent(), vec![Arc::new(Message::user("do both"))]);
     while let Some(ev) = stream.next().await {
         if let AgentEvent::ToolCall(call) = ev.agent_event {
             tool_calls_seen += 1;
@@ -243,7 +243,7 @@ async fn dropped_tool_call_sends_error_string_to_model() {
     let model = ScriptedModel::new(vec![tool_call("c1", "noop", json!({})), text("done")]);
     let runner = AgentRunner::new(model.clone());
 
-    let mut stream = runner.run(&agent(), vec![Message::user("hi")]);
+    let mut stream = runner.run(&agent(), vec![Arc::new(Message::user("hi"))]);
     while let Some(ev) = stream.next().await {
         // Intentionally drop AgentEvent::ToolCall without resolving
         drop(ev);
@@ -274,7 +274,7 @@ async fn runner_tools_forwarded_to_model_request() {
     };
     let runner = AgentRunner::with_tools(model.clone(), vec![tool_def]);
 
-    let mut stream = runner.run(&agent(), vec![Message::user("hi")]);
+    let mut stream = runner.run(&agent(), vec![Arc::new(Message::user("hi"))]);
     while stream.next().await.is_some() {}
 
     let requests = model.requests();
@@ -291,7 +291,7 @@ async fn pre_cancelled_token_emits_cancelled_without_calling_model() {
     cancel.cancel();
 
     let mut events = vec![];
-    let mut stream = runner.run_with_cancellation(&agent(), vec![Message::user("hi")], cancel);
+    let mut stream = runner.run_with_cancellation(&agent(), vec![Arc::new(Message::user("hi"))], cancel);
     while let Some(ev) = stream.next().await {
         events.push(ev.agent_event);
     }
@@ -312,7 +312,7 @@ async fn run_id_is_consistent_across_all_events_in_a_run() {
     let runner = AgentRunner::new(model);
 
     let mut run_ids = vec![];
-    let mut stream = runner.run(&agent(), vec![Message::user("hi")]);
+    let mut stream = runner.run(&agent(), vec![Arc::new(Message::user("hi"))]);
     while let Some(ev) = stream.next().await {
         run_ids.push(ev.run_id);
     }

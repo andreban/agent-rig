@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // fields and accumulate the *root* run's TextDelta into the final
     // answer (so the child summariser's own tokens aren't double-counted).
     let mut answer = String::new();
-    let mut stream = parent_runner.run(&parent_agent, vec![Message::user(input)]);
+    let mut stream = parent_runner.run(&parent_agent, vec![Arc::new(Message::user(input))]);
     while let Some(event) = stream.next().await {
         let run_id = event.run_id;
         let prefix = format!("[run={run_id}]");
@@ -102,11 +102,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 answer.push_str(&chunk);
             }
             AgentEvent::ToolCall(call) => {
-                println!("{prefix} started:  {}({})", call.tool_name, call.args);
-                let tool_name = call.tool_name.clone();
-                let result = match registry.get(&call.tool_name) {
+                println!("{prefix} started:  {:?}", call.details);
+                let tool_name = call.details.name.clone();
+                let result = match registry.get(&call.details.name) {
                     Some(tool) => tool
-                        .apply(call.args.clone(), call.cancellation_token.clone())
+                        .apply(call.details.args.clone(), call.cancellation_token.clone())
                         .await
                         .into(),
                     None => Value::from("Unknown tool"),

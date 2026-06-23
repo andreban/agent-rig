@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)\n");
 
     let start = Instant::now();
-    let mut stream = runner.run(&agent, vec![Message::user(question)]);
+    let mut stream = runner.run(&agent, vec![Arc::new(Message::user(question))]);
 
     while let Some(event) = stream.next().await {
         let run_id = event.run_id;
@@ -104,21 +104,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCall(call) => {
                 println!(
                     "[runner[{run_id}]] started:   {}({})",
-                    call.tool_name, call.args
+                    call.details.name, call.details.args
                 );
 
-                let Some(tool) = registry.get(&call.tool_name) else {
+                let Some(tool) = registry.get(&call.details.name) else {
                     call.resolve(ToolResult::error("Unknown tool"));
                     continue;
                 };
 
                 let result = tool
-                    .apply(call.args.clone(), call.cancellation_token.clone())
+                    .apply(call.details.args.clone(), call.cancellation_token.clone())
                     .await;
 
                 println!(
                     "[runner[{run_id}]] finished:  {} → {result}",
-                    call.tool_name
+                    call.details.name
                 );
                 call.resolve(result);
             }

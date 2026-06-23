@@ -157,16 +157,16 @@ async fn run_once(
     input: &str,
 ) -> String {
     let mut reply = String::new();
-    let mut stream = runner.run(agent, vec![Message::user(input)]);
+    let mut stream = runner.run(agent, vec![Arc::new(Message::user(input))]);
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::TextDelta(chunk) => reply.push_str(&chunk),
             AgentEvent::Usage(usage) => println!("[runner] usage: {usage:?}"),
             AgentEvent::Error(error) => eprintln!("[runner] stream error: {error}"),
             AgentEvent::ToolCall(call) => {
-                let result = match registry.get(&call.tool_name) {
+                let result = match registry.get(&call.details.name) {
                     Some(tool) => {
-                        tool.apply(call.args.clone(), call.cancellation_token.clone())
+                        tool.apply(call.details.args.clone(), call.cancellation_token.clone())
                             .await
                     }
                     None => ToolResult::error("Unknown tool"),

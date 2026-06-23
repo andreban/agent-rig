@@ -10,6 +10,8 @@
 //!
 //! [`AgentRunner`]: super::AgentRunner
 
+use std::sync::Arc;
+
 use serde_json::Value;
 
 use crate::error::Error;
@@ -116,7 +118,7 @@ pub enum AgentEvent {
     /// [`AgentRunner::run`]: super::AgentRunner::run
     TurnFinish {
         /// The conversation thread at the point the loop exited.
-        thread: Vec<Message>,
+        thread: Vec<Arc<Message>>,
     },
     /// The run was cancelled — either because the consumer dropped the
     /// returned stream, or because an externally supplied

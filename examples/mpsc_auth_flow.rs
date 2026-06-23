@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use agent_rig::model::Message;
+use agent_rig::model::{Message, ToolCall};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
@@ -67,10 +67,10 @@ impl Tool for SendEmailTool {
     /// Resolves the raw args into a proposal carrying a `preview` string the
     /// authorization prompt can show. The other fields are passed through so
     /// `apply` still has everything it needs.
-    async fn propose(&self, args: &Value, _cancel: CancellationToken) -> ToolResult {
-        let to = args["to"].as_str().unwrap_or("");
-        let subject = args["subject"].as_str().unwrap_or("");
-        let body = args["body"].as_str().unwrap_or("");
+    async fn propose(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+        let to = tool_call.args["to"].as_str().unwrap_or("");
+        let subject = tool_call.args["subject"].as_str().unwrap_or("");
+        let body = tool_call.args["body"].as_str().unwrap_or("");
         ToolResult::ok(json!({
             "to": to,
             "subject": subject,
@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Question: {question}");
     println!("(The runner will pause and ask for approval before send_email runs.)\n");
 
-    let mut stream = runner.run(&agent, vec![Message::user(question)]);
+    let mut stream = runner.run(&agent, vec![Arc::new(Message::user(question))]);
 
     while let Some(event) = stream.next().await {
         match event.agent_event {
@@ -128,13 +128,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::TurnFinish { .. } => {}
             AgentEvent::ToolCall(tool_call) => {
                 info!(?tool_call, "AgentEvent::ToolCall");
-                let Some(tool) = registry.get(&tool_call.tool_name) else {
+                let Some(tool) = registry.get(&tool_call.details.name) else {
                     tool_call.resolve(ToolResult::error("Unknown Tool"));
                     continue;
                 };
 
                 let proposal = tool
-                    .propose(&tool_call.args, tool_call.cancellation_token.clone())
+                    .propose(
+                        tool_call.details.clone(),
+                        tool_call.cancellation_token.clone(),
+                    )
                     .await;
 
                 let ToolResult::Ok(proposal) = proposal else {
@@ -147,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let preview = proposal["preview"].as_str().unwrap_or("(no preview)");
                 println!(
                     "\n[auth]  Tool '{}' (id {}) wants to run:",
-                    tool_call.tool_name, tool_call.tool_call_id
+                    tool_call.details.name, tool_call.details.id
                 );
                 println!("[auth]    {preview}");
                 print!("[auth]  Approve? [y/N]: ");

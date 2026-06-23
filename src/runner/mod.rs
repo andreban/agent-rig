@@ -68,10 +68,10 @@ impl RunEmitter {
     }
 }
 
-/// Drives an agent against an [`LlmModel`] and a [`ToolRegistry`].
+/// Drives an agent against an [`LlmModel`] and a set of [`ToolDefinition`]s.
 ///
 /// Construct one with [`AgentRunner::new`] (no tools) or
-/// [`AgentRunner::with_registry`] (with tools). Call [`AgentRunner::run`] to
+/// [`AgentRunner::with_tools`] (with tools). Call [`AgentRunner::run`] to
 /// start the agentic loop and consume the returned stream until it ends.
 ///
 /// `AgentRunner` is cheap to clone — internals are behind [`Arc`] — so a
@@ -117,7 +117,7 @@ impl AgentRunner {
     pub fn run(
         &self,
         agent: &Agent,
-        thread: Vec<Message>,
+        thread: Vec<Arc<Message>>,
     ) -> Pin<Box<dyn Stream<Item = RunEvent> + Send>> {
         self.run_with_cancellation(agent, thread, CancellationToken::new())
     }
@@ -140,7 +140,7 @@ impl AgentRunner {
     pub fn run_with_cancellation(
         &self,
         agent: &Agent,
-        thread: Vec<Message>,
+        thread: Vec<Arc<Message>>,
         cancel: CancellationToken,
     ) -> Pin<Box<dyn Stream<Item = RunEvent> + Send>> {
         debug!(agent = agent.name(), "starting run");
@@ -184,7 +184,7 @@ impl AgentRunner {
         self,
         tx: RunEmitter,
         agent: Agent,
-        mut thread: Vec<Message>,
+        mut thread: Vec<Arc<Message>>,
         cancel: CancellationToken,
     ) {
         let _ = tx.send(AgentEvent::TurnStart).await;
@@ -206,7 +206,7 @@ impl AgentRunner {
             };
 
             let mut model_stream = self.model.generate_stream(request);
-            let mut tool_calls: Vec<ToolCall> = Vec::new();
+            let mut tool_calls: Vec<Arc<ToolCall>> = Vec::new();
             let mut reply = String::new();
             loop {
                 tokio::select! {
@@ -230,7 +230,7 @@ impl AgentRunner {
                                 let _ = tx.send(AgentEvent::TextDelta(t)).await;
                             }
                             Ok(ModelStreamChunk::ToolCall(call)) => {
-                                tool_calls.push(call);
+                                tool_calls.push(Arc::new(call));
                             }
                             Ok(ModelStreamChunk::Usage(usage)) => {
                                 let _ = tx.send(AgentEvent::Usage(usage)).await;
@@ -246,7 +246,7 @@ impl AgentRunner {
 
             if tool_calls.is_empty() {
                 if !reply.is_empty() {
-                    thread.push(Message::assistant(reply));
+                    thread.push(Arc::new(Message::assistant(reply)));
                 }
                 let _ = tx.send(AgentEvent::TurnFinish { thread }).await;
                 return;
@@ -270,11 +270,11 @@ impl AgentRunner {
     async fn handle_tool_calls(
         &self,
         tx: &RunEmitter,
-        tool_calls: Vec<ToolCall>,
-        thread: &mut Vec<Message>,
+        tool_calls: Vec<Arc<ToolCall>>,
+        thread: &mut Vec<Arc<Message>>,
         cancel: &CancellationToken,
     ) {
-        thread.push(Message::tool_calls(tool_calls.clone()));
+        thread.push(Arc::new(Message::tool_calls(tool_calls.clone())));
         let tool_futures = tool_calls.into_iter().map(|call| {
             info!("Invoking tool '{}' with args '{:?}'", call.name, call.args);
             let cancel = cancel.clone();
@@ -282,9 +282,7 @@ impl AgentRunner {
                 let (resolve_tx, resolve_rx) = oneshot::channel();
                 let _ = tx
                     .send(AgentEvent::ToolCall(ToolCallRequest::new(
-                        call.id.clone(),
-                        call.name.clone(),
-                        call.args.clone(),
+                        call.clone(),
                         cancel.clone(),
                         resolve_tx,
                     )))
@@ -308,12 +306,7 @@ impl AgentRunner {
         // the model requested them — even though events may interleave.
         let results = join_all(tool_futures).await;
         for (call, result) in results {
-            thread.push(Message::tool_result(
-                call.id,
-                call.name,
-                result,
-                call.provider_metadata,
-            ));
+            thread.push(Arc::new(Message::tool_result(call, result)));
         }
     }
 }
