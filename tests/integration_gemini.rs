@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use agent_rig::error::Error;
-use agent_rig::model::{LlmModel, Message, ModelRequest};
+use agent_rig::model::{LlmModel, Message, ModelRequest, ToolCall};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
@@ -61,7 +61,7 @@ fn api_key() -> Option<String> {
 /// Drives the runner to completion and concatenates the streamed text.
 async fn collect_text(runner: AgentRunner, agent: Agent, prompt: &str) -> String {
     let mut text = String::new();
-    let mut stream = runner.run(&agent, vec![Message::user(prompt)]);
+    let mut stream = runner.run(&agent, vec![Arc::new(Message::user(prompt))]);
     while let Some(event) = stream.next().await {
         if let AgentEvent::TextDelta(chunk) = event.agent_event {
             text.push_str(&chunk);
@@ -157,7 +157,7 @@ async fn agent_run_reports_token_usage() {
         .build();
 
     let runner = AgentRunner::new(Arc::new(model));
-    let mut stream = runner.run(&agent, vec![Message::user("Say hello.")]);
+    let mut stream = runner.run(&agent, vec![Arc::new(Message::user("Say hello."))]);
 
     let mut got_usage = None;
     while let Some(event) = stream.next().await {
@@ -193,12 +193,15 @@ async fn generate_stream_surfaces_rejected_request() {
     // thread described in #43. Gemini responds 400 INVALID_ARGUMENT:
     // "function response turn must come immediately after a function call turn".
     let request = ModelRequest {
-        messages: vec![Message::tool_result(
-            "ghost-call".to_string(),
-            "ghost".to_string(),
+        messages: vec![Arc::new(Message::tool_result(
+            Arc::new(ToolCall {
+                id: "ghost-call".to_string(),
+                name: "ghost".to_string(),
+                args: json!({ "ok": true }),
+                provider_metadata: None
+            }),
             json!({ "ok": true }),
-            None,
-        )],
+        ))],
         system: None,
         output_schema: None,
         tools: vec![],

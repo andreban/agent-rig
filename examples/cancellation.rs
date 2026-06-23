@@ -138,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (1) Drop the stream after a short delay.
     println!("=== (1) Cancel by dropping the returned stream ===");
     let (runner, agent, registry) = build_runner(api_key.clone());
-    let stream = runner.run(&agent, vec![Message::user("upload /tmp/report.pdf")]);
+    let stream = runner.run(&agent, vec![Arc::new(Message::user("upload /tmp/report.pdf"))]);
     let drainer = tokio::spawn(drain("drop", registry, stream));
     tokio::time::sleep(Duration::from_millis(1500)).await;
     // Abort the consumer task; dropping the JoinHandle does NOT drop the
@@ -155,7 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cancel = CancellationToken::new();
     let stream = runner.run_with_cancellation(
         &agent,
-        vec![Message::user("upload /var/log/app.log")],
+        vec![Arc::new(Message::user("upload /var/log/app.log"))],
         cancel.clone(),
     );
     let drainer = tokio::spawn(drain("token", registry, stream));
@@ -170,7 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cancel = CancellationToken::new();
     let stream = runner.run_with_cancellation(
         &agent,
-        vec![Message::user("upload /etc/hosts")],
+        vec![Arc::new(Message::user("upload /etc/hosts"))],
         cancel.clone(),
     );
     // Fire cancel after a 1.5s deadline; the drainer task observes the

@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // fields and accumulate the *root* run's TextDelta into the final
     // answer (so the child summariser's own tokens aren't double-counted).
     let mut answer = String::new();
-    let mut stream = parent_runner.run(&parent_agent, vec![Message::user(input)]);
+    let mut stream = parent_runner.run(&parent_agent, vec![Arc::new(Message::user(input))]);
     while let Some(event) = stream.next().await {
         let run_id = event.run_id;
         let prefix = format!("[run={run_id}]");

@@ -242,11 +242,11 @@ fn build_chat_request(
     }
 
     for msg in request.messages {
-        let ollama_msg = match msg.content {
+        let ollama_msg = match &msg.content {
             MessageContent::Text(text) => match msg.role {
                 Role::User => OllamaMessage::user(text),
                 Role::Assistant => OllamaMessage {
-                    content: text,
+                    content: text.clone(),
                     role: OllamaRole::Assistant,
                     thinking: None,
                     tool_calls: vec![],

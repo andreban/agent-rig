@@ -111,7 +111,7 @@ impl Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelRequest {
     /// The conversation history, in chronological order.
-    pub messages: Vec<Message>,
+    pub messages: Vec<Arc<Message>>,
     /// Optional system-level instructions that guide the model's behaviour.
     pub system: Option<String>,
     /// Optional JSON Schema the model's response must conform to.
