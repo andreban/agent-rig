@@ -6,7 +6,7 @@
 //! [`AgentEvent`] is the union of things the runner reports as it drives the
 //! agentic loop; [`RunEvent`] tags one of those with the identity of the
 //! run that produced it ([`run_id`](RunEvent::run_id)). [`ToolCallResult`] is
-//! the outcome carried by [`AgentEvent::ToolCallFinish`].
+//! the outcome of a tool call.
 //!
 //! [`AgentRunner`]: super::AgentRunner
 
@@ -21,19 +21,17 @@ use crate::tools::ToolCallRequest;
 /// Outcome of executing a single tool call.
 ///
 /// Reported back to the model as the tool result on the next turn (via
-/// [`From<ToolCallResult> for Value`](#impl-From<ToolCallResult>-for-Value))
-/// and surfaced to the consumer inside [`AgentEvent::ToolCallFinish`].
+/// [`From<ToolCallResult> for Value`](#impl-From<ToolCallResult>-for-Value)).
 #[derive(Clone, Debug)]
 pub enum ToolCallResult {
     /// The tool ran and returned this JSON value.
     Ok(Value),
     /// The tool failed. The error is surfaced to the model as a string.
     Err(Error),
-    /// The consumer denied the [`ApprovalRequest`] for this call; the tool
+    /// The consumer denied the approval prompt for this call; the tool
     /// was not invoked.
     Denied,
-    /// The model called a tool that is not registered. No [`ToolCallStart`](AgentEvent::ToolCallStart) /
-    /// [`ToolCallFinish`](AgentEvent::ToolCallFinish) events are emitted in this case, but a synthetic
+    /// The model called a tool that is not registered. A synthetic
     /// result is still sent back to the model so the assistant turn and
     /// tool-result messages stay paired.
     Unknown,
@@ -68,12 +66,9 @@ impl From<Result<Value, Error>> for ToolCallResult {
 ///   [`TextDelta`](AgentEvent::TextDelta) carry chunks as the provider streams
 ///   them. Concatenating every `TextDelta` reconstructs the final reply.
 /// - Tool lifecycle:
-///   [`ToolCallStart`](AgentEvent::ToolCallStart) fires before a tool
-///   runs — and, for a gated call, before its authorization prompt, so a
-///   frontend can correlate the prompt with the announced call — while
-///   [`ToolCallFinish`](AgentEvent::ToolCallFinish) fires once it
-///   resolves. Hallucinated tool calls (no matching registry entry) emit
-///   *neither* event; see [`ToolCallResult::Unknown`].
+///   [`ToolCall`](AgentEvent::ToolCall) is emitted when the model requests a
+///   tool call. The consumer resolves it by calling [`ToolCallRequest::resolve`]
+///   to resume the runner.
 /// - [`Usage`](AgentEvent::Usage) reports token counts for one model call.
 ///   A run that performs `N` model calls produces up to `N` `Usage`
 ///   events; consumers sum across them to derive per-run totals.

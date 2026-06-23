@@ -89,10 +89,7 @@ impl Tool for AgentTool {
             match next.agent_event {
                 AgentEvent::TurnStart | AgentEvent::TurnFinish { .. } | AgentEvent::Cancelled => {}
                 AgentEvent::Error(e) => return ToolResult::Err(e.to_string().into()),
-                _ => {
-                    // let details = ProgressDetails::AgentUpdate(Box::new(next.agent_event));
-                    // let _ = progress.update(details).await;
-                }
+                _ => {}
             }
         }
         ToolResult::Ok(result.into())

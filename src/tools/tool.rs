@@ -152,28 +152,20 @@ pub trait Tool: Send + Sync {
     /// Returns the definition that describes this tool to the model.
     fn definition(&self) -> &ToolDefinition;
 
-    /// Returns a short, human-readable title for a specific invocation,
-    /// surfaced on [`AgentEvent::ToolCallStart`].
+    /// Returns a short, human-readable title for a specific invocation.
     ///
     /// `args` is the raw tool-call JSON. The default returns the tool's name
     /// and ignores `args`; override it to derive a more descriptive label (for
-    /// example, `"Read foo.rs"` instead of `"read_file"`). Returning `Err`
-    /// signals the arguments could not be interpreted — the runner falls back
-    /// to the tool name.
-    ///
-    /// [`AgentEvent::ToolCallStart`]: crate::runner::AgentEvent::ToolCallStart
+    /// example, `"Read foo.rs"` instead of `"read_file"`). The client can use
+    /// this title when rendering or logging the tool call.
     fn title(&self, _args: &Value) -> String {
         self.definition().name.clone()
     }
 
     /// Returns `true` if this tool call requires the consumer's approval before it runs.
     ///
-    /// When `true`, the runner emits an
-    /// [`AgentEvent::ApprovalRequest`](crate::runner::AgentEvent::ApprovalRequest) on its
-    /// event stream and blocks the call until the consumer responds via
-    /// [`ApprovalRequest::respond`](crate::tools::ApprovalRequest::respond). A denied
-    /// call surfaces as [`ToolCallResult::Denied`](crate::runner::ToolCallResult::Denied)
-    /// on the matching `ToolCallFinish` event, with the tool never invoked.
+    /// When `true`, the stream consumer can choose to intercept the tool call in their
+    /// event loop and prompt the user for confirmation before executing `apply`.
     ///
     /// `args` are the raw model-supplied arguments; inspect them to make the gate
     /// conditional on argument content.
@@ -193,9 +185,8 @@ pub trait Tool: Send + Sync {
     /// A tool call runs in two phases. `propose` resolves the model's raw
     /// `args` into the concrete thing that will happen — for an edit tool, it
     /// reads the file and computes the new contents, returning something like
-    /// `{ "path": …, "old_text": …, "new_text": … }`. The runner shows that
-    /// proposal to the consumer via [`AgentEvent::ApprovalRequest`](crate::runner::AgentEvent::ApprovalRequest)
-    /// (which can render a diff from it), and if
+    /// `{ "path": …, "old_text": …, "new_text": … }`. The consumer can generate this
+    /// proposal in their event loop (and show a preview or diff to the user), and if
     /// approved hands the *same* value to `apply` (which writes `new_text`).
     /// Because one value drives both, what the approver sees and what executes
     /// can never drift apart.
@@ -218,7 +209,7 @@ pub trait Tool: Send + Sync {
     /// whose call needs no planning. Override it to resolve `args` into a
     /// richer proposal.
     ///
-    /// `progress` and `cancel` behave as described on [`apply`](Tool::apply).
+    /// `cancel` behaves as described on [`apply`](Tool::apply).
     async fn propose(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
         ToolResult::Ok(tool_call.args.clone())
     }
@@ -240,10 +231,6 @@ pub trait Tool: Send + Sync {
     /// drops the future on cancellation), but any side effects already in
     /// flight may continue in the background until they finish on their
     /// own.
-    ///
-    /// `progress` reports incremental progress: call
-    /// [`progress.update(details)`](ProgressReporter::update) to emit a
-    /// `ToolCallUpdate` event for this call. Delivery is guaranteed but
-    /// awaits, so it applies backpressure under a slow consumer.
+
     async fn apply(&self, proposal: Value, cancel: CancellationToken) -> ToolResult;
 }
