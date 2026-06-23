@@ -10,12 +10,11 @@
 //!
 //! [`AgentRunner`]: super::AgentRunner
 
-use std::sync::Arc;
 
 use serde_json::Value;
 
 use crate::error::Error;
-use crate::model::{Message, TokenUsage};
+use crate::model::{MessageList, TokenUsage};
 use crate::tools::ToolCallRequest;
 
 /// Outcome of executing a single tool call.
@@ -113,7 +112,7 @@ pub enum AgentEvent {
     /// [`AgentRunner::run`]: super::AgentRunner::run
     TurnFinish {
         /// The conversation thread at the point the loop exited.
-        thread: Vec<Arc<Message>>,
+        thread: MessageList,
     },
     /// The run was cancelled — either because the consumer dropped the
     /// returned stream, or because an externally supplied

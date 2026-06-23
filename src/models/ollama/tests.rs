@@ -61,7 +61,7 @@ fn saturating_u64_to_u32_caps_at_max() {
 
 fn empty_request() -> ModelRequest {
     ModelRequest {
-        messages: vec![],
+        messages: Default::default(),
         system: None,
         output_schema: None,
         tools: vec![],

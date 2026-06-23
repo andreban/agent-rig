@@ -157,7 +157,7 @@ async fn run_once(
     input: &str,
 ) -> String {
     let mut reply = String::new();
-    let mut stream = runner.run(agent, vec![Arc::new(Message::user(input))]);
+    let mut stream = runner.run(agent, vec![Message::user(input)].into());
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::TextDelta(chunk) => reply.push_str(&chunk),

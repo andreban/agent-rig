@@ -29,7 +29,7 @@
 //!     .build();
 //!
 //! let runner = AgentRunner::new(Arc::new(model));
-//! let mut stream = runner.run(&agent, vec![Arc::new(Message::user("Hello!"))]);
+//! let mut stream = runner.run(&agent, vec![Message::user("Hello!")].into());
 //! while let Some(event) = stream.next().await {
 //!     if let AgentEvent::TextDelta(chunk) = event.agent_event {
 //!         print!("{chunk}");

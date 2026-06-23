@@ -32,7 +32,7 @@ pub enum Role {
 }
 
 /// The content carried by a [`Message`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "content", rename_all = "snake_case")]
 pub enum MessageContent {
     /// Plain text.
@@ -49,7 +49,7 @@ pub enum MessageContent {
 }
 
 /// A single message in a conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     /// The role of the message sender.
     pub role: Role,
@@ -107,11 +107,129 @@ impl Message {
     }
 }
 
+/// A list of messages representing a conversation thread.
+///
+/// Under the hood, this wraps a `Vec<Arc<Message>>` to ensure that messages
+/// are cheap to clone and share, while providing a clean and ergonomic API.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct MessageList {
+    inner: Vec<Arc<Message>>,
+}
+
+impl MessageList {
+    /// Creates a new, empty `MessageList`.
+    pub fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+
+
+    /// Appends a message to the end of the list, wrapping it in an `Arc`.
+    pub fn push(&mut self, message: Message) {
+        self.inner.push(Arc::new(message));
+    }
+
+    /// Appends a pre-wrapped message (`Arc<Message>`) to the end of the list.
+    pub fn push_arc(&mut self, message: Arc<Message>) {
+        self.inner.push(message);
+    }
+
+    /// Removes the last element from the list and returns it, or `None` if empty.
+    pub fn pop(&mut self) -> Option<Arc<Message>> {
+        self.inner.pop()
+    }
+
+    /// Clears the list, removing all values.
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+
+    /// Shortens the list, keeping the first `len` elements and dropping the rest.
+    pub fn truncate(&mut self, len: usize) {
+        self.inner.truncate(len);
+    }
+}
+
+impl std::ops::Deref for MessageList {
+    type Target = [Arc<Message>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl From<Vec<Arc<Message>>> for MessageList {
+    fn from(inner: Vec<Arc<Message>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<MessageList> for Vec<Arc<Message>> {
+    fn from(list: MessageList) -> Self {
+        list.inner
+    }
+}
+
+
+impl From<Vec<Message>> for MessageList {
+    fn from(msgs: Vec<Message>) -> Self {
+        Self {
+            inner: msgs.into_iter().map(Arc::new).collect(),
+        }
+    }
+}
+
+impl FromIterator<Arc<Message>> for MessageList {
+    fn from_iter<T: IntoIterator<Item = Arc<Message>>>(iter: T) -> Self {
+        Self {
+            inner: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl FromIterator<Message> for MessageList {
+    fn from_iter<T: IntoIterator<Item = Message>>(iter: T) -> Self {
+        Self {
+            inner: iter.into_iter().map(Arc::new).collect(),
+        }
+    }
+}
+
+impl IntoIterator for MessageList {
+    type Item = Arc<Message>;
+    type IntoIter = std::vec::IntoIter<Arc<Message>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a MessageList {
+    type Item = &'a Arc<Message>;
+    type IntoIter = std::slice::Iter<'a, Arc<Message>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter()
+    }
+}
+
+impl Extend<Message> for MessageList {
+    fn extend<T: IntoIterator<Item = Message>>(&mut self, iter: T) {
+        self.inner.extend(iter.into_iter().map(Arc::new));
+    }
+}
+
+impl Extend<Arc<Message>> for MessageList {
+    fn extend<T: IntoIterator<Item = Arc<Message>>>(&mut self, iter: T) {
+        self.inner.extend(iter);
+    }
+}
+
 /// A request to an LLM model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelRequest {
     /// The conversation history, in chronological order.
-    pub messages: Vec<Arc<Message>>,
+    pub messages: MessageList,
     /// Optional system-level instructions that guide the model's behaviour.
     pub system: Option<String>,
     /// Optional JSON Schema the model's response must conform to.
@@ -127,7 +245,7 @@ pub struct ModelRequest {
 }
 
 /// A tool call issued by the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
     /// Provider-assigned call identifier. Must be echoed in the tool response
     /// for providers that require it (e.g. Gemini).
@@ -334,5 +452,37 @@ mod tests {
         let msg = Message::assistant("hi");
         assert_eq!(msg.role, Role::Assistant);
         assert!(matches!(msg.content, MessageContent::Text(t) if t == "hi"));
+    }
+
+    #[test]
+    fn message_list_ergonomics_and_behavior() {
+        let mut list = MessageList::new();
+        assert!(list.is_empty());
+
+        // Push wraps in Arc automatically
+        list.push(Message::user("hello"));
+        list.push(Message::assistant("hi"));
+        assert_eq!(list.len(), 2);
+
+        // Deref interface
+        assert_eq!(list[0].role, Role::User);
+        assert_eq!(list[1].role, Role::Assistant);
+
+        // Conversions
+        let single_list: MessageList = vec![Message::user("one")].into();
+        assert_eq!(single_list.len(), 1);
+
+        let vec_list: MessageList = vec![Message::user("a"), Message::user("b")].into();
+        assert_eq!(vec_list.len(), 2);
+
+        // Transparent Serialization
+        let serialized = serde_json::to_string(&list).unwrap();
+        let deserialized: MessageList = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(list, deserialized);
+
+        // Ensure it serializes as a plain JSON array, not a wrapped object
+        let val: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        assert!(val.is_array());
+        assert_eq!(val.as_array().unwrap().len(), 2);
     }
 }

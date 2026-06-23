@@ -138,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut output = String::new();
     let mut in_thinking = false;
 
-    let mut stream = runner.run(&agent, vec![Arc::new(Message::user(question))]);
+    let mut stream = runner.run(&agent, vec![Message::user(question)].into());
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::ThinkingDelta(token) => {
