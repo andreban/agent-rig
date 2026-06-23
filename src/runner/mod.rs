@@ -29,7 +29,7 @@ use tracing::{debug, info};
 
 use crate::{
     Agent,
-    model::{LlmModel, Message, ModelRequest, ModelStreamChunk, ToolCall},
+    model::{LlmModel, Message, MessageList, ModelRequest, ModelStreamChunk, ToolCall},
     tools::{ToolCallRequest, ToolDefinition},
 };
 
@@ -117,7 +117,7 @@ impl AgentRunner {
     pub fn run(
         &self,
         agent: &Agent,
-        thread: Vec<Arc<Message>>,
+        thread: MessageList,
     ) -> Pin<Box<dyn Stream<Item = RunEvent> + Send>> {
         self.run_with_cancellation(agent, thread, CancellationToken::new())
     }
@@ -140,7 +140,7 @@ impl AgentRunner {
     pub fn run_with_cancellation(
         &self,
         agent: &Agent,
-        thread: Vec<Arc<Message>>,
+        thread: MessageList,
         cancel: CancellationToken,
     ) -> Pin<Box<dyn Stream<Item = RunEvent> + Send>> {
         debug!(agent = agent.name(), "starting run");
@@ -184,7 +184,7 @@ impl AgentRunner {
         self,
         tx: RunEmitter,
         agent: Agent,
-        mut thread: Vec<Arc<Message>>,
+        mut thread: MessageList,
         cancel: CancellationToken,
     ) {
         let _ = tx.send(AgentEvent::TurnStart).await;
@@ -246,7 +246,7 @@ impl AgentRunner {
 
             if tool_calls.is_empty() {
                 if !reply.is_empty() {
-                    thread.push(Arc::new(Message::assistant(reply)));
+                    thread.push(Message::assistant(reply));
                 }
                 let _ = tx.send(AgentEvent::TurnFinish { thread }).await;
                 return;
@@ -271,10 +271,10 @@ impl AgentRunner {
         &self,
         tx: &RunEmitter,
         tool_calls: Vec<Arc<ToolCall>>,
-        thread: &mut Vec<Arc<Message>>,
+        thread: &mut MessageList,
         cancel: &CancellationToken,
     ) {
-        thread.push(Arc::new(Message::tool_calls(tool_calls.clone())));
+        thread.push(Message::tool_calls(tool_calls.clone()));
         let tool_futures = tool_calls.into_iter().map(|call| {
             info!("Invoking tool '{}' with args '{:?}'", call.name, call.args);
             let cancel = cancel.clone();
@@ -306,7 +306,7 @@ impl AgentRunner {
         // the model requested them — even though events may interleave.
         let results = join_all(tool_futures).await;
         for (call, result) in results {
-            thread.push(Arc::new(Message::tool_result(call, result)));
+            thread.push(Message::tool_result(call, result));
         }
     }
 }

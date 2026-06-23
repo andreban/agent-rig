@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)\n");
 
     let start = Instant::now();
-    let mut stream = runner.run(&agent, vec![Arc::new(Message::user(question))]);
+    let mut stream = runner.run(&agent, vec![Message::user(question)].into());
 
     while let Some(event) = stream.next().await {
         let run_id = event.run_id;

@@ -16,7 +16,7 @@
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
-use agent_rig::model::Message;
+use agent_rig::model::{Message, MessageList};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use futures_util::StreamExt;
@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build();
     let runner = AgentRunner::new(Arc::new(model));
 
-    let mut thread: Vec<Arc<Message>> = Vec::new();
+    let mut thread = MessageList::new();
     let stdin = io::stdin();
 
     println!("Multi-turn chat (Ctrl-C or Ctrl-D to quit)\n");
@@ -63,13 +63,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        thread.push(Arc::new(Message::user(input)));
+        thread.push(Message::user(input));
 
         print!("Assistant: ");
         io::stdout().flush()?;
 
         let mut stream = runner.run(&agent, thread);
-        thread = Vec::new();
+        thread = MessageList::new();
         while let Some(event) = stream.next().await {
             match event.agent_event {
                 AgentEvent::ThinkingDelta(token) => {

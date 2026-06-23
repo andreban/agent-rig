@@ -86,7 +86,7 @@ async fn ollama_available(url: &str) -> bool {
 
 async fn collect_text(runner: AgentRunner, agent: Agent, prompt: &str) -> String {
     let mut text = String::new();
-    let mut stream = runner.run(&agent, vec![Arc::new(Message::user(prompt))]);
+    let mut stream = runner.run(&agent, vec![Message::user(prompt)].into());
     while let Some(event) = stream.next().await {
         if let AgentEvent::TextDelta(chunk) = event.agent_event {
             text.push_str(&chunk);
@@ -127,7 +127,7 @@ async fn agent_run_reports_token_usage() {
         .build();
 
     let runner = AgentRunner::new(Arc::new(model));
-    let mut stream = runner.run(&agent, vec![Arc::new(Message::user("Say hello."))]);
+    let mut stream = runner.run(&agent, vec![Message::user("Say hello.")].into());
 
     let mut got_usage = None;
     while let Some(event) = stream.next().await {
@@ -224,7 +224,7 @@ async fn generate_stream_surfaces_provider_error() {
     // Port 1 has nothing listening, so the connection is refused immediately.
     let model = OllamaModel::new("http://127.0.0.1:1", "no-such-model");
     let request = ModelRequest {
-        messages: vec![Arc::new(Message::user("hello"))],
+        messages: vec![Message::user("hello")].into(),
         system: None,
         output_schema: None,
         tools: vec![],
