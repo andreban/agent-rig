@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runner = AgentRunner::new(Arc::new(model));
 
-    let mut stream = runner.run(&agent, vec![Message::user("Hello!")]);
+    let mut stream = runner.run(&agent, vec![Arc::new(Message::user("Hello!"))]);
     while let Some(event) = stream.next().await {
         if let AgentEvent::TextDelta(chunk) = event.agent_event {
             print!("{chunk}");
@@ -81,24 +81,30 @@ GEMINI_API_KEY=your_key cargo run --features gemini
 
 ### The stream API
 
-`AgentRunner::run` takes the agent by reference and the conversation thread by value, and returns an async stream of `RunEvent`s. A `RunEvent` is an [`AgentEvent`] tagged with the `run_id` of the run that produced it and an optional `parent` run id (set for sub-agent invocations). For a flat single-run consumer the extra fields can be ignored — read `event.agent_event`. The stream ends when the model produces a turn with no tool calls (or on an `AgentEvent::Error`).
+`AgentRunner::run` takes the agent by reference and the conversation thread by value, and returns an async stream of `RunEvent`s. A `RunEvent` wraps an [`AgentEvent`] with a `run_id` unique to the run that produced it. For a flat single-run consumer the extra fields can be ignored — read `event.agent_event`. The stream ends when the model produces a turn with no tool calls (or on an `AgentEvent::Error`/`AgentEvent::Cancelled`).
 
 ```rust
 pub struct RunEvent {
     pub run_id: usize,
-    pub parent: Option<usize>,
     pub agent_event: AgentEvent,
 }
 
 pub enum AgentEvent {
-    ToolCallStarted { tool_id: String, name: String, args: serde_json::Value, title: String },
-    ToolCallFinished { tool_id: String, name: String, result: ToolCallResult },
+    /// A request from the runner to execute a tool call.
+    ToolCall(ToolCallRequest),
+    /// A chunk of the model's reasoning/thinking output.
     ThinkingDelta(String),
+    /// A chunk of the model's text output.
     TextDelta(String),
+    /// Token counts reported by the provider for one model call.
     Usage(TokenUsage),
-    StartTurn,                       // first event of a run
-    EndTurn { thread: Vec<Message> }, // last event on normal completion
+    /// Emitted at the start of every run, before any model output.
+    TurnStart,
+    /// Emitted at the end of a normal completion, carrying the updated thread.
+    TurnFinish { thread: Vec<Arc<Message>> },
+    /// Emitted if the run is cancelled.
     Cancelled,
+    /// Emitted if the provider returns an error.
     Error(Error),
 }
 ```
@@ -109,7 +115,7 @@ Concatenating every `TextDelta` reconstructs the final reply. `Usage` fires at m
 
 ```rust
 let mut text = String::new();
-let mut stream = runner.run(&agent, vec![Message::user("What is the capital of France?")]);
+let mut stream = runner.run(&agent, vec![Arc::new(Message::user("What is the capital of France?"))]);
 while let Some(event) = stream.next().await {
     if let AgentEvent::TextDelta(chunk) = event.agent_event {
         text.push_str(&chunk);
@@ -120,24 +126,25 @@ println!("{text}"); // "Paris"
 
 ### Multi-turn conversations
 
-`AgentRunner::run` is stateless: each call takes the full thread of `Message`s. The caller is responsible for appending the user's input and the assistant's reply between turns.
+`AgentRunner::run` is stateless: each call takes the full thread of reference-counted `Message`s (`Vec<Arc<Message>>`). The caller is responsible for appending the user's input and the assistant's reply between turns.
 
 ```rust
+use std::sync::Arc;
 use agent_rig::model::Message;
 
-let mut thread: Vec<Message> = Vec::new();
+let mut thread: Vec<Arc<Message>> = Vec::new();
 
 // Turn 1
-thread.push(Message::user("My name is Alice."));
+thread.push(Arc::new(Message::user("My name is Alice.")));
 let mut reply = String::new();
 let mut stream = runner.run(&agent, thread.clone());
 while let Some(event) = stream.next().await {
     if let AgentEvent::TextDelta(chunk) = event.agent_event { reply.push_str(&chunk); }
 }
-thread.push(Message::assistant(reply));
+thread.push(Arc::new(Message::assistant(reply)));
 
 // Turn 2 — the runner sees the full history
-thread.push(Message::user("What is my name?"));
+thread.push(Arc::new(Message::user("What is my name?")));
 let mut stream = runner.run(&agent, thread.clone());
 // drive the stream and append the assistant reply again
 ```
@@ -146,13 +153,14 @@ For a complete REPL, see [`examples/multi_turn.rs`](examples/multi_turn.rs).
 
 ### Tool calling
 
-Implement the `Tool` trait to give the agent callable functions. The runner handles the request/tool/response loop automatically and runs parallel tool calls concurrently.
+Under the **client-resolved tool execution model**, the runner does not execute tools internally. Instead, when the model requests a tool call, the runner yields an `AgentEvent::ToolCall(call)` event. The consumer is responsible for looking up the tool in their registry, executing it, and resolving the call. This completely decouples the runner from tool side effects and enables flexible authorization, caching, or custom execution patterns.
+
+To give your agent callable functions, implement the `Tool` trait:
 
 ```rust
 use std::sync::Arc;
 use async_trait::async_trait;
-use agent_rig::tools::{ProgressReporter, Tool, ToolDefinition, ToolRegistry};
-use agent_rig::error::Error;
+use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::runner::AgentRunner;
 use serde_json::{json, Value};
 
@@ -187,17 +195,14 @@ impl Tool for GetWeatherTool {
     async fn apply(
         &self,
         proposal: Value,
-        _progress: &dyn ProgressReporter,
         _cancel: tokio_util::sync::CancellationToken,
-    ) -> Result<Value, Error> {
+    ) -> ToolResult {
         let city = proposal["city"].as_str().unwrap_or("unknown");
-        Ok(json!({ "city": city, "celsius": 22.0 }))
+        ToolResult::ok(json!({ "city": city, "celsius": 22.0 }))
     }
 }
 
-let registry = Arc::new(
-    ToolRegistry::new().register(GetWeatherTool::default())
-);
+let registry = ToolRegistry::new().register(GetWeatherTool::default();
 
 let agent = Agent::builder()
     .name("Weather Bot")
@@ -205,39 +210,57 @@ let agent = Agent::builder()
     .tool("get_weather")
     .build();
 
-let runner = AgentRunner::with_registry(Arc::new(model), registry);
+// Construct the runner with the tool definitions so the model knows they exist
+let runner = AgentRunner::with_tools(Arc::new(model), registry.definitions());
 ```
 
-Drive the stream and inspect `ToolCallStarted` / `ToolCallFinished` events to observe each call:
+In your event loop, intercept `AgentEvent::ToolCall`, execute the tool from your registry, and resolve the call by calling `call.resolve(result)`. The runner blocks until you resolve the call:
 
 ```rust
-use agent_rig::runner::{AgentEvent, ToolCallResult};
+use agent_rig::runner::AgentEvent;
 
 while let Some(event) = stream.next().await {
     match event.agent_event {
-        AgentEvent::ToolCallStarted { name, args, .. } => println!("[start] {name}({args})"),
-        AgentEvent::ToolCallFinished { name, result: ToolCallResult::Ok(value), .. } => {
-            println!("[done]  {name} → {value}");
+        AgentEvent::ToolCall(tool_call) => {
+            println!("[start] {}({})", tool_call.details.name, tool_call.details.args);
+            
+            // 1. Look up the tool
+            let Some(tool) = registry.get(&tool_call.details.name) else {
+                tool_call.resolve(ToolResult::error("Unknown tool"));
+                continue;
+            };
+            
+            // 2. Execute it
+            let result = tool.apply(
+                tool_call.details.args.clone(),
+                tool_call.cancellation_token.clone()
+            ).await;
+            
+            println!("[done]  {} → {result}", tool_call.details.name);
+            
+            // 3. Resolve the call to resume the runner
+            tool_call.resolve(result);
         }
-        AgentEvent::ToolCallFinished { name, result: ToolCallResult::Err(e), .. } => {
-            println!("[err]   {name}: {e}");
-        }
-        AgentEvent::ToolCallFinished { result: ToolCallResult::Denied, .. } => {}
-        AgentEvent::ToolCallFinished { result: ToolCallResult::Unknown, .. } => {}
         AgentEvent::TextDelta(chunk) => print!("{chunk}"),
         AgentEvent::ThinkingDelta(_) => {}
         AgentEvent::Usage(usage) => println!("[usage] {usage:?}"),
         AgentEvent::Error(e) => eprintln!("[runner error] {e}"),
+        _ => {}
     }
 }
 ```
 
 ### Authorization
 
-Override `requires_approval` on `Tool` to gate calls before they execute. The runner calls it before every invocation: returning `true` causes the runner to emit `AgentEvent::ApprovalRequest` on the event stream and block until the consumer calls `ApprovalRequest::respond`. The approval request carries the `proposal` returned by `Tool::propose` — the resolved action (e.g. path plus old/new contents for an edit tool) — so the consumer can show a meaningful diff instead of raw JSON args.
+Because tool execution is resolved by the client, gating tool calls behind user approval is highly straightforward. You can orchestrate a two-phase execution flow (`Tool::propose` followed by `Tool::apply`) directly in your event loop:
+
+1. **Propose**: Call `tool.propose(...)` to resolve the raw arguments into a *proposal* — a side-effect-free description of what will happen (e.g., an edit tool reading the file and returning a diff).
+2. **Prompt**: Show this proposal/diff to the user and prompt for confirmation.
+3. **Apply**: If approved, call `tool.apply(...)` with the proposal and resolve the call. If denied, resolve the call with a soft error.
 
 ```rust
-use agent_rig::tools::{Tool, ToolDefinition};
+use std::sync::Arc;
+use agent_rig::tools::{Tool, ToolDefinition, ToolResult};
 use serde_json::Value;
 
 struct SendEmailTool { /* ... */ }
@@ -246,18 +269,72 @@ impl Tool for SendEmailTool {
     fn definition(&self) -> &ToolDefinition { /* ... */ }
 
     fn requires_approval(&self, _args: &Value) -> bool {
-        true  // always prompt before sending
+        true  // indicate to the client that this tool requires approval
     }
 
-    async fn apply(&self, proposal: Value, /* ... */) -> Result<Value, Error> {
-        // only reached after consumer approves
+    async fn propose(
+        &self,
+        tool_call: Arc<crate::model::ToolCall>,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> ToolResult {
+        // Resolve raw args to a descriptive proposal (e.g., envelope details + body preview)
+        ToolResult::ok(json!({
+            "to": tool_call.args["to"],
+            "preview": format!("Subject: {}\n\n{}", tool_call.args["subject"], tool_call.args["body"])
+        }))
+    }
+
+    async fn apply(
+        &self,
+        proposal: Value,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> ToolResult {
+        // executes only after approval
+        ToolResult::ok(json!({ "status": "sent" }))
     }
 }
 ```
 
-In the event loop, handle `AgentEvent::ApprovalRequest` and call `request.respond(true)` to allow or `request.respond(false)` to deny. A denied call surfaces as `ToolCallFinish { result: ToolCallResult::Denied, .. }` and feeds a synthetic "denied" result back to the model so the next turn stays paired with the original tool-call message.
+In your event loop, orchestrate the approval logic like this:
 
-For a working CLI prompt, see [`examples/mpsc_auth_flow.rs`](examples/mpsc_auth_flow.rs).
+```rust
+AgentEvent::ToolCall(tool_call) => {
+    let Some(tool) = registry.get(&tool_call.details.name) else {
+        tool_call.resolve(ToolResult::error("Unknown tool"));
+        continue;
+    };
+
+    // 1. Generate the proposal
+    let proposal = tool.propose(
+        tool_call.details.clone(),
+        tool_call.cancellation_token.clone()
+    ).await;
+
+    let ToolResult::Ok(proposal_val) = proposal else {
+        tool_call.resolve(proposal); // propose failed, resolve immediately
+        continue;
+    };
+
+    // 2. Check if approval is needed and prompt the user
+    let approved = if tool.requires_approval(&tool_call.details.args) {
+        let preview = proposal_val["preview"].as_str().unwrap_or("");
+        prompt_user_for_email_send(preview) // your custom UI prompt logic
+    } else {
+        true
+    };
+
+    if !approved {
+        tool_call.resolve(ToolResult::error("User rejected approval"));
+        continue;
+    }
+
+    // 3. Apply the approved proposal
+    let result = tool.apply(proposal_val, tool_call.cancellation_token.clone()).await;
+    tool_call.resolve(result);
+}
+```
+
+For a fully working CLI prompt implementation, see [`examples/mpsc_auth_flow.rs`](examples/mpsc_auth_flow.rs).
 
 ### Structured output
 
@@ -280,7 +357,7 @@ let agent = Agent::builder()
     .build();
 
 let mut output = String::new();
-let mut stream = runner.run(&agent, vec![Message::user("AI agents")]);
+let mut stream = runner.run(&agent, vec![Arc::new(Message::user("AI agents"))]);
 while let Some(event) = stream.next().await {
     if let AgentEvent::TextDelta(chunk) = event.agent_event { output.push_str(&chunk); }
 }
@@ -296,27 +373,27 @@ Streaming is the only mode — `AgentRunner::run` already returns a stream. `Thi
 use futures_util::StreamExt;
 use agent_rig::runner::AgentEvent;
 
-let mut stream = runner.run(&agent, vec![Message::user("Explain Rust ownership.")]);
+let mut stream = runner.run(&agent, vec![Arc::new(Message::user("Explain Rust ownership."))]);
 while let Some(event) = stream.next().await {
     match event.agent_event {
         AgentEvent::ThinkingDelta(token) => print!("\x1b[2m{token}\x1b[0m"),
         AgentEvent::TextDelta(chunk) => print!("{chunk}"),
-        AgentEvent::ToolCallStarted { name, .. } => println!("[calling {name}]"),
-        AgentEvent::ToolCallFinished { name, .. } => println!("[{name} done]"),
-        AgentEvent::Error(e) => eprintln!("[error] {e}"),
+        AgentEvent::ToolCall(call) => println!("\n[tool call: {}]", call.details.name),
+        AgentEvent::Error(e) => eprintln!("\n[error] {e}"),
+        _ => {}
     }
 }
 ```
 
-Each `RunEvent` also carries a `run_id` (unique per run) and an optional `parent` run id. For sub-agent invocations, child events have `parent = Some(parent_run_id)`, so consumers can tell parent and child output apart. See [`examples/agent_as_tool.rs`](examples/agent_as_tool.rs) for a worked example.
+Each `RunEvent` carries a `run_id` (unique per run) so you can identify which execution produced a given event. For nested child agent executions, the child run is driven and fully encapsulated internally by `AgentTool` (yielding a single flat tool response back to the parent runner), ensuring that child events do not pollute the parent's event stream. For an example of agent composition, see [`examples/agent_as_tool.rs`](examples/agent_as_tool.rs).
 
 ### Agent composition
 
-Wrap an `AgentRunner` + `Agent` pair as an `AgentTool` and register it with a parent runner via `ToolRegistry::register_agent`. The parent model invokes the child agent as if it were a regular tool, and the child's events are forwarded through the parent stream.
+Wrap an `AgentRunner` + `Agent` pair as an `AgentTool` and register it with a parent runner via the standard `ToolRegistry::register` method. The parent model invokes the child agent as if it were a regular tool. The child's run is driven and fully encapsulated internally within `AgentTool::apply`, yielding a single flat text response back to the parent model.
 
 ```rust
 use std::sync::Arc;
-use agent_rig::{Agent};
+use agent_rig::Agent;
 use agent_rig::runner::AgentRunner;
 use agent_rig::tools::{AgentTool, ToolDefinition, ToolRegistry};
 use serde_json::json;
@@ -343,9 +420,9 @@ let summarise_tool = AgentTool::new(
     child_runner,
 );
 
-// Parent runner
-let registry = Arc::new(ToolRegistry::new().register_agent(summarise_tool));
-let parent_runner = AgentRunner::with_registry(Arc::new(parent_model), registry);
+// Parent runner setup
+let registry = ToolRegistry::new().register(summarise_tool);
+let parent_runner = AgentRunner::with_tools(Arc::new(parent_model), registry.definitions());
 
 let parent_agent = Agent::builder()
     .name("Orchestrator")
@@ -395,29 +472,28 @@ let model = OllamaModel::builder("http://localhost:11434", "llama3.2")
 graph TD
     AR[AgentRunner] -->|spawns task, yields events| A[Agent<br/><i>pure blueprint</i>]
     AR -->|holds| LM[LlmModel<br/><i>Arc&lt;dyn&gt;</i>]
-    AR -->|holds| TR[ToolRegistry<br/><i>Arc</i>]
+    AR -->|holds| TD[ToolDefinitions<br/><i>Vec&lt;ToolDefinition&gt;</i>]
     LM -->|implements| GM[GeminiModel]
     LM -->|implements| OM[OllamaModel]
     LM -->|implements| MORE[more providers…]
 ```
 
-`Agent` is a pure data blueprint with no model reference — it holds the name, instructions, optional output schema, and the list of tool names the agent may use. `AgentRunner` owns an `Arc<dyn LlmModel>` and a `ToolRegistry`. The runner is cheap to `Clone` (internals are behind `Arc`) so a single runner can be shared across tasks.
+`Agent` is a pure data blueprint with no model reference — it holds the name, instructions, optional output schema, and the list of tool names the agent may use. `AgentRunner` owns an `Arc<dyn LlmModel>` and a list of tool definitions. The runner is cheap to `Clone` (internals are `Arc`) so a single runner can be shared across tasks.
 
 ### Core Types
 
 | Type | Description |
 |------|-------------|
-| `Agent` / `AgentBuilder` | Serializable agent definition (name, instructions, tools, output schema) |
-| `AgentRunner` | Execution engine; owns the model, tool registry, and optional auth manager |
+| `Agent` / `AgentBuilder` | Serializable agent blueprint (name, instructions, allowed tools, output schema) |
+| `AgentRunner` | Execution engine; owns the model and the list of allowed tool definitions |
 | `LlmModel` | Async trait that provider adapters implement (`generate`, `generate_stream`) |
-| `Message` / `MessageContent` | Conversation history elements (`Text`, `ToolCalls`, `ToolResult`) |
-| `Tool` / `ToolDefinition` | Async trait for callable tools; JSON Schema parameters |
-| `ToolRegistry` | Registry of `Tool` and `AgentTool` entries, keyed by name |
-| `AgentTool` | Wraps an `AgentRunner` + `Agent` as a tool for agent composition |
-| `ApprovalRequest` | Approval gate carried on the event stream; tools opt in via `Tool::requires_approval` |
-| `AgentEvent` | Stream event: `TextDelta`, `ThinkingDelta`, `ToolCallStart`, `ToolCallFinish`, `ApprovalRequest`, `Error` |
-| `RunEvent` | `AgentEvent` tagged with `run_id` and optional `parent` run id (for sub-agent invocations) |
-| `ToolCallResult` | Outcome of a tool call: `Ok(Value)`, `Err(Error)`, `Denied`, `Unknown` |
+| `Message` / `MessageContent` | Conversation history elements. `MessageContent` is either `Text`, `ToolCalls(Vec<Arc<ToolCall>>)`, or `ToolResult` |
+| `Tool` / `ToolDefinition` | Async trait for callable tools; declares name, description, and parameter JSON Schema |
+| `ToolRegistry` | Client-side registry of `Tool` and `AgentTool` implementations, used to resolve tool calls |
+| `AgentTool` | Wraps an `AgentRunner` + `Agent` as a standard `Tool` for nesting and composition |
+| `AgentEvent` | Stream event: `TurnStart`, `ThinkingDelta`, `TextDelta`, `ToolCall`, `Usage`, `TurnFinish`, `Cancelled`, `Error` |
+| `RunEvent` | An `AgentEvent` tagged with the unique `run_id` of the run that produced it |
+| `ToolCallResult` | Auxiliary outcome status of a tool call: `Ok(Value)`, `Err(Error)`, `Denied`, `Unknown` |
 | `Error` | `Provider(String)` or `Agent(String)` |
 
 ### Custom providers

@@ -68,10 +68,10 @@ impl RunEmitter {
     }
 }
 
-/// Drives an agent against an [`LlmModel`] and a [`ToolRegistry`].
+/// Drives an agent against an [`LlmModel`] and a set of [`ToolDefinition`]s.
 ///
 /// Construct one with [`AgentRunner::new`] (no tools) or
-/// [`AgentRunner::with_registry`] (with tools). Call [`AgentRunner::run`] to
+/// [`AgentRunner::with_tools`] (with tools). Call [`AgentRunner::run`] to
 /// start the agentic loop and consume the returned stream until it ends.
 ///
 /// `AgentRunner` is cheap to clone — internals are behind [`Arc`] — so a
