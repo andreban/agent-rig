@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Combines streaming, tool calls, thinking events, and structured output on
-//! top of [`MpscRunner`].
+//! top of [`AgentRunner`].
 //!
 //! The agent is asked about temperatures in several cities. It must call the
 //! `get_temperature` tool for each city, then respond with a structured JSON
@@ -10,8 +10,7 @@
 //!
 //! Every event is printed as it arrives:
 //! - `ThinkingDelta`      — dim grey reasoning tokens
-//! - `ToolCallStart`      — printed before the tool runs
-//! - `ToolCallFinish`     — printed after the tool returns
+//! - `ToolCall`           — the consumer runs the tool and resolves the call
 //! - `TextDelta`          — the (JSON) answer arriving incrementally
 //!
 //! After the stream ends, the accumulated text is deserialized into
@@ -24,7 +23,7 @@
 
 use std::sync::Arc;
 
-use agent_rig::model::Message;
+use agent_rig::model::{Message, ToolCall};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
@@ -34,7 +33,7 @@ use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use schemars::JsonSchema;
 use schemars::json_schema;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -86,8 +85,8 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
-        let city = args["city"].as_str().unwrap_or("unknown");
+    async fn call(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+        let city = tool_call.args["city"].as_str().unwrap_or("unknown");
         let celsius = match city.to_lowercase().as_str() {
             "london" => 12.0,
             "tokyo" => 27.0,
@@ -163,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 };
                 let result = tool
-                    .apply(call.details.args.clone(), call.cancellation_token.clone())
+                    .call(call.details.clone(), call.cancellation_token.clone())
                     .await;
                 call.resolve(result);
             }

@@ -269,7 +269,7 @@ fn build_chat_request(
                     .collect(),
             },
             MessageContent::ToolResult { result, .. } => {
-                OllamaMessage::tool_response(&result).map_err(|e| Error::Provider(e.to_string()))?
+                OllamaMessage::tool_response(result).map_err(|e| Error::Provider(e.to_string()))?
             }
         };
         messages.push(ollama_msg);

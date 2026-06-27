@@ -22,14 +22,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use agent_rig::model::Message;
+use agent_rig::model::{Message, ToolCall};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use schemars::json_schema;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
@@ -72,8 +72,8 @@ impl Tool for RememberFactTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
-        let fact = match args.get("fact") {
+    async fn call(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+        let fact = match tool_call.args.get("fact") {
             Some(fact) => fact,
             None => return ToolResult::error("missing 'fact' argument"),
         };
@@ -126,8 +126,8 @@ impl Tool for RecallFactTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
-        let query = match args.get("query") {
+    async fn call(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+        let query = match tool_call.args.get("query") {
             Some(query) => query.to_string().to_lowercase(),
             None => return ToolResult::error("missing 'query' argument"),
         };
@@ -166,7 +166,7 @@ async fn run_once(
             AgentEvent::ToolCall(call) => {
                 let result = match registry.get(&call.details.name) {
                     Some(tool) => {
-                        tool.apply(call.details.args.clone(), call.cancellation_token.clone())
+                        tool.call(call.details.clone(), call.cancellation_token.clone())
                             .await
                     }
                     None => ToolResult::error("Unknown tool"),

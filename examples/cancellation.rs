@@ -20,14 +20,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_rig::model::Message;
+use agent_rig::model::{Message, ToolCall};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use schemars::json_schema;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
@@ -64,8 +64,8 @@ impl Tool for SlowUploadTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, cancel: CancellationToken) -> ToolResult {
-        let path = args["path"].as_str().unwrap_or("unknown");
+    async fn call(&self, tool_call: Arc<ToolCall>, cancel: CancellationToken) -> ToolResult {
+        let path = tool_call.args["path"].as_str().unwrap_or("unknown");
         println!("[tool]  upload({path}) starting (5s)…");
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -108,7 +108,7 @@ where
                 );
                 let result = match registry.get(&call.details.name) {
                     Some(tool) => {
-                        tool.apply(call.details.args.clone(), call.cancellation_token.clone())
+                        tool.call(call.details.clone(), call.cancellation_token.clone())
                             .await
                     }
                     None => ToolResult::error("Unknown tool"),

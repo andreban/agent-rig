@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use schemars::{JsonSchema, json_schema};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 struct AddTool {
@@ -44,9 +44,9 @@ impl Tool for AddTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
-        let a = args["a"].as_i64().unwrap_or(0);
-        let b = args["b"].as_i64().unwrap_or(0);
+    async fn call(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+        let a = tool_call.args["a"].as_i64().unwrap_or(0);
+        let b = tool_call.args["b"].as_i64().unwrap_or(0);
         ToolResult::ok(json!({ "result": a + b }))
     }
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Demonstrates streaming with tool calls and thinking events on top of
-//! [`MpscRunner`].
+//! [`AgentRunner`].
 //!
 //! Run with:
 //! ```text
@@ -12,15 +12,15 @@
 //! The example wires up a calculator agent that must use an `add` tool to
 //! answer the question. Every event is printed as it happens:
 //!
-//! - `ToolCallStart` / `ToolCallFinish` — printed when the agent invokes
-//!   the tool.
+//! - `ToolCall` — printed when the agent invokes the tool; the consumer runs
+//!   it and resolves the call.
 //! - `TextDelta` — printed incrementally as the model generates its answer.
 //! - `ThinkingDelta` — printed if the model emits reasoning tokens (requires
 //!   extended thinking enabled and a provider with native streaming).
 
 use std::sync::Arc;
 
-use agent_rig::model::Message;
+use agent_rig::model::{Message, ToolCall};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use schemars::json_schema;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
@@ -63,9 +63,9 @@ impl Tool for AddTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
-        let a = args["a"].as_i64().unwrap_or(0);
-        let b = args["b"].as_i64().unwrap_or(0);
+    async fn call(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+        let a = tool_call.args["a"].as_i64().unwrap_or(0);
+        let b = tool_call.args["b"].as_i64().unwrap_or(0);
         println!("[tool]  add({a}, {b}) = {}", a + b);
         ToolResult::ok(json!({ "result": a + b }))
     }
@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 let result = tool
-                    .apply(call.details.args.clone(), call.cancellation_token.clone())
+                    .call(call.details.clone(), call.cancellation_token.clone())
                     .await;
                 println!(
                     "[runner] tool call finished: {} → {result}",

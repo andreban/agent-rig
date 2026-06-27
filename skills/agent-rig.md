@@ -3,7 +3,7 @@ name: agent-rig
 description: >
   Guide and write code using the `agent-rig` library — a provider-agnostic AI agent toolkit for Rust.
   Use this skill whenever the user is writing, reading, debugging, or extending code that involves
-  `agent_rig`, `AgentRunner`, `Agent`, `LlmModel`, `ToolRegistry`, `AgentTool`, `ApprovalRequest`,
+  `agent_rig`, `AgentRunner`, `Agent`, `LlmModel`, `ToolRegistry`, `AgentTool`, `Tool`,
   `GeminiModel`, `OllamaModel`, or any type from this crate. Also trigger when the user asks how to
   add a new LLM provider, implement a custom tool, wire up multi-turn conversations, stream agent
   output, gate tool calls behind user approval, or use structured output in the context of this
@@ -157,11 +157,11 @@ To give your agent callable functions, implement the `Tool` trait, register it i
 ```rust
 use std::sync::Arc;
 use async_trait::async_trait;
-use agent_rig::{Agent, model::Message, models::gemini::GeminiModel,
+use agent_rig::{Agent, model::{Message, ToolCall}, models::gemini::GeminiModel,
     runner::{AgentEvent, AgentRunner},
     tools::{Tool, ToolDefinition, ToolRegistry, ToolResult}};
 use futures_util::StreamExt;
-use serde_json::{Value, json};
+use serde_json::json;
 
 struct GetWeatherTool {
     definition: ToolDefinition,
@@ -191,12 +191,12 @@ impl Tool for GetWeatherTool {
         &self.definition
     }
 
-    async fn apply(
+    async fn call(
         &self,
-        proposal: Value,
+        tool_call: Arc<ToolCall>,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> ToolResult {
-        let city = proposal["city"].as_str().unwrap_or("unknown");
+        let city = tool_call.args["city"].as_str().unwrap_or("unknown");
         ToolResult::ok(json!({ "city": city, "celsius": 22.0 }))
     }
 }
@@ -227,8 +227,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tool_call.resolve(ToolResult::error("Unknown tool"));
                     continue;
                 };
-                let result = tool.apply(
-                    tool_call.details.args.clone(),
+                let result = tool.call(
+                    tool_call.details.clone(),
                     tool_call.cancellation_token.clone()
                 ).await;
                 println!("[done]  {} → {result}", tool_call.details.name);
@@ -251,11 +251,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   declares — so a missing registration silently does nothing.)
 - Multiple tool calls in a single model turn are executed **concurrently** via `futures_util::future::join_all`.
   `join_all` preserves input order, so the tool-result messages are appended to the thread in the
-  same order the model issued them — even though `ToolCallStarted` / `ToolCallFinished` events may
-  interleave.
-- A `ToolCallResult::Unknown` outcome is generated for hallucinated tool names (no matching
-  registry entry); no `ToolCallStarted` is emitted, but a synthetic result message is appended so
-  the assistant turn and tool-result messages stay paired.
+  same order the model issued them — even though the `AgentEvent::ToolCall` events for parallel
+  calls may interleave.
+- For a hallucinated tool name (no matching registry entry) the `AgentEvent::ToolCall` is still
+  emitted; the consumer resolves it with an error (e.g. via `ToolCallResult::Unknown`) so a
+  synthetic result message keeps the assistant turn and tool-result messages paired.
 - `ToolRegistry` is shared via `Arc` so a single registry can be reused across runners.
 
 ---
@@ -298,46 +298,35 @@ while let Some(event) = stream.next().await {
 
 ## Authorization (Gating Tool Calls)
 
-Because tool execution is resolved by the client, gating tool calls behind user approval is highly straightforward. You can orchestrate a two-phase execution flow (`Tool::propose` followed by `Tool::apply`) directly in your event loop:
+Because tool execution is resolved by the client, gating tool calls behind user approval is highly straightforward — and it's purely a consumer concern. Whether a call needs confirmation is your policy, applied in the event loop before you invoke `Tool::call`; the `Tool` contract carries no approval hook:
 
-1. **Propose**: Call `tool.propose(...)` to resolve the raw arguments into a *proposal* — a side-effect-free description of what will happen (e.g., an edit tool reading the file and returning a diff).
-2. **Prompt**: Show this proposal/diff to the user and prompt for confirmation.
-3. **Apply**: If approved, call `tool.apply(...)` with the proposal and resolve the call. If denied, resolve the call with a soft error.
+1. **Decide**: Using your own policy (tool name, argument inspection, a config allowlist, …), decide whether this call needs confirmation.
+2. **Prompt**: If so, preview the call's arguments to the user and prompt for confirmation.
+3. **Call**: If approved (or no approval is needed), call `tool.call(...)` and resolve. If denied, resolve with a soft error.
 
 ```rust
 use std::sync::Arc;
+use agent_rig::model::ToolCall;
 use agent_rig::tools::{Tool, ToolDefinition, ToolResult};
-use serde_json::Value;
 
 struct SendEmailTool { definition: ToolDefinition }
 
 impl Tool for SendEmailTool {
     fn definition(&self) -> &ToolDefinition { &self.definition }
 
-    fn requires_approval(&self, _args: &Value) -> bool {
-        true  // always prompt before sending
-    }
-
-    async fn propose(
+    async fn call(
         &self,
-        tool_call: Arc<crate::model::ToolCall>,
+        tool_call: Arc<ToolCall>,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> ToolResult {
-        ToolResult::ok(json!({
-            "to": tool_call.args["to"],
-            "preview": format!("Subject: {}\n\n{}", tool_call.args["subject"], tool_call.args["body"])
-        }))
-    }
-
-    async fn apply(
-        &self,
-        proposal: Value,
-        _cancel: tokio_util::sync::CancellationToken,
-    ) -> ToolResult {
-        // Only reached after the user approves
-        ToolResult::ok(json!({ "status": "sent" }))
+        // Only reached after the consumer approves
+        let to = tool_call.args["to"].as_str().unwrap_or("");
+        ToolResult::ok(json!({ "status": "sent", "to": to }))
     }
 }
+
+/// Tool names this client gates behind a confirmation prompt.
+const TOOLS_NEEDING_APPROVAL: &[&str] = &["send_email"];
 ```
 
 In your event loop, orchestrate the approval logic like this:
@@ -349,32 +338,20 @@ AgentEvent::ToolCall(tool_call) => {
         continue;
     };
 
-    // 1. Generate the proposal
-    let proposal = tool.propose(
-        tool_call.details.clone(),
-        tool_call.cancellation_token.clone()
-    ).await;
-
-    let ToolResult::Ok(proposal_val) = proposal else {
-        tool_call.resolve(proposal); // propose failed, resolve immediately
-        continue;
-    };
-
-    // 2. Check if approval is needed and prompt the user
-    let approved = if tool.requires_approval(&tool_call.details.args) {
-        let preview = proposal_val["preview"].as_str().unwrap_or("");
-        prompt_user_for_email_send(preview) // your custom UI prompt logic
-    } else {
-        true
-    };
-
-    if !approved {
-        tool_call.resolve(ToolResult::error("User rejected approval"));
-        continue;
+    // 1. Apply your approval policy and prompt the user if needed
+    if TOOLS_NEEDING_APPROVAL.contains(&tool_call.details.name.as_str()) {
+        let approved = prompt_user_for_email_send(&tool_call.details.args); // your UI
+        if !approved {
+            tool_call.resolve(ToolResult::error("User rejected approval"));
+            continue;
+        }
     }
 
-    // 3. Apply the approved proposal
-    let result = tool.apply(proposal_val, tool_call.cancellation_token.clone()).await;
+    // 2. Run the (authorized) tool and resolve the call
+    let result = tool.call(
+        tool_call.details.clone(),
+        tool_call.cancellation_token.clone(),
+    ).await;
     tool_call.resolve(result);
 }
 ```
@@ -416,9 +393,9 @@ let mut stream = runner.run_with_cancellation(&agent, thread, cancel.clone());
 //   });
 ```
 
-Both `Tool::propose` and `Tool::apply` receive the cancel token; long-running tools
+`Tool::call` receives the cancel token; long-running tools
 should `select!` on it or pass it down to the libraries they call. Tools that ignore it
-still terminate the run correctly — the runner races each phase against `cancel` — but their
+still terminate the run correctly — the runner races each call against `cancel` — but their
 side effects may continue in the background until they finish on their own.
 
 A cancelled run emits a terminal `AgentEvent::Cancelled` before the stream ends.
@@ -475,7 +452,7 @@ let plan: ResearchPlan = serde_json::from_str(&output)?;
 
 ## Agent Composition (`AgentTool`)
 
-Wrap an `AgentRunner` + `Agent` pair as an `AgentTool` and register it with a parent runner using the standard `ToolRegistry::register` method. The parent model invokes the child agent as if it were a regular tool. The child's run is driven and fully encapsulated internally within `AgentTool::apply`, yielding a single flat text response back to the parent model.
+Wrap an `AgentRunner` + `Agent` pair as an `AgentTool` and register it with a parent runner using the standard `ToolRegistry::register` method. The parent model invokes the child agent as if it were a regular tool. The child's run is driven and fully encapsulated internally within `AgentTool::call`, yielding a single flat text response back to the parent model.
 
 ```rust
 use std::sync::Arc;
@@ -528,8 +505,8 @@ while let Some(event) = stream.next().await {
 **Notes:**
 
 - `AgentTool` **owns** its `AgentRunner` (not a shared reference). Each child has its own model
-  binding. Multiple concurrent `apply` invocations are safe.
-- Internally, `AgentTool::apply` serialises the proposal JSON to a string and passes it as the
+  binding. Multiple concurrent `call` invocations are safe.
+- Internally, `AgentTool::call` serialises the call's `args` JSON to a string and passes it as the
   child's user message. The child's `TextDelta` chunks are accumulated; the tool result returned to
   the parent model is the raw accumulated string (returned as `ToolResult::Ok`).
 - Child agents can have their own tools and even their own sub-agents. Nesting is unlimited.

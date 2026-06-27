@@ -40,7 +40,7 @@ use crate::tools::tool::{Tool, ToolDefinition};
 /// #     fn definition(&self) -> &ToolDefinition {
 /// #         &self.definition
 /// #     }
-/// #     async fn apply(&self, _: serde_json::Value,  _: tokio_util::sync::CancellationToken)
+/// #     async fn call(&self, _: std::sync::Arc<agent_rig::model::ToolCall>, _: tokio_util::sync::CancellationToken)
 /// #         -> ToolResult { ToolResult::ok(serde_json::json!({})) }
 /// # }
 /// let registry = Arc::new(
@@ -102,10 +102,11 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{error::Error, tools::tool::ToolResult};
+    use crate::{error::Error, model::ToolCall, tools::tool::ToolResult};
     use async_trait::async_trait;
     use schemars::json_schema;
-    use serde_json::{Value, json};
+    use serde_json::json;
+    use std::sync::Arc;
 
     struct StubTool {
         definition: ToolDefinition,
@@ -117,9 +118,9 @@ mod tests {
             &self.definition
         }
 
-        async fn apply(
+        async fn call(
             &self,
-            _proposal: Value,
+            _tool_call: Arc<ToolCall>,
             _cancel: tokio_util::sync::CancellationToken,
         ) -> ToolResult {
             ToolResult::Ok(json!({}))

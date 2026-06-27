@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let tool_name = call.details.name.clone();
                 let result = match registry.get(&call.details.name) {
                     Some(tool) => tool
-                        .apply(call.details.args.clone(), call.cancellation_token.clone())
+                        .call(call.details.clone(), call.cancellation_token.clone())
                         .await
                         .into(),
                     None => Value::from("Unknown tool"),
