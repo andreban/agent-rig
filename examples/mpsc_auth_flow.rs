@@ -1,12 +1,15 @@
 // Copyright 2026 Andre Cipriani Bandarra
 // SPDX-License-Identifier: Apache-2.0
 
-//! Demonstrates the per-tool approval flow via [`Tool::requires_approval`].
+//! Demonstrates a consumer-side approval flow.
 //!
-//! [`SendEmailTool`] overrides `requires_approval` to return `true`, so the
-//! runner emits an [`AgentEvent::ApprovalRequest`] on the event stream before
-//! the tool runs. The consumer handles that event on a separate task (the
-//! "auth loop") and prompts the user on stdin for a y/N decision.
+//! Whether a tool call needs approval is the consumer's policy, applied in the
+//! event loop — not something the tool's contract advertises. Here the client
+//! keeps a small allowlist ([`TOOLS_NEEDING_APPROVAL`]); when an
+//! [`AgentEvent::ToolCall`] names a gated tool, it previews the call arguments
+//! and prompts the user on stdin for a y/N decision before invoking
+//! [`Tool::call`]. Denying resolves the call with a soft error instead of
+//! running the tool.
 //!
 //! Run with:
 //! ```bash
@@ -60,31 +63,26 @@ impl Tool for SendEmailTool {
         &self.definition
     }
 
-    fn requires_approval(&self, _args: &Value) -> bool {
-        true
-    }
-
-    /// Resolves the raw args into a proposal carrying a `preview` string the
-    /// authorization prompt can show. The other fields are passed through so
-    /// `apply` still has everything it needs.
-    async fn propose(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+    async fn call(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
         let to = tool_call.args["to"].as_str().unwrap_or("");
         let subject = tool_call.args["subject"].as_str().unwrap_or("");
-        let body = tool_call.args["body"].as_str().unwrap_or("");
-        ToolResult::ok(json!({
-            "to": to,
-            "subject": subject,
-            "body": body,
-            "preview": format!("To: {to}\n  Subject: {subject}\n  {body}"),
-        }))
-    }
-
-    async fn apply(&self, proposal: Value, _cancel: CancellationToken) -> ToolResult {
-        let to = proposal["to"].as_str().unwrap_or("");
-        let subject = proposal["subject"].as_str().unwrap_or("");
         println!("[tool]  pretending to send email to {to} (subject: {subject:?})");
         ToolResult::ok(json!({ "status": "sent", "to": to }))
     }
+}
+
+/// Tool names this client gates behind a confirmation prompt. In a real app
+/// this might come from configuration, a policy engine, or a tool category —
+/// the point is that it lives with the consumer, not the tool.
+const TOOLS_NEEDING_APPROVAL: &[&str] = &["send_email"];
+
+/// Renders the `send_email` arguments as a short, human-readable preview for
+/// the approval prompt.
+fn email_preview(args: &Value) -> String {
+    let to = args["to"].as_str().unwrap_or("");
+    let subject = args["subject"].as_str().unwrap_or("");
+    let body = args["body"].as_str().unwrap_or("");
+    format!("To: {to}\n  Subject: {subject}\n  {body}")
 }
 
 #[tokio::main]
@@ -133,47 +131,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 };
 
-                let proposal = tool
-                    .propose(
-                        tool_call.details.clone(),
-                        tool_call.cancellation_token.clone(),
-                    )
-                    .await;
+                // Gate execution on the client's own approval policy. For a
+                // gated tool, show a preview of the raw call arguments and
+                // prompt before invoking it.
+                if TOOLS_NEEDING_APPROVAL.contains(&tool_call.details.name.as_str()) {
+                    println!(
+                        "\n[auth]  Tool '{}' (id {}) wants to run:",
+                        tool_call.details.name, tool_call.details.id
+                    );
+                    println!("[auth]    {}", email_preview(&tool_call.details.args));
+                    print!("[auth]  Approve? [y/N]: ");
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
 
-                let ToolResult::Ok(proposal) = proposal else {
-                    tool_call.resolve(proposal);
-                    continue;
-                };
+                    let mut line = String::new();
+                    let mut stdin = BufReader::new(tokio::io::stdin());
 
-                // The tool resolved the call into a proposal; show its human-readable
-                // `preview` rather than the raw args.
-                let preview = proposal["preview"].as_str().unwrap_or("(no preview)");
-                println!(
-                    "\n[auth]  Tool '{}' (id {}) wants to run:",
-                    tool_call.details.name, tool_call.details.id
-                );
-                println!("[auth]    {preview}");
-                print!("[auth]  Approve? [y/N]: ");
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
+                    if let Err(e) = stdin.read_line(&mut line).await {
+                        eprintln!("[auth]  stdin error: {e}");
+                        tool_call.resolve(Value::from("Tool call authorization failed."));
+                        continue;
+                    };
 
-                let mut line = String::new();
-                let mut stdin = BufReader::new(tokio::io::stdin());
-
-                if let Err(e) = stdin.read_line(&mut line).await {
-                    eprintln!("[auth]  stdin error: {e}");
-                    tool_call.resolve(Value::from("Tool call authorization failed."));
-                    continue;
-                };
-
-                let result = matches!(line.trim().to_lowercase().as_str(), "y" | "yes");
-                if !result {
-                    tool_call.resolve(Value::from("User rejected approval of the tool call"));
-                    continue;
+                    let approved = matches!(line.trim().to_lowercase().as_str(), "y" | "yes");
+                    if !approved {
+                        tool_call.resolve(Value::from("User rejected approval of the tool call"));
+                        continue;
+                    }
                 }
 
                 let result = tool
-                    .apply(proposal, tool_call.cancellation_token.clone())
+                    .call(tool_call.details.clone(), tool_call.cancellation_token.clone())
                     .await;
 
                 tool_call.resolve(result);

@@ -4,14 +4,14 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use agent_rig::model::Message;
+use agent_rig::model::{Message, ToolCall};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use schemars::json_schema;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
@@ -49,8 +49,8 @@ impl Tool for GetTemperatureTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
-        let city = args["city"].as_str().unwrap_or("unknown").to_string();
+    async fn call(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+        let city = tool_call.args["city"].as_str().unwrap_or("unknown").to_string();
 
         // Simulate a 500 ms network round-trip.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -113,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 let result = tool
-                    .apply(call.details.args.clone(), call.cancellation_token.clone())
+                    .call(call.details.clone(), call.cancellation_token.clone())
                     .await;
 
                 println!(

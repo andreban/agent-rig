@@ -15,7 +15,7 @@ Building agentic applications in Rust today requires tight coupling to a specifi
 - **Agentic loop support.** The runner handles the request/response loop, including function-calling (tool use) cycles, with concurrent execution of tool calls issued in the same turn.
 - **Agent composition.** An agent can be used as a tool by another agent, enabling hierarchical multi-agent pipelines where a parent agent delegates sub-tasks to specialized child agents.
 - **Streaming observability.** The runner exposes an event stream (`RunEvent`/`AgentEvent`) so callers can render text deltas, reasoning tokens, and tool-call lifecycle as they happen. Nested sub-agent runs are tagged with their `run_id`/`parent` so events can be told apart.
-- **Per-tool approval.** Tool execution can be gated per tool via `Tool::requires_approval` so applications can require user approval (or any other policy) for sensitive calls.
+- **Client-side approval.** Because tool execution is resolved by the consumer, applications can gate individual tool calls behind user approval (or any other policy) in their event loop before invoking `Tool::call`.
 - **Serializable agents.** `Agent` is serializable to and deserializable from formats like JSON or YAML (tool *names* only; the corresponding `Tool` implementations live in the runner's `ToolRegistry` and are resolved at runtime).
 - **Stateless runner / explicit history.** Each `AgentRunner::run` call takes the conversation thread by value, so callers retain full control of history — useful for implementing compression, trimming, or synthetic-message injection.
 - **Low boilerplate.** Builder patterns for all major types keep call-site code concise and readable.

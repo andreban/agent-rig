@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use agent_rig::error::Error;
-use agent_rig::model::{LlmModel, Message, ModelRequest};
+use agent_rig::model::{LlmModel, Message, ModelRequest, ToolCall};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::ollama::OllamaModel};
@@ -44,9 +44,9 @@ impl Tool for AddTool {
         &self.definition
     }
 
-    async fn apply(&self, args: Value, _cancel: CancellationToken) -> ToolResult {
-        let a = args["a"].as_i64().unwrap_or(0);
-        let b = args["b"].as_i64().unwrap_or(0);
+    async fn call(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+        let a = tool_call.args["a"].as_i64().unwrap_or(0);
+        let b = tool_call.args["b"].as_i64().unwrap_or(0);
         ToolResult::ok(json!({ "result": a + b }))
     }
 }

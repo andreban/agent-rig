@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::{
     agent::Agent,
-    model::Message,
+    model::{Message, ToolCall},
     runner::{AgentEvent, AgentRunner},
     tools::{
         Tool,
@@ -58,21 +59,20 @@ impl Tool for AgentTool {
         &self.definition
     }
 
-    /// Invokes the child agent with the proposal and consumes its event stream.
-    ///
-    /// `proposal` is the resolved tool-call JSON (the default
-    /// [`Tool::propose`] passes the model's arguments through unchanged); it is
-    /// serialized to JSON and passed as the user message of the new run. The
-    /// child run is consumed internally and its accumulated text is returned as
-    /// the tool result; the child's events are not forwarded to the parent
+    /// Invokes the child agent with the call's arguments and consumes its event
     /// stream.
+    ///
+    /// The model's `tool_call.args` are serialized to JSON and passed as the
+    /// user message of the new run. The child run is consumed internally and
+    /// its accumulated text is returned as the tool result; the child's events
+    /// are not forwarded to the parent stream.
     ///
     /// `cancel` is propagated into the child run via
     /// [`AgentRunner::run_with_cancellation`], so cancelling the parent run
     /// cancels every nested agent in the tree.
-    #[instrument(skip(self, proposal, cancel), fields(tool = self.definition.name))]
-    async fn apply(&self, proposal: Value, cancel: CancellationToken) -> ToolResult {
-        let input = match serde_json::to_string(&proposal) {
+    #[instrument(skip(self, tool_call, cancel), fields(tool = self.definition.name))]
+    async fn call(&self, tool_call: Arc<ToolCall>, cancel: CancellationToken) -> ToolResult {
+        let input = match serde_json::to_string(&tool_call.args) {
             Ok(input) => input,
             Err(e) => return ToolResult::Err(e.to_string().into()),
         };

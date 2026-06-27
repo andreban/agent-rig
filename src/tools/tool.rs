@@ -108,10 +108,12 @@ impl Display for ToolResult {
 /// # Examples
 ///
 /// ```no_run
+/// use std::sync::Arc;
 /// use async_trait::async_trait;
+/// use agent_rig::model::ToolCall;
 /// use agent_rig::tools::{Tool, ToolDefinition, ToolResult};
 /// use schemars::json_schema;
-/// use serde_json::{Value, json};
+/// use serde_json::json;
 /// use tokio_util::sync::CancellationToken;
 ///
 /// struct EchoTool {
@@ -136,14 +138,12 @@ impl Display for ToolResult {
 ///         &self.definition
 ///     }
 ///
-///     // `propose` is left as the default (it returns the args unchanged), so
-///     // only `apply` needs implementing.
-///     async fn apply(
+///     async fn call(
 ///         &self,
-///         proposal: Value,
+///         tool_call: Arc<ToolCall>,
 ///         _cancel: CancellationToken,
 ///     ) -> ToolResult {
-///         ToolResult::ok(json!({ "echo": proposal }))
+///         ToolResult::ok(json!({ "echo": tool_call.args.clone() }))
 ///     }
 /// }
 /// ```
@@ -162,64 +162,19 @@ pub trait Tool: Send + Sync {
         self.definition().name.clone()
     }
 
-    /// Returns `true` if this tool call requires the consumer's approval before it runs.
+    /// Executes the tool call and returns the result sent back to the model.
     ///
-    /// When `true`, the stream consumer can choose to intercept the tool call in their
-    /// event loop and prompt the user for confirmation before executing `apply`.
-    ///
-    /// `args` are the raw model-supplied arguments; inspect them to make the gate
-    /// conditional on argument content.
-    ///
-    /// The default returns `false` — calls run without prompting the consumer. Override
-    /// and return `true` for any tool that should present a confirmation prompt before
-    /// executing.
-    ///
-    /// Must be non-blocking — no I/O, no locks, no awaits.
-    fn requires_approval(&self, _args: &Value) -> bool {
-        false
-    }
-
-    /// Plans the call without committing side effects, returning a *proposal*:
-    /// a JSON value that both the approval prompt and [`apply`](Tool::apply) read from.
-    ///
-    /// A tool call runs in two phases. `propose` resolves the model's raw
-    /// `args` into the concrete thing that will happen — for an edit tool, it
-    /// reads the file and computes the new contents, returning something like
-    /// `{ "path": …, "old_text": …, "new_text": … }`. The consumer can generate this
-    /// proposal in their event loop (and show a preview or diff to the user), and if
-    /// approved hands the *same* value to `apply` (which writes `new_text`).
-    /// Because one value drives both, what the approver sees and what executes
-    /// can never drift apart.
-    ///
-    /// `propose` runs on **every** call — before authorization, and even when
-    /// no authorization is required — because its result is what `apply`
-    /// consumes. It must therefore be **side-effect-free**: it may read
-    /// (resolve a path, compute a diff, expand a command), but it must not
-    /// mutate. Returning `Err` aborts the call before authorization is ever
-    /// requested and surfaces the error to the model.
-    ///
-    /// Although both arms are a [`ToolResult`], they flow to different places.
-    /// An [`Ok`](ToolResult::Ok) holds the *proposal* and must be handed to
-    /// [`apply`](Tool::apply); only an [`Err`](ToolResult::Err) is resolved
-    /// back to the model. Do not resolve an `Ok` proposal to the model
-    /// directly — that would report the raw args as if the tool had already
+    /// `tool_call` carries the model-supplied [`id`](ToolCall::id),
+    /// [`name`](ToolCall::name), and [`args`](ToolCall::args). Deserialize
+    /// `tool_call.args` into whatever parameters the tool expects; returning a
+    /// [`ToolResult::Err`] on malformed input is fine — a soft error is sent to
+    /// the model as data so it can react, not a hard failure that aborts the
     /// run.
     ///
-    /// The default returns the `args` unchanged, which is right for any tool
-    /// whose call needs no planning. Override it to resolve `args` into a
-    /// richer proposal.
-    ///
-    /// `cancel` behaves as described on [`apply`](Tool::apply).
-    async fn propose(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
-        ToolResult::Ok(tool_call.args.clone())
-    }
-
-    /// Executes an approved proposal.
-    ///
-    /// `proposal` is the value [`propose`](Tool::propose) returned for this
-    /// call, handed back verbatim once it is authorized; the returned value is
-    /// sent back to the model as the tool result. For the default `propose`,
-    /// `proposal` is just the raw tool-call JSON.
+    /// Gating a call behind user approval is the consumer's concern, handled in
+    /// the event loop before `call` is invoked (see
+    /// [`AgentEvent::ToolCall`](crate::runner::AgentEvent::ToolCall)); a tool
+    /// that reaches `call` may assume it is authorized to run.
     ///
     /// `cancel` fires when the surrounding
     /// [`AgentRunner`](crate::runner::AgentRunner) run is cancelled — either
@@ -231,6 +186,5 @@ pub trait Tool: Send + Sync {
     /// drops the future on cancellation), but any side effects already in
     /// flight may continue in the background until they finish on their
     /// own.
-
-    async fn apply(&self, proposal: Value, cancel: CancellationToken) -> ToolResult;
+    async fn call(&self, tool_call: Arc<ToolCall>, cancel: CancellationToken) -> ToolResult;
 }

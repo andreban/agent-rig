@@ -3,13 +3,22 @@
 
 use super::*;
 use crate::error::Error;
-use crate::model::{LlmModel, MessageContent, ModelRequest, ModelResponse};
+use crate::model::{LlmModel, MessageContent, ModelRequest, ModelResponse, ToolCall};
 use async_trait::async_trait;
 use schemars::json_schema;
 use serde_json::json;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
+
+/// Wraps raw JSON args in an [`Arc<ToolCall>`] for invoking [`AgentTool::call`].
+fn tool_call(args: serde_json::Value) -> Arc<ToolCall> {
+    Arc::new(ToolCall::new(
+        "test-call".to_string(),
+        "child_tool".to_string(),
+        args,
+    ))
+}
 
 /// Minimal scripted [`LlmModel`] returning queued responses and recording
 /// every [`ModelRequest`] it received. Kept local to this test module so
@@ -80,7 +89,7 @@ async fn call_returns_accumulated_text_as_success() {
     let tool = build_agent_tool(model);
 
     let result = tool
-        .apply(json!({"text": "anything"}), CancellationToken::new())
+        .call(tool_call(json!({"text": "anything"})), CancellationToken::new())
         .await;
     let ToolResult::Ok(output) = result else {
         panic!("expected Ok, got {result:?}");
@@ -96,7 +105,7 @@ async fn call_passes_args_as_serialized_json_user_message() {
     let tool = build_agent_tool(model.clone());
 
     let _ = tool
-        .apply(json!({"text": "hello", "n": 42}), CancellationToken::new())
+        .call(tool_call(json!({"text": "hello", "n": 42})), CancellationToken::new())
         .await;
 
     let requests = model.requests();

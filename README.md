@@ -9,7 +9,7 @@ Define your agent once and run it against any supported LLM backend — swap pro
 - **Provider-agnostic API** — same `Agent` + `AgentRunner` code works with Google Gemini, Ollama, or any custom `LlmModel` implementation
 - **Streaming agentic loop** — the runner spawns a background task and yields `AgentEvent`s (text deltas, thinking tokens, tool-call lifecycle) until the model produces a final reply
 - **Concurrent tool execution** — multiple tool calls in a single model turn are executed in parallel; tool-result messages are paired back to the model in request order
-- **Per-tool approval** — override `Tool::requires_approval` to gate individual tool calls (e.g. user approval prompts for destructive actions)
+- **Client-side approval** — gate individual tool calls in your event loop before invoking `Tool::call` (e.g. user approval prompts for destructive actions)
 - **Structured output** — constrain model output to a JSON Schema
 - **Agent composition** — wrap any agent as a `Tool` with `AgentTool` so a parent agent can delegate to child agents
 - **Serializable agents** — `Agent` derives `Serialize`/`Deserialize` for file-based configuration
@@ -160,9 +160,10 @@ To give your agent callable functions, implement the `Tool` trait:
 ```rust
 use std::sync::Arc;
 use async_trait::async_trait;
+use agent_rig::model::ToolCall;
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::runner::AgentRunner;
-use serde_json::{json, Value};
+use serde_json::json;
 
 struct GetWeatherTool {
     definition: ToolDefinition,
@@ -190,14 +191,14 @@ impl Tool for GetWeatherTool {
         &self.definition
     }
 
-    // A call runs in two phases: `propose` resolves the args (the default
-    // passthrough is fine here), then `apply` executes the approved proposal.
-    async fn apply(
+    // `call` receives the whole `ToolCall`; read the model's arguments off
+    // `tool_call.args`.
+    async fn call(
         &self,
-        proposal: Value,
+        tool_call: Arc<ToolCall>,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> ToolResult {
-        let city = proposal["city"].as_str().unwrap_or("unknown");
+        let city = tool_call.args["city"].as_str().unwrap_or("unknown");
         ToolResult::ok(json!({ "city": city, "celsius": 22.0 }))
     }
 }
@@ -231,8 +232,8 @@ while let Some(event) = stream.next().await {
             };
             
             // 2. Execute it
-            let result = tool.apply(
-                tool_call.details.args.clone(),
+            let result = tool.call(
+                tool_call.details.clone(),
                 tool_call.cancellation_token.clone()
             ).await;
             
@@ -252,47 +253,35 @@ while let Some(event) = stream.next().await {
 
 ### Authorization
 
-Because tool execution is resolved by the client, gating tool calls behind user approval is highly straightforward. You can orchestrate a two-phase execution flow (`Tool::propose` followed by `Tool::apply`) directly in your event loop:
+Because tool execution is resolved by the client, gating tool calls behind user approval is highly straightforward — and it's purely a consumer concern. Whether a given call needs confirmation is your policy, applied in the event loop before you invoke `Tool::call`; the `Tool` contract carries no approval hook:
 
-1. **Propose**: Call `tool.propose(...)` to resolve the raw arguments into a *proposal* — a side-effect-free description of what will happen (e.g., an edit tool reading the file and returning a diff).
-2. **Prompt**: Show this proposal/diff to the user and prompt for confirmation.
-3. **Apply**: If approved, call `tool.apply(...)` with the proposal and resolve the call. If denied, resolve the call with a soft error.
+1. **Decide**: Using your own policy (tool name, argument inspection, a config allowlist, …), decide whether this call needs confirmation.
+2. **Prompt**: If so, preview the call's arguments to the user and prompt for confirmation.
+3. **Call**: If approved (or no approval is needed), call `tool.call(...)` and resolve. If denied, resolve with a soft error.
 
 ```rust
 use std::sync::Arc;
+use agent_rig::model::ToolCall;
 use agent_rig::tools::{Tool, ToolDefinition, ToolResult};
-use serde_json::Value;
 
 struct SendEmailTool { /* ... */ }
 
 impl Tool for SendEmailTool {
     fn definition(&self) -> &ToolDefinition { /* ... */ }
 
-    fn requires_approval(&self, _args: &Value) -> bool {
-        true  // indicate to the client that this tool requires approval
-    }
-
-    async fn propose(
+    async fn call(
         &self,
-        tool_call: Arc<crate::model::ToolCall>,
+        tool_call: Arc<ToolCall>,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> ToolResult {
-        // Resolve raw args to a descriptive proposal (e.g., envelope details + body preview)
-        ToolResult::ok(json!({
-            "to": tool_call.args["to"],
-            "preview": format!("Subject: {}\n\n{}", tool_call.args["subject"], tool_call.args["body"])
-        }))
-    }
-
-    async fn apply(
-        &self,
-        proposal: Value,
-        _cancel: tokio_util::sync::CancellationToken,
-    ) -> ToolResult {
-        // executes only after approval
-        ToolResult::ok(json!({ "status": "sent" }))
+        // Reached only after the consumer has approved the call.
+        let to = tool_call.args["to"].as_str().unwrap_or("");
+        ToolResult::ok(json!({ "status": "sent", "to": to }))
     }
 }
+
+/// Tool names this client gates behind a confirmation prompt.
+const TOOLS_NEEDING_APPROVAL: &[&str] = &["send_email"];
 ```
 
 In your event loop, orchestrate the approval logic like this:
@@ -304,32 +293,20 @@ AgentEvent::ToolCall(tool_call) => {
         continue;
     };
 
-    // 1. Generate the proposal
-    let proposal = tool.propose(
-        tool_call.details.clone(),
-        tool_call.cancellation_token.clone()
-    ).await;
-
-    let ToolResult::Ok(proposal_val) = proposal else {
-        tool_call.resolve(proposal); // propose failed, resolve immediately
-        continue;
-    };
-
-    // 2. Check if approval is needed and prompt the user
-    let approved = if tool.requires_approval(&tool_call.details.args) {
-        let preview = proposal_val["preview"].as_str().unwrap_or("");
-        prompt_user_for_email_send(preview) // your custom UI prompt logic
-    } else {
-        true
-    };
-
-    if !approved {
-        tool_call.resolve(ToolResult::error("User rejected approval"));
-        continue;
+    // 1. Apply your approval policy and prompt the user if needed
+    if TOOLS_NEEDING_APPROVAL.contains(&tool_call.details.name.as_str()) {
+        let approved = prompt_user_for_email_send(&tool_call.details.args); // your UI
+        if !approved {
+            tool_call.resolve(ToolResult::error("User rejected approval"));
+            continue;
+        }
     }
 
-    // 3. Apply the approved proposal
-    let result = tool.apply(proposal_val, tool_call.cancellation_token.clone()).await;
+    // 2. Run the (authorized) tool and resolve the call
+    let result = tool.call(
+        tool_call.details.clone(),
+        tool_call.cancellation_token.clone(),
+    ).await;
     tool_call.resolve(result);
 }
 ```
@@ -389,7 +366,7 @@ Each `RunEvent` carries a `run_id` (unique per run) so you can identify which ex
 
 ### Agent composition
 
-Wrap an `AgentRunner` + `Agent` pair as an `AgentTool` and register it with a parent runner via the standard `ToolRegistry::register` method. The parent model invokes the child agent as if it were a regular tool. The child's run is driven and fully encapsulated internally within `AgentTool::apply`, yielding a single flat text response back to the parent model.
+Wrap an `AgentRunner` + `Agent` pair as an `AgentTool` and register it with a parent runner via the standard `ToolRegistry::register` method. The parent model invokes the child agent as if it were a regular tool. The child's run is driven and fully encapsulated internally within `AgentTool::call`, yielding a single flat text response back to the parent model.
 
 ```rust
 use std::sync::Arc;
