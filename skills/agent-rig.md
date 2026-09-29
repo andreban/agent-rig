@@ -36,11 +36,12 @@ tokio          = { version = "1", features = ["full"] }
 dotenvy        = "0.15"
 ```
 
-| Feature   | Enables                    |
-|-----------|----------------------------|
-| `gemini`  | `GeminiModel` (Google)     |
-| `ollama`  | `OllamaModel` (local)      |
-| `full`    | All providers              |
+| Feature    | Enables                    |
+|------------|----------------------------|
+| `gemini`   | `GeminiModel` (Google)     |
+| `ollama`   | `OllamaModel` (local)      |
+| `deepseek` | `DeepSeekModel` (DeepSeek) |
+| `full`     | All providers              |
 
 ---
 
@@ -522,7 +523,7 @@ Requires `GEMINI_API_KEY` environment variable.
 
 ```rust
 use agent_rig::models::gemini::GeminiModel;
-use geologia::prelude::{ThinkingConfig, ThinkingLevel};
+use agent_rig::models::gemini::geologia::prelude::{ThinkingConfig, ThinkingLevel};
 
 // Minimal
 let model = GeminiModel::new(api_key, "gemini-3.1-flash-lite");
@@ -543,7 +544,8 @@ let model = GeminiModel::builder(api_key, "gemini-3.1-flash-lite")
 ```
 
 Builder method names: `temperature`, `max_output_tokens`, `top_p`, `top_k`, `stop_sequences`,
-`thinking_config`. The `ThinkingConfig` and `ThinkingLevel` types come from `geologia::prelude`.
+`thinking_config`. The `ThinkingConfig` and `ThinkingLevel` types can be imported directly from
+`agent_rig::models::gemini::geologia::prelude`.
 
 ### Ollama (`feature = "ollama"`)
 
@@ -568,6 +570,34 @@ let model = OllamaModel::builder("http://localhost:11434", "llama3.2")
 
 Structured output requires Ollama ≥ 0.5 and a model that supports it. Ollama disables streaming
 when tools are present (provider requirement).
+
+### DeepSeek (`feature = "deepseek"`)
+
+Requires `DEEPSEEK_API_KEY` environment variable. Supports `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
+
+```rust
+use agent_rig::models::deepseek::DeepSeekModel;
+
+// Minimal
+let model = DeepSeekModel::new(api_key, "deepseek-chat");
+
+// Full configuration
+let model = DeepSeekModel::builder(api_key, "deepseek-reasoner")
+    .temperature(0.6)
+    .max_tokens(4096)
+    .top_p(0.95)
+    .build();
+```
+
+### Accessing the Underlying Client and Re-exported Crates
+
+Each provider module re-exports its client crate and each model struct implements `.client()` and `.model()`:
+
+- Gemini: `agent_rig::models::gemini::geologia` and `model.client() -> &GeminiClient`
+- Ollama: `agent_rig::models::ollama::ollama_rs` and `model.client() -> &OllamaClient`
+- DeepSeek: `agent_rig::models::deepseek::cetologia` and `model.client() -> &CetologiaClient`
+
+Downstream crates do not need to add `geologia`, `ollama-rs`, or `cetologia` to their `Cargo.toml`.
 
 ---
 

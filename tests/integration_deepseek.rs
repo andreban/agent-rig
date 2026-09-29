@@ -3,15 +3,15 @@
 
 use std::sync::Arc;
 
+use agent_rig::Agent;
 use agent_rig::error::Error;
 use agent_rig::model::{LlmModel, Message, ModelRequest, ToolCall};
 use agent_rig::models::deepseek::DeepSeekModel;
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
-use agent_rig::Agent;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use schemars::{json_schema, JsonSchema};
+use schemars::{JsonSchema, json_schema};
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -102,10 +102,14 @@ async fn agent_follows_system_instructions() {
 
     let agent = Agent::builder()
         .name("pirate-agent")
-        .instructions("You are a pirate. Speak only in pirate dialect. Use words like 'ahoy' and 'matey'.")
+        .instructions(
+            "You are a pirate. Speak only in pirate dialect. Use words like 'ahoy' and 'matey'.",
+        )
         .build();
 
-    let output = collect_text(runner, agent, "Hello, who are you?").await.to_lowercase();
+    let output = collect_text(runner, agent, "Hello, who are you?")
+        .await
+        .to_lowercase();
     assert!(
         output.contains("ahoy") || output.contains("matey") || output.contains("pirate"),
         "expected pirate language, got: {output}"
@@ -157,12 +161,16 @@ async fn agent_tool_calling_returns_correct_result() {
         .build();
 
     let mut text = String::new();
-    let mut stream = runner.run(&agent, vec![Message::user("What is 42 + 58? Use the add tool.")].into());
+    let mut stream = runner.run(
+        &agent,
+        vec![Message::user("What is 42 + 58? Use the add tool.")].into(),
+    );
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::ToolCall(call) => {
                 let result = if let Some(tool) = registry.get(&call.details.name) {
-                    tool.call(call.details.clone(), call.cancellation_token.clone()).await
+                    tool.call(call.details.clone(), call.cancellation_token.clone())
+                        .await
                 } else {
                     ToolResult::error("Unknown tool")
                 };

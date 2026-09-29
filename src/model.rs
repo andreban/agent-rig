@@ -123,7 +123,6 @@ impl MessageList {
         Self { inner: Vec::new() }
     }
 
-
     /// Appends a message to the end of the list, wrapping it in an `Arc`.
     pub fn push(&mut self, message: Message) {
         self.inner.push(Arc::new(message));
@@ -169,7 +168,6 @@ impl From<MessageList> for Vec<Arc<Message>> {
         list.inner
     }
 }
-
 
 impl From<Vec<Message>> for MessageList {
     fn from(msgs: Vec<Message>) -> Self {

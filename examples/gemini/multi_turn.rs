@@ -17,10 +17,10 @@ use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 use agent_rig::model::{Message, MessageList};
+use agent_rig::models::gemini::geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use futures_util::StreamExt;
-use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use std::error::Error;
 use tracing_subscriber::EnvFilter;
 

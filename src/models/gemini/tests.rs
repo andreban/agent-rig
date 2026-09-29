@@ -245,3 +245,15 @@ fn stream_chunks_separates_thinking_text_and_tool_calls() {
     assert_eq!(tool_calls.len(), 1);
     assert!(matches!(&tool_calls[0], ModelStreamChunk::ToolCall(_)));
 }
+
+#[test]
+fn test_gemini_model_accessors_and_reexport() {
+    let model = GeminiModel::new("test-key", "gemini-2.5-pro");
+    assert_eq!(model.model(), "gemini-2.5-pro");
+    let _client: &geologia::prelude::GeminiClient = model.client();
+
+    // Verify the re-exported geologia crate is directly usable
+    let _config = geologia::prelude::GenerationConfig::builder()
+        .temperature(0.5_f32)
+        .build();
+}
