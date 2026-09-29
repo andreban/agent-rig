@@ -12,3 +12,7 @@ pub mod gemini;
 
 #[cfg(feature = "ollama")]
 pub mod ollama;
+
+#[cfg(feature = "deepseek")]
+pub mod deepseek;
+

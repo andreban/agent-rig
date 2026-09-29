@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`agent-rig` is a Rust library (edition 2024) for building provider-agnostic AI agents. Supported providers: Google Gemini and Ollama. See `docs/PRD.md` for requirements and `docs/SPEC.md` for the technical specification.
+`agent-rig` is a Rust library (edition 2024) for building provider-agnostic AI agents. Supported providers: Google Gemini, Ollama, and DeepSeek. See `docs/PRD.md` for requirements and `docs/SPEC.md` for the technical specification.
 
 ## Working with this project
 
@@ -32,7 +32,8 @@ cargo build --release
 ## Dependencies
 
 - **geologia**: Rust client for the Google Generative AI API. Sourced from GitHub (`https://github.com/andreban/geologia`) — not on crates.io.
-- Requires `GEMINI_API_KEY` environment variable (use a `.env` file with `dotenvy`).
+- **cetologia**: Rust client for the DeepSeek API. Sourced from GitHub (`https://github.com/andreban/cetologia`) — not on crates.io.
+- Requires `GEMINI_API_KEY` or `DEEPSEEK_API_KEY` environment variables (use a `.env` file with `dotenvy`).
 
 ## geologia API
 
@@ -61,4 +62,4 @@ Import from `geologia::prelude::*`. Key types:
 
 ## Architecture
 
-Library crate. Core abstractions in `src/`: `LlmModel` trait (`model.rs`), `Agent` + `AgentBuilder` (`agent.rs`), `AgentRunner` (`runner.rs`), `Error` (`error.rs`). Provider adapters in `src/models/`: `GeminiModel` and `OllamaModel`. See `docs/SPEC.md` for full details.
+Library crate. Core abstractions in `src/`: `LlmModel` trait (`model.rs`), `Agent` + `AgentBuilder` (`agent.rs`), `AgentRunner` (`runner.rs`), `Error` (`error.rs`). Provider adapters in `src/models/`: `GeminiModel`, `OllamaModel`, and `DeepSeekModel`. See `docs/SPEC.md` for full details.

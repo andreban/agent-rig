@@ -8,11 +8,13 @@ license = "Apache-2.0"
 default = []
 gemini = ["dep:geologia"]
 ollama = ["dep:ollama-rs"]
-full = ["gemini", "ollama"]
+deepseek = ["dep:cetologia"]
+full = ["gemini", "ollama", "deepseek"]
 
 [dependencies]
 ollama-rs = { git = "https://github.com/andreban/ollama-rs", optional = true }
 geologia = { git = "https://github.com/andreban/geologia", optional = true }
+cetologia = { git = "https://github.com/andreban/cetologia", optional = true }
 async-trait = "0.1"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive", "rc"] }
@@ -38,50 +40,95 @@ required-features = ["gemini"]
 name = "integration_ollama"
 required-features = ["ollama"]
 
+[[test]]
+name = "integration_deepseek"
+required-features = ["deepseek"]
+
+# Gemini Examples
 [[example]]
 name = "simple_agent"
+path = "examples/gemini/simple_agent.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "agent_as_tool"
+path = "examples/gemini/agent_as_tool.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "structured_output"
+path = "examples/gemini/structured_output.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "tool_calling"
+path = "examples/gemini/tool_calling.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "streaming_agent"
+path = "examples/gemini/streaming_agent.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "streaming_structured"
+path = "examples/gemini/streaming_structured.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "multi_turn"
+path = "examples/gemini/multi_turn.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "parallel_tool_calls"
+path = "examples/gemini/parallel_tool_calls.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "long_term_memory"
+path = "examples/gemini/long_term_memory.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "mpsc_runner"
+path = "examples/gemini/mpsc_runner.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "mpsc_auth_flow"
+path = "examples/gemini/mpsc_auth_flow.rs"
 required-features = ["gemini"]
 
 [[example]]
 name = "cancellation"
+path = "examples/gemini/cancellation.rs"
 required-features = ["gemini"]
+
+# DeepSeek Examples
+[[example]]
+name = "deepseek_chat"
+path = "examples/deepseek/chat.rs"
+required-features = ["deepseek"]
+
+[[example]]
+name = "deepseek_reasoner"
+path = "examples/deepseek/reasoner.rs"
+required-features = ["deepseek"]
+
+[[example]]
+name = "deepseek_tool_calling"
+path = "examples/deepseek/tool_calling.rs"
+required-features = ["deepseek"]
+
+[[example]]
+name = "deepseek_structured_output"
+path = "examples/deepseek/structured_output.rs"
+required-features = ["deepseek"]
+
+# Ollama Examples
+[[example]]
+name = "ollama_simple_agent"
+path = "examples/ollama/simple_agent.rs"
+required-features = ["ollama"]
+
