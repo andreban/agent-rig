@@ -6,7 +6,7 @@ Define your agent once and run it against any supported LLM backend — swap pro
 
 ## Features
 
-- **Provider-agnostic API** — same `Agent` + `AgentRunner` code works with Google Gemini, Ollama, or any custom `LlmModel` implementation
+- **Provider-agnostic API** — same `Agent` + `AgentRunner` code works with Google Gemini, Ollama, DeepSeek, or any custom `LlmModel` implementation
 - **Streaming agentic loop** — the runner spawns a background task and yields `AgentEvent`s (text deltas, thinking tokens, tool-call lifecycle) until the model produces a final reply
 - **Concurrent tool execution** — multiple tool calls in a single model turn are executed in parallel; tool-result messages are paired back to the model in request order
 - **Client-side approval** — gate individual tool calls in your event loop before invoking `Tool::call` (e.g. user approval prompts for destructive actions)
@@ -17,10 +17,11 @@ Define your agent once and run it against any supported LLM backend — swap pro
 
 ## Supported Providers
 
-| Feature   | Provider        | Notes                                        |
-|-----------|-----------------|----------------------------------------------|
-| `gemini`  | Google Gemini   | Structured output, thinking tokens           |
-| `ollama`  | Ollama (local)  | Structured output, native streaming          |
+| Feature    | Provider         | Notes                                                                        |
+|------------|------------------|------------------------------------------------------------------------------|
+| `gemini`   | Google Gemini    | Structured output, thinking tokens                                           |
+| `ollama`   | Ollama (local)   | Structured output, native streaming                                          |
+| `deepseek` | DeepSeek (Cloud) | `deepseek-chat` (V3), `deepseek-reasoner` (R1 / thinking), prompt cache hits |
 
 ## Installation
 
@@ -32,6 +33,9 @@ agent-rig = { git = "...", features = ["gemini"] }
 
 # Ollama only
 agent-rig = { git = "...", features = ["ollama"] }
+
+# DeepSeek only
+agent-rig = { git = "...", features = ["deepseek"] }
 
 # All providers
 agent-rig = { git = "...", features = ["full"] }

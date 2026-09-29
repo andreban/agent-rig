@@ -15,9 +15,9 @@
 │  Arc<dyn LlmModel>│
 └──────┬───────────┘
        │ implements
-┌──────┴──────────────┐
-▼                     ▼
-GeminiModel     OllamaModel    (more providers …)
+┌──────┴─────────────────────────┐
+▼                ▼               ▼
+GeminiModel     OllamaModel     DeepSeekModel   (more providers …)
 ```
 
 The library is a single crate (`agent-rig`). Provider adapters live in `src/models/`. Agent logic lives in `src/agent.rs` and `src/runner/`. The `LlmModel` trait in `src/model.rs` is the extension point. Tool types live under `src/tools/`.
@@ -431,7 +431,8 @@ Provider adapters are opt-in via Cargo features. The core types (`LlmModel`, `Ag
 |------------|----------------------------------|
 | `gemini`   | `GeminiModel` (`geologia`)       |
 | `ollama`   | `OllamaModel` (`ollama-rs`)      |
-| `full`     | All providers (`gemini`, `ollama`) |
+| `deepseek` | `DeepSeekModel` (`cetologia`)    |
+| `full`     | All providers (`gemini`, `ollama`, `deepseek`) |
 
 The `default` feature set is empty — no provider is compiled unless explicitly requested.
 
@@ -470,24 +471,34 @@ src/
       tests.rs        — AgentTool unit tests
   models/
     mod.rs            — feature-gated: #[cfg(feature="gemini")] pub mod gemini; etc.
-    gemini.rs         — GeminiModel, GeminiModelBuilder  (feature: gemini)
-    ollama.rs         — OllamaModel, OllamaModelBuilder  (feature: ollama)
+    gemini.rs         — GeminiModel, GeminiModelBuilder      (feature: gemini)
+    ollama.rs         — OllamaModel, OllamaModelBuilder      (feature: ollama)
+    deepseek/         — DeepSeekModel, DeepSeekModelBuilder  (feature: deepseek)
 examples/
-  simple_agent.rs         — single-turn Gemini example
-  tool_calling.rs         — Tool trait + ToolRegistry
-  structured_output.rs    — output_schema + schemars
-  streaming_agent.rs      — thinking deltas + tool calls
-  streaming_structured.rs — streaming with structured output
-  multi_turn.rs           — manual history multi-turn REPL
-  parallel_tool_calls.rs  — concurrent tool execution
-  agent_as_tool.rs        — AgentTool composition
-  long_term_memory.rs     — memory via tools
-  mpsc_auth_flow.rs       — client-side per-tool approval orchestration, stdin y/N prompt
-  mpsc_runner.rs          — runner basics
-  cancellation.rs         — drop-the-stream, external CancellationToken, deadline
+  deepseek/
+    chat.rs               — streaming chat with deepseek-chat (V3)
+    reasoner.rs           — thinking trace with deepseek-reasoner (R1)
+    tool_calling.rs       — tool execution and synthesis
+    structured_output.rs  — JSON schema output
+  gemini/
+    simple_agent.rs       — single-turn Gemini example
+    tool_calling.rs       — Tool trait + ToolRegistry
+    structured_output.rs  — output_schema + schemars
+    streaming_agent.rs    — thinking deltas + tool calls
+    streaming_structured.rs — streaming with structured output
+    multi_turn.rs         — manual history multi-turn REPL
+    parallel_tool_calls.rs — concurrent tool execution
+    agent_as_tool.rs      — AgentTool composition
+    long_term_memory.rs   — memory via tools
+    mpsc_auth_flow.rs     — client-side per-tool approval orchestration, stdin y/N prompt
+    mpsc_runner.rs        — runner basics
+    cancellation.rs       — drop-the-stream, external CancellationToken, deadline
+  ollama/
+    simple_agent.rs       — local Ollama assistant
 tests/
   integration_gemini.rs   — live Gemini integration tests
   integration_ollama.rs   — live Ollama integration tests
+  integration_deepseek.rs — live DeepSeek integration tests
 docs/
   PRD.md                  — product requirements
   SPEC.md                 — this document

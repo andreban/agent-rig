@@ -2,7 +2,7 @@
 
 ## Overview
 
-`agent-rig` is a Rust library for building AI agents that is **provider-agnostic**: the same agent definition runs against any supported LLM backend (Google Gemini, Ollama, and more) without code changes.
+`agent-rig` is a Rust library for building AI agents that is **provider-agnostic**: the same agent definition runs against any supported LLM backend (Google Gemini, Ollama, DeepSeek, and more) without code changes.
 
 ## Problem
 
@@ -36,7 +36,7 @@ Rust developers building:
 
 ## Success Criteria
 
-- A developer can build and run a single-turn agent against Gemini or Ollama with fewer than 20 lines of application code.
+- A developer can build and run a single-turn agent against Gemini, Ollama, or DeepSeek with fewer than 20 lines of application code.
 - Switching between providers requires changing only the model constructor, not the agent or runner.
 - All public types have rustdoc comments and are exercised by unit or doctest coverage.
 - Tool calls in the same model turn execute concurrently; tool-result messages are appended to the thread in the order the model issued them.

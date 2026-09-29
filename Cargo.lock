@@ -14,6 +14,7 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
+ "cetologia",
  "dotenvy",
  "futures-util",
  "geologia",
@@ -169,6 +170,22 @@ dependencies = [
  "jobserver",
  "libc",
  "shlex",
+]
+
+[[package]]
+name = "cetologia"
+version = "0.1.0"
+source = "git+https://github.com/andreban/cetologia#56dd20b4f857f6287c53ef05a1ab0d53bb9da847"
+dependencies = [
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
