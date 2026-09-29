@@ -246,7 +246,7 @@ impl ToolRegistry {
 
 A single registry can hold tools of different shapes because everything is stored as `Box<dyn Tool>`. `register` accepts any `Tool` and boxes it directly — there is no separate wrapper type.
 
-The registry holds two kinds of callables: plain [`Tool`] implementations and sub-agents wrapped in [`AgentTool`]. Since `AgentTool` implements `Tool`, both are registered and invoked identically — plain tools resolve to a single JSON value, while sub-agents drive their child run internally and return the aggregated text response as a standard JSON string.
+The registry holds two kinds of callables: plain [`Tool`] implementations and sub-agents wrapped in [`AgentTool`]. Since `AgentTool` implements `Tool`, both are registered and invoked identically — plain tools resolve to a single JSON value, while sub-agents drive their child run internally (executing the child's own tool calls) and return the child's final reply as a standard JSON string.
 
 `ToolRegistry` is independent of any runner; share it across multiple runners via `Arc<ToolRegistry>`.
 
@@ -300,35 +300,54 @@ The caller is responsible for maintaining conversation history across turns: eac
 
 ### `AgentTool` (`src/tools/agent_tool/mod.rs`)
 
-`AgentTool` wraps an `AgentRunner` + `Agent` pair as a standard `Tool` so any agent can delegate to a child agent through the tool-call mechanism.
+`AgentTool` wraps an `Agent` (plus its `AgentRunner` and, optionally, its own `ToolRegistry`) as a standard `Tool` so any agent can delegate to a child agent through the tool-call mechanism.
 
 ```rust
 pub struct AgentTool {
     definition: ToolDefinition,   // name, description, parameters exposed to the parent model
     agent: Agent,
     runner: AgentRunner,
+    tools: Arc<ToolRegistry>,     // the child's tools; empty for `new`
+    on_usage: Option<Box<dyn Fn(&TokenUsage) + Send + Sync>>,
 }
 
 impl AgentTool {
+    /// Child without tools; its tool calls resolve as `ToolCallResult::Unknown`.
     pub fn new(definition: ToolDefinition, agent: Agent, runner: AgentRunner) -> Self;
+    /// Child with tools; builds the runner with `AgentRunner::with_tools(model, tools.definitions())`.
+    pub fn with_tools(
+        definition: ToolDefinition,
+        agent: Agent,
+        model: Arc<dyn LlmModel>,
+        tools: Arc<ToolRegistry>,
+    ) -> Self;
+    /// Observer called with the `TokenUsage` of each of the child's model calls.
+    pub fn on_usage(self, observer: impl Fn(&TokenUsage) + Send + Sync + 'static) -> Self;
     pub fn name(&self) -> &str;
 }
 ```
 
-Registered via the standard `ToolRegistry::register` method (since it implements the `Tool` trait).
+Registered via the standard `ToolRegistry::register` method (since it implements the `Tool` trait). `with_tools` derives the child runner's tool definitions from the registry it executes, so the two cannot drift apart.
 
 **How `call` works:**
 
 1. Serializes the call's `args` to a JSON string and passes it as the user message of a fresh run on the inner `AgentRunner`.
-2. Drives the child's event stream internally: it consumes all events from the child runner's stream, accumulating any `TextDelta` chunks into a single string. The child's events are **not** forwarded or leaked onto the parent runner's stream, keeping the parent stream clean and flat.
-3. Returns the accumulated text as `ToolResult::Ok(Value)` — the parent model sees it (enveloped as `{"success": "..."}`) as the tool result on its next turn. A child-run error is returned as `ToolResult::Err` rather than aborting the parent.
+2. Drives the child's event stream internally. It plays the consumer role for the child run:
+   - `AgentEvent::ToolCall` — looks the tool up in the child's `ToolRegistry`, calls it with the request's `cancellation_token`, and resolves the request with the `ToolResult` converted to `Value`. A tool that isn't registered resolves with `ToolCallResult::Unknown`, so the child never hangs. In-flight calls are kept in a `FuturesUnordered` polled in a `tokio::select!` alongside `stream.next()`, because the runner waits for all of a turn's calls before emitting more events; calls from one turn therefore run concurrently.
+   - `AgentEvent::Usage` — passed to the `on_usage` observer, if set. This lets the caller count the child's tokens toward the parent run's usage, cost, or limits.
+   - Other events (text and thinking deltas, `TurnStart`) are ignored. The child's events are **not** forwarded onto the parent runner's stream, keeping the parent stream clean and flat.
+3. On `TurnFinish`, returns the text of the last assistant message in the child's thread as `ToolResult::Ok(Value)` — the parent model sees it (enveloped as `{"success": "..."}`) as the tool result on its next turn. Text the child wrote in earlier, tool-calling turns is not included.
+4. On `Error`, on `Cancelled`, or if the stream ends without `TurnFinish`, returns `ToolResult::Err` (there is no final reply) rather than aborting the parent.
 
-The `cancel` token is forwarded to the child via `run_with_cancellation`, so cancelling the parent (either by dropping its stream or by firing its external token) cancels every nested agent in the tree.
+The `cancel` token is forwarded to the child via `run_with_cancellation`, so cancelling the parent (either by dropping its stream or by firing its external token) cancels every nested agent in the tree, including the child's in-flight tool calls.
 
 **Design rationale:**
 
 - `AgentTool` implements `Tool` directly, allowing it to be registered and invoked identically to custom code-based tools.
-- `AgentTool` owns its `AgentRunner` (not a shared reference). Each sub-agent maintains its own model binding. Multiple concurrent `call` invocations are safe because `AgentRunner::run` takes `&self`.
+- `AgentTool` owns its `AgentRunner` (not a shared reference). Each sub-agent maintains its own model binding. The child's `ToolRegistry` is shared via `Arc`, so the same tools can back several sub-agents. Multiple concurrent `call` invocations are safe because `AgentRunner::run` takes `&self`.
+- Child tool calls are dispatched by `AgentTool`, not surfaced to the parent's consumer, so they bypass the [client-side approval flow](#client-side-authorization-patterns). A child tool that needs gating is wrapped in a `Tool` that performs the check inside `call`.
+- An empty final reply (the child's last turn produced no text) is `ToolResult::Ok("")`, not an error: the run finished normally, and the parent model can react to the empty result.
+- `AgentTool::new` takes a caller-built runner, which should come from `AgentRunner::new`; a runner built with `AgentRunner::with_tools` would advertise tools `AgentTool` can't execute. `with_tools` avoids this by building the runner itself.
 - The caller supplies the `ToolDefinition` explicitly: the `name` is what the parent model uses to invoke the sub-agent, the `description` guides the parent model's routing decision, and `parameters` describes what args the parent model should pass.
 - `AgentTool` lives in its own module (`src/tools/agent_tool/`) to avoid a circular dependency: `tool.rs` must not import the runner, and the runner must not import `agent_tool` directly (it imports it via `crate::tools`).
 

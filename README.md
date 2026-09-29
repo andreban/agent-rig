@@ -366,18 +366,22 @@ while let Some(event) = stream.next().await {
 }
 ```
 
-Each `RunEvent` carries a `run_id` (unique per run) so you can identify which execution produced a given event. For nested child agent executions, the child run is driven and fully encapsulated internally by `AgentTool` (yielding a single flat tool response back to the parent runner), ensuring that child events do not pollute the parent's event stream. For an example of agent composition, see [`examples/agent_as_tool.rs`](examples/agent_as_tool.rs).
+Each `RunEvent` carries a `run_id` (unique per run) so you can identify which execution produced a given event. For nested child agent executions, the child run is driven and fully encapsulated internally by `AgentTool` (yielding a single flat tool response back to the parent runner), ensuring that child events do not pollute the parent's event stream. For an example of agent composition, see [`examples/gemini/agent_as_tool.rs`](examples/gemini/agent_as_tool.rs).
 
 ### Agent composition
 
-Wrap an `AgentRunner` + `Agent` pair as an `AgentTool` and register it with a parent runner via the standard `ToolRegistry::register` method. The parent model invokes the child agent as if it were a regular tool. The child's run is driven and fully encapsulated internally within `AgentTool::call`, yielding a single flat text response back to the parent model.
+Wrap an `Agent` as an `AgentTool` and register it with a parent runner via the standard `ToolRegistry::register` method. The parent model invokes the child agent as if it were a regular tool. The child's run is driven and fully encapsulated internally within `AgentTool::call`: `AgentTool` executes the child's own tool calls (concurrently within a turn), and returns the child's final reply — the last assistant message, not text written before tool calls — to the parent model. If the child run errors or is cancelled, the parent model receives a tool error instead.
+
+- `AgentTool::new(definition, agent, runner)` — a child without tools. Any tool call it makes resolves as unknown.
+- `AgentTool::with_tools(definition, agent, model, tools)` — a child with its own `Arc<ToolRegistry>`. The child runner is built from `tools.definitions()`, so what the child model sees always matches what `AgentTool` executes.
+- `.on_usage(|usage| ...)` — called with the `TokenUsage` of each of the child's model calls, so you can count sub-agent tokens toward the parent run's usage or limits.
 
 ```rust
 use std::sync::Arc;
 use agent_rig::Agent;
 use agent_rig::runner::AgentRunner;
 use agent_rig::tools::{AgentTool, ToolDefinition, ToolRegistry};
-use serde_json::json;
+use schemars::json_schema;
 
 // Child agent
 let child_model = GeminiModel::builder(&api_key, MODEL).build();
@@ -391,7 +395,7 @@ let summarise_tool = AgentTool::new(
     ToolDefinition {
         name: "summarise".to_string(),
         description: "Summarises a long piece of text into two sentences.".to_string(),
-        parameters: json!({
+        parameters: json_schema!({
             "type": "object",
             "properties": { "text": { "type": "string" } },
             "required": ["text"]
@@ -410,6 +414,23 @@ let parent_agent = Agent::builder()
     .instructions("Use the `summarise` tool when asked to summarise text.")
     .tool("summarise")
     .build();
+```
+
+A child that needs tools of its own gets them through `with_tools`, which also builds its runner:
+
+```rust
+let verifier_tools = Arc::new(ToolRegistry::new().register(ReadFileTool::default()));
+let verify_tool = AgentTool::with_tools(
+    ToolDefinition {
+        name: "verify".to_string(),
+        description: "Checks a claim against the source code.".to_string(),
+        parameters: json_schema!({ "type": "object" }),
+    },
+    verifier_agent,
+    Arc::new(verifier_model),
+    verifier_tools,
+)
+.on_usage(|usage| println!("verifier usage: {usage:?}"));
 ```
 
 ## Provider Configuration
