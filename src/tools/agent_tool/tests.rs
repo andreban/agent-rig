@@ -388,6 +388,31 @@ async fn result_is_only_the_final_reply() {
     assert_eq!(output, json!("The answer is 42."));
 }
 
+/// A final turn with no text is a successful, empty reply; earlier text is
+/// not used in its place.
+#[tokio::test]
+async fn empty_final_reply_is_ok_empty_string() {
+    let mut first = tool_calls(&[("c1", "answer")]);
+    if let Ok(response) = &mut first {
+        response.text = Some("Let me look that up. ".to_string());
+    }
+    let model = ScriptedModel::new(vec![first, text_only("")]);
+    let tool = build_agent_tool_with_tools(
+        model,
+        ToolRegistry::new().register(AnswerTool {
+            definition: definition("answer"),
+        }),
+    );
+
+    let result = tool
+        .call(tool_call(json!({})), CancellationToken::new())
+        .await;
+    let ToolResult::Ok(output) = result else {
+        panic!("expected Ok, got {result:?}");
+    };
+    assert_eq!(output, json!(""));
+}
+
 /// Cancelling while a child tool is running ends the call with an error.
 #[tokio::test]
 async fn cancel_returns_err() {
