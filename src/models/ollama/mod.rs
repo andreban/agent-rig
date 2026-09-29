@@ -20,6 +20,8 @@ use ollama_rs::{
     types::common::{Options, Stop},
 };
 
+/// Re-export of the underlying [`ollama_rs`] crate.
+pub use ollama_rs;
 pub use ollama_rs::types::common::{Think, ThinkLevel};
 
 use crate::{
@@ -34,7 +36,8 @@ use crate::{
 /// LLM provider backed by an [Ollama](https://ollama.com/) server.
 ///
 /// Use [`OllamaModel::new`] for the simple case, or [`OllamaModel::builder`]
-/// to configure generation settings such as temperature.
+/// to configure generation settings such as temperature. The underlying
+/// [`OllamaClient`] can be accessed via [`OllamaModel::client`].
 ///
 /// # Examples
 ///
@@ -85,6 +88,16 @@ impl OllamaModel {
             options: Options::builder(),
             think: None,
         }
+    }
+
+    /// Returns a reference to the underlying [`OllamaClient`].
+    pub fn client(&self) -> &OllamaClient {
+        &self.client
+    }
+
+    /// Returns the model identifier.
+    pub fn model(&self) -> &str {
+        &self.model
     }
 }
 

@@ -85,7 +85,10 @@ fn test_build_chat_request_with_system_and_messages() {
     assert_eq!(chat_req.top_p, Some(0.9));
     assert_eq!(chat_req.messages.len(), 3);
     assert_eq!(chat_req.messages[0].role, CetologiaRole::System);
-    assert_eq!(chat_req.messages[0].content.as_deref(), Some("Act as a pirate"));
+    assert_eq!(
+        chat_req.messages[0].content.as_deref(),
+        Some("Act as a pirate")
+    );
     assert_eq!(chat_req.messages[1].role, CetologiaRole::User);
     assert_eq!(chat_req.messages[2].role, CetologiaRole::Assistant);
 }
@@ -111,7 +114,10 @@ fn test_build_chat_request_with_tools_and_schema() {
 
     assert_eq!(chat_req.response_format, Some(ResponseFormat::JsonObject));
     assert_eq!(chat_req.tools.as_ref().unwrap().len(), 1);
-    assert_eq!(chat_req.tools.as_ref().unwrap()[0].function.name, "get_weather");
+    assert_eq!(
+        chat_req.tools.as_ref().unwrap()[0].function.name,
+        "get_weather"
+    );
 }
 
 #[test]
@@ -144,8 +150,24 @@ fn test_build_chat_request_with_tool_calls_and_results() {
     assert_eq!(chat_req.messages.len(), 2);
     assert_eq!(chat_req.messages[0].role, CetologiaRole::Assistant);
     assert_eq!(chat_req.messages[0].tool_calls.as_ref().unwrap().len(), 1);
-    assert_eq!(chat_req.messages[0].tool_calls.as_ref().unwrap()[0].id, "call_123");
+    assert_eq!(
+        chat_req.messages[0].tool_calls.as_ref().unwrap()[0].id,
+        "call_123"
+    );
 
     assert_eq!(chat_req.messages[1].role, CetologiaRole::Tool);
-    assert_eq!(chat_req.messages[1].tool_call_id.as_deref(), Some("call_123"));
+    assert_eq!(
+        chat_req.messages[1].tool_call_id.as_deref(),
+        Some("call_123")
+    );
+}
+
+#[test]
+fn test_deepseek_model_accessors_and_reexport() {
+    let model = DeepSeekModel::new("test-key", "deepseek-chat");
+    assert_eq!(model.model(), "deepseek-chat");
+    let _client: &cetologia::prelude::CetologiaClient = model.client();
+
+    // Verify the re-exported cetologia crate is directly usable
+    let _req = cetologia::prelude::ChatCompletionRequest::builder("deepseek-chat").build();
 }

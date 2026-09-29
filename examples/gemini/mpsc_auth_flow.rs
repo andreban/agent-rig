@@ -161,7 +161,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 let result = tool
-                    .call(tool_call.details.clone(), tool_call.cancellation_token.clone())
+                    .call(
+                        tool_call.details.clone(),
+                        tool_call.cancellation_token.clone(),
+                    )
                     .await;
 
                 tool_call.resolve(result);

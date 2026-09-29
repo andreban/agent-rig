@@ -14,11 +14,11 @@
 use std::error::Error;
 use std::sync::Arc;
 
+use agent_rig::Agent;
 use agent_rig::model::{Message, ToolCall};
 use agent_rig::models::deepseek::DeepSeekModel;
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
-use agent_rig::Agent;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use schemars::json_schema;
@@ -37,7 +37,9 @@ impl Default for GetWeatherTool {
         Self {
             definition: ToolDefinition {
                 name: "get_weather".to_string(),
-                description: "Returns the current weather and temperature in Celsius for a given city.".to_string(),
+                description:
+                    "Returns the current weather and temperature in Celsius for a given city."
+                        .to_string(),
                 parameters: json_schema!({
                     "type": "object",
                     "properties": {
@@ -101,9 +103,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::ToolCall(call) => {
-                println!("[runner] tool call requested: {}({})", call.details.name, call.details.args);
+                println!(
+                    "[runner] tool call requested: {}({})",
+                    call.details.name, call.details.args
+                );
                 let result = if let Some(tool) = registry.get(&call.details.name) {
-                    tool.call(call.details.clone(), call.cancellation_token.clone()).await
+                    tool.call(call.details.clone(), call.cancellation_token.clone())
+                        .await
                 } else {
                     ToolResult::error("Unknown tool")
                 };

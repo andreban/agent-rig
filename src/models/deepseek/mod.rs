@@ -7,6 +7,9 @@
 //! [`cetologia`](https://github.com/andreban/cetologia) client.
 //! Requires the `deepseek` Cargo feature.
 
+/// Re-export of the underlying [`cetologia`] crate.
+pub use cetologia;
+
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -30,6 +33,8 @@ use crate::{
 /// LLM provider backed by DeepSeek.
 ///
 /// Supports both `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
+///
+/// The underlying [`CetologiaClient`] can be accessed via [`DeepSeekModel::client`].
 ///
 /// # Examples
 ///
@@ -71,6 +76,16 @@ impl DeepSeekModel {
     /// Returns a [`DeepSeekModelBuilder`] for constructing a `DeepSeekModel` with custom settings.
     pub fn builder(api_key: impl Into<String>, model: impl Into<String>) -> DeepSeekModelBuilder {
         DeepSeekModelBuilder::new(api_key, model)
+    }
+
+    /// Returns a reference to the underlying [`CetologiaClient`].
+    pub fn client(&self) -> &CetologiaClient {
+        &self.client
+    }
+
+    /// Returns the model identifier.
+    pub fn model(&self) -> &str {
+        &self.model
     }
 }
 
@@ -181,7 +196,8 @@ fn build_chat_request(
 
     // If an output schema is requested, append JSON formatting instructions to system prompt
     if let Some(schema) = &request.output_schema {
-        let schema_json = serde_json::to_string_pretty(&schema.clone().to_value()).unwrap_or_default();
+        let schema_json =
+            serde_json::to_string_pretty(&schema.clone().to_value()).unwrap_or_default();
         if !system_prompt.is_empty() {
             system_prompt.push_str("\n\n");
         }
@@ -347,16 +363,16 @@ impl LlmModel for DeepSeekModel {
                 }
 
                 for choice in chunk.choices {
-                    if let Some(reasoning) = choice.delta.reasoning_content {
-                        if !reasoning.is_empty() {
-                            yield Ok(ModelStreamChunk::Thinking(reasoning));
-                        }
+                    if let Some(reasoning) = choice.delta.reasoning_content
+                        && !reasoning.is_empty()
+                    {
+                        yield Ok(ModelStreamChunk::Thinking(reasoning));
                     }
 
-                    if let Some(text) = choice.delta.content {
-                        if !text.is_empty() {
-                            yield Ok(ModelStreamChunk::TextDelta(text));
-                        }
+                    if let Some(text) = choice.delta.content
+                        && !text.is_empty()
+                    {
+                        yield Ok(ModelStreamChunk::TextDelta(text));
                     }
 
                     if let Some(tool_calls) = &choice.delta.tool_calls {

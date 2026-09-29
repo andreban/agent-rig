@@ -198,10 +198,11 @@ async fn generate_stream_surfaces_rejected_request() {
                 id: "ghost-call".to_string(),
                 name: "ghost".to_string(),
                 args: json!({ "ok": true }),
-                provider_metadata: None
+                provider_metadata: None,
             }),
             json!({ "ok": true }),
-        )].into(),
+        )]
+        .into(),
         system: None,
         output_schema: None,
         tools: vec![],

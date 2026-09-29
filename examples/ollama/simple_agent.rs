@@ -11,10 +11,10 @@
 use std::error::Error;
 use std::sync::Arc;
 
+use agent_rig::Agent;
 use agent_rig::model::Message;
 use agent_rig::models::ollama::OllamaModel;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::Agent;
 use futures_util::StreamExt;
 use tracing_subscriber::EnvFilter;
 
@@ -25,7 +25,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let server_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
+    let server_url =
+        std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
     let model_name = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3".into());
 
     let model = OllamaModel::builder(server_url, model_name)

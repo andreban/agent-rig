@@ -10,7 +10,6 @@
 //!
 //! [`AgentRunner`]: super::AgentRunner
 
-
 use serde_json::Value;
 
 use crate::error::Error;

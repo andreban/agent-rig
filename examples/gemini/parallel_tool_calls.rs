@@ -70,7 +70,10 @@ impl Tool for GetTemperatureTool {
     }
 
     async fn call(&self, tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
-        let city = tool_call.args["city"].as_str().unwrap_or("unknown").to_string();
+        let city = tool_call.args["city"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 

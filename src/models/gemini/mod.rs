@@ -7,6 +7,9 @@
 //! [`geologia`](https://github.com/andreban/geologia) client. Requires the
 //! `gemini` Cargo feature.
 
+/// Re-export of the underlying [`geologia`] crate.
+pub use geologia;
+
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -30,7 +33,8 @@ use crate::{
 /// LLM provider backed by Google Gemini.
 ///
 /// Use [`GeminiModel::new`] for the simple case, or [`GeminiModel::builder`]
-/// to configure generation settings such as temperature.
+/// to configure generation settings such as temperature. The underlying
+/// [`GeminiClient`] can be accessed via [`GeminiModel::client`].
 ///
 /// # Examples
 ///
@@ -75,6 +79,16 @@ impl GeminiModel {
             model: model.into(),
             generation_config: GenerationConfig::builder(),
         }
+    }
+
+    /// Returns a reference to the underlying [`GeminiClient`].
+    pub fn client(&self) -> &GeminiClient {
+        &self.client
+    }
+
+    /// Returns the model identifier.
+    pub fn model(&self) -> &str {
+        &self.model
     }
 }
 
@@ -126,7 +140,7 @@ impl GeminiModelBuilder {
     ///
     /// ```no_run
     /// use agent_rig::models::gemini::GeminiModel;
-    /// use geologia::prelude::{ThinkingConfig, ThinkingLevel};
+    /// use agent_rig::models::gemini::geologia::prelude::{ThinkingConfig, ThinkingLevel};
     ///
     /// let model = GeminiModel::builder("API_KEY", "gemini-2.5-flash-preview-04-17")
     ///     .thinking_config(ThinkingConfig {

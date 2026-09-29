@@ -89,7 +89,10 @@ async fn call_returns_accumulated_text_as_success() {
     let tool = build_agent_tool(model);
 
     let result = tool
-        .call(tool_call(json!({"text": "anything"})), CancellationToken::new())
+        .call(
+            tool_call(json!({"text": "anything"})),
+            CancellationToken::new(),
+        )
         .await;
     let ToolResult::Ok(output) = result else {
         panic!("expected Ok, got {result:?}");
@@ -105,7 +108,10 @@ async fn call_passes_args_as_serialized_json_user_message() {
     let tool = build_agent_tool(model.clone());
 
     let _ = tool
-        .call(tool_call(json!({"text": "hello", "n": 42})), CancellationToken::new())
+        .call(
+            tool_call(json!({"text": "hello", "n": 42})),
+            CancellationToken::new(),
+        )
         .await;
 
     let requests = model.requests();

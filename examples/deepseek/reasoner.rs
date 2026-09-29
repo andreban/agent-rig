@@ -11,10 +11,10 @@
 use std::error::Error;
 use std::sync::Arc;
 
+use agent_rig::Agent;
 use agent_rig::model::Message;
 use agent_rig::models::deepseek::DeepSeekModel;
 use agent_rig::runner::{AgentEvent, AgentRunner};
-use agent_rig::Agent;
 use futures_util::StreamExt;
 use tracing_subscriber::EnvFilter;
 

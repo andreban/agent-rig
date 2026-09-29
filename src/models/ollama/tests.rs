@@ -85,3 +85,15 @@ fn build_chat_request_leaves_think_none_when_unset() {
     let req = build_chat_request("test-model", None, None, empty_request()).unwrap();
     assert!(req.think.is_none());
 }
+
+#[test]
+fn test_ollama_model_accessors_and_reexport() {
+    let model = OllamaModel::new("http://localhost:11434", "llama3.2");
+    assert_eq!(model.model(), "llama3.2");
+    let _client: &ollama_rs::OllamaClient = model.client();
+
+    // Verify the re-exported ollama_rs crate is directly usable
+    let _options = ollama_rs::types::common::Options::builder()
+        .temperature(0.7)
+        .build();
+}

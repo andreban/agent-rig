@@ -4,7 +4,10 @@
 use super::*;
 use crate::Agent;
 use crate::error::Error;
-use crate::model::{LlmModel, Message, MessageContent, MessageList, ModelRequest, ModelResponse, TokenUsage, ToolCall};
+use crate::model::{
+    LlmModel, Message, MessageContent, MessageList, ModelRequest, ModelResponse, TokenUsage,
+    ToolCall,
+};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::json;
@@ -291,7 +294,8 @@ async fn pre_cancelled_token_emits_cancelled_without_calling_model() {
     cancel.cancel();
 
     let mut events = vec![];
-    let mut stream = runner.run_with_cancellation(&agent(), vec![Message::user("hi")].into(), cancel);
+    let mut stream =
+        runner.run_with_cancellation(&agent(), vec![Message::user("hi")].into(), cancel);
     while let Some(ev) = stream.next().await {
         events.push(ev.agent_event);
     }

@@ -21,12 +21,12 @@
 use std::sync::Arc;
 
 use agent_rig::model::{Message, ToolCall};
+use agent_rig::models::gemini::geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use geologia::prelude::{ThinkingConfig, ThinkingLevel};
 use schemars::json_schema;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;

@@ -420,7 +420,7 @@ Requires a `GEMINI_API_KEY` environment variable.
 
 ```rust
 use agent_rig::models::gemini::GeminiModel;
-use geologia::prelude::{ThinkingConfig, ThinkingLevel};
+use agent_rig::models::gemini::geologia::prelude::{ThinkingConfig, ThinkingLevel};
 
 let model = GeminiModel::builder("API_KEY", "gemini-3.1-flash-lite")
     .temperature(0.7)
@@ -447,6 +447,34 @@ let model = OllamaModel::builder("http://localhost:11434", "llama3.2")
     .build();
 ```
 
+### DeepSeek
+
+Requires a `DEEPSEEK_API_KEY` environment variable. Supports both `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
+
+```rust
+use agent_rig::models::deepseek::DeepSeekModel;
+
+let model = DeepSeekModel::builder("API_KEY", "deepseek-chat")
+    .temperature(0.7)
+    .max_tokens(4096)
+    .build();
+```
+
+### Direct Client Access & Provider Re-exports
+
+Each provider module re-exports its underlying client crate, eliminating version drift and allowing downstream users to access provider types without declaring additional dependencies:
+
+- `agent_rig::models::gemini::geologia`
+- `agent_rig::models::ollama::ollama_rs`
+- `agent_rig::models::deepseek::cetologia`
+
+Each model struct also exposes `.client()` and `.model()` accessors for escaping directly to provider-specific APIs (such as listing models, token counting, or specialized endpoints):
+
+```rust
+let client = model.client(); // &GeminiClient, &OllamaClient, or &CetologiaClient
+let name = model.model();    // &str
+```
+
 ## Architecture
 
 ```mermaid
@@ -456,6 +484,7 @@ graph TD
     AR -->|holds| TD[ToolDefinitions<br/><i>Vec&lt;ToolDefinition&gt;</i>]
     LM -->|implements| GM[GeminiModel]
     LM -->|implements| OM[OllamaModel]
+    LM -->|implements| DM[DeepSeekModel]
     LM -->|implements| MORE[more providers…]
 ```
 

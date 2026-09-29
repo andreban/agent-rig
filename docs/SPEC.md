@@ -401,9 +401,10 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 
 ## Provider Adapters
 
-### `GeminiModel` (`src/models/gemini.rs`)
+### `GeminiModel` (`src/models/gemini/mod.rs`)
 
-- Wraps the `geologia` crate (`GeminiClient`).
+- Wraps the `geologia` crate (`GeminiClient`). Re-exports `geologia` from `agent_rig::models::gemini::geologia`.
+- Exposes `.client()` (`&GeminiClient`) and `.model()` (`&str`) accessors.
 - Translates `ModelRequest` → `GenerateContentRequest`, mapping `Role::User → Role::User` and `Role::Assistant → Role::Model`.
 - System instructions become `system_instruction` on the Gemini request.
 - Optional `GenerationConfig` (temperature, max_output_tokens, top_p, top_k, stop_sequences, thinking_config) configurable via `GeminiModel::builder(…)`.
@@ -413,15 +414,28 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Token usage: `usage_metadata` is mapped via `From<&UsageMetadata> for TokenUsage` — `prompt_token_count` → `input_tokens`, `candidates_token_count` → `output_tokens`, `cached_content_token_count` → `cached_input_tokens`, `thoughts_token_count` → `thinking_tokens`, `tool_use_prompt_token_count` → `tool_use_prompt_tokens`. Per-modality breakdowns (`*_tokens_details`) and `service_tier` are not propagated.
 - Implements `generate_stream` natively on top of `GeminiClient::stream_generate_content`. Each streamed `Candidate` part is converted to a chunk in order: thought `Text` parts become `Thinking`, regular `Text` parts become `TextDelta`, and `FunctionCall` parts become `ToolCall` (with `thought_signature` preserved in `provider_metadata`). The final `UsageMetadata` reported by the provider is emitted as a trailing `Usage` chunk.
 
-### `OllamaModel` (`src/models/ollama.rs`)
+### `OllamaModel` (`src/models/ollama/mod.rs`)
 
-- Wraps the `ollama-rs` crate (`OllamaClient`).
+- Wraps the `ollama-rs` crate (`OllamaClient`). Re-exports `ollama_rs` from `agent_rig::models::ollama::ollama_rs`.
+- Exposes `.client()` (`&OllamaClient`) and `.model()` (`&str`) accessors.
 - System prompt becomes a synthetic `OllamaMessage::system(…)` prepended to the message list.
 - Optional `Options` (temperature, seed, top_k, top_p, num_ctx, num_predict, stop) and extended-thinking config (`think`, accepting a boolean toggle or a `ThinkLevel`) configurable via `OllamaModel::builder(…)`.
 - Structured output: when `ModelRequest::output_schema` is set, the schema is passed to the Ollama `format` field (requires Ollama ≥ 0.5 and a model that supports structured output).
 - Implements `generate_stream` natively: emits `TextDelta` chunks as they arrive (no-tools path); emits `ToolCall` chunks from the single-shot response when tools are present (Ollama requires `stream(false)` for tool calls).
 - Ollama has no call ID; the function name is currently reused as the `ToolCall::id` (sufficient because no part of the codebase keys on the id for Ollama).
 - Token usage: `prompt_eval_count` → `input_tokens`, `eval_count` → `output_tokens` (saturating `u64` → `u32` cast). The Ollama API reports these on the final chunk (`done: true`) only — non-final chunks carry no usage. When neither field is populated the adapter emits `token_usage: None` rather than an all-`None` [`TokenUsage`]. Ollama does not report cache, thinking, or tool-use prompt tokens.
+
+### `DeepSeekModel` (`src/models/deepseek/mod.rs`)
+
+- Wraps the `cetologia` crate (`CetologiaClient`). Re-exports `cetologia` from `agent_rig::models::deepseek::cetologia`.
+- Exposes `.client()` (`&CetologiaClient`) and `.model()` (`&str`) accessors.
+- Supports both `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
+- System instructions become a `system` role `ChatMessage` prepended to the conversation messages.
+- Optional parameters (`temperature`, `max_tokens`, `top_p`, `base_url`) configurable via `DeepSeekModel::builder(…)`.
+- Structured output: when `ModelRequest::output_schema` is set, `response_format` is set to `json_object` and schema constraints are injected into the system prompt.
+- Extended thinking: reasoning tokens emitted in stream chunks under `reasoning_content` are forwarded as `ModelStreamChunk::Thinking` and `AgentEvent::ThinkingDelta`.
+- Tool calling: multi-turn assistant tool calls and corresponding `tool` role messages are accurately mapped. Streaming tool calls are accumulated via `ToolCallAccumulator`.
+- Token usage: mapped from `Usage`, reporting `input_tokens`, `output_tokens`, and `cached_input_tokens` (via `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens`).
 
 ## Cargo Features
 
@@ -471,9 +485,9 @@ src/
       tests.rs        — AgentTool unit tests
   models/
     mod.rs            — feature-gated: #[cfg(feature="gemini")] pub mod gemini; etc.
-    gemini.rs         — GeminiModel, GeminiModelBuilder      (feature: gemini)
-    ollama.rs         — OllamaModel, OllamaModelBuilder      (feature: ollama)
-    deepseek/         — DeepSeekModel, DeepSeekModelBuilder  (feature: deepseek)
+    gemini/           — GeminiModel, GeminiModelBuilder, re-exports geologia     (feature: gemini)
+    ollama/           — OllamaModel, OllamaModelBuilder, re-exports ollama_rs    (feature: ollama)
+    deepseek/         — DeepSeekModel, DeepSeekModelBuilder, re-exports cetologia (feature: deepseek)
 examples/
   deepseek/
     chat.rs               — streaming chat with deepseek-chat (V3)
