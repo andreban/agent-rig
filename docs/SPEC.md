@@ -345,6 +345,9 @@ The `cancel` token is forwarded to the child via `run_with_cancellation`, so can
 
 - `AgentTool` implements `Tool` directly, allowing it to be registered and invoked identically to custom code-based tools.
 - `AgentTool` owns its `AgentRunner` (not a shared reference). Each sub-agent maintains its own model binding. The child's `ToolRegistry` is shared via `Arc`, so the same tools can back several sub-agents. Multiple concurrent `call` invocations are safe because `AgentRunner::run` takes `&self`.
+- Child tool calls are dispatched by `AgentTool`, not surfaced to the parent's consumer, so they bypass the [client-side approval flow](#client-side-authorization-patterns). A child tool that needs gating is wrapped in a `Tool` that performs the check inside `call`.
+- An empty final reply (the child's last turn produced no text) is `ToolResult::Ok("")`, not an error: the run finished normally, and the parent model can react to the empty result.
+- `AgentTool::new` takes a caller-built runner, which should come from `AgentRunner::new`; a runner built with `AgentRunner::with_tools` would advertise tools `AgentTool` can't execute. `with_tools` avoids this by building the runner itself.
 - The caller supplies the `ToolDefinition` explicitly: the `name` is what the parent model uses to invoke the sub-agent, the `description` guides the parent model's routing decision, and `parameters` describes what args the parent model should pass.
 - `AgentTool` lives in its own module (`src/tools/agent_tool/`) to avoid a circular dependency: `tool.rs` must not import the runner, and the runner must not import `agent_tool` directly (it imports it via `crate::tools`).
 

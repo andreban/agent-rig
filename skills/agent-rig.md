@@ -54,9 +54,9 @@ dotenvy        = "0.15"
 | `LlmModel` | Async trait every provider implements. Has `generate` (required) and `generate_stream` (default impl wraps `generate`). The extension point for new providers. |
 | `Message` / `MessageContent` | Conversation history elements. `MessageContent` is either `Text`, `ToolCalls(Vec<Arc<ToolCall>>)`, or `ToolResult` |
 | `ModelRequest` / `ModelResponse` / `ToolCall` | Provider-agnostic request/response envelope. `ModelResponse::text` and `tool_calls` are mutually exclusive per turn. |
-| `Tool` / `ToolDefinition` | Async trait for callable tools. `parameters` is a JSON Schema `serde_json::Value`. |
+| `Tool` / `ToolDefinition` | Async trait for callable tools. `parameters` is a `schemars::Schema`, typically built with `schemars::json_schema!`. |
 | `ToolRegistry` | Client-side registry of `Tool` and `AgentTool` entries, keyed by name, used to resolve tool calls. |
-| `AgentTool` | Wraps an `AgentRunner` + `Agent` so it can be invoked through the same tool-call mechanism. Registered via `ToolRegistry::register`. |
+| `AgentTool` | Wraps an `Agent` (plus its runner and, via `with_tools`, its own `ToolRegistry`) so it can be invoked through the same tool-call mechanism. Runs the child's tool calls and returns its final reply. Registered via `ToolRegistry::register`. |
 | `AgentEvent` | Stream event: `TurnStart`, `ThinkingDelta`, `TextDelta`, `ToolCall`, `Usage`, `TurnFinish`, `Cancelled`, `Error`. |
 | `RunEvent` | An `AgentEvent` tagged with a unique `run_id`. **This is what the runner stream actually yields.** |
 | `ToolCallResult` | Outcome of a tool call: `Ok(Value)`, `Err(Error)`, `Denied`, `Unknown`. |
@@ -453,13 +453,17 @@ let plan: ResearchPlan = serde_json::from_str(&output)?;
 
 ## Agent Composition (`AgentTool`)
 
-Wrap an `AgentRunner` + `Agent` pair as an `AgentTool` and register it with a parent runner using the standard `ToolRegistry::register` method. The parent model invokes the child agent as if it were a regular tool. The child's run is driven and fully encapsulated internally within `AgentTool::call`, yielding a single flat text response back to the parent model.
+Wrap an `Agent` as an `AgentTool` and register it with a parent runner using the standard `ToolRegistry::register` method. The parent model invokes the child agent as if it were a regular tool. The child's run is driven and fully encapsulated internally within `AgentTool::call`: `AgentTool` executes the child's own tool calls and returns the child's final reply to the parent model.
+
+- `AgentTool::new(definition, agent, runner)` — a child without tools. Build `runner` with `AgentRunner::new`; any tool call the child makes resolves as `ToolCallResult::Unknown`.
+- `AgentTool::with_tools(definition, agent, model, tools: Arc<ToolRegistry>)` — a child with its own tools. The child runner is built from `tools.definitions()`, so what the child model sees always matches what `AgentTool` executes.
+- `.on_usage(|usage: &TokenUsage| ...)` — called for each of the child's model calls; use it to count sub-agent tokens toward the parent run's usage or limits.
 
 ```rust
 use std::sync::Arc;
 use agent_rig::{Agent, model::Message, runner::AgentRunner,
     tools::{AgentTool, ToolDefinition, ToolRegistry}, models::gemini::GeminiModel};
-use serde_json::json;
+use schemars::json_schema;
 
 const MODEL: &str = "gemini-3.1-flash-lite";
 
@@ -475,7 +479,7 @@ let summarise_tool = AgentTool::new(
     ToolDefinition {
         name: "summarise".to_string(),
         description: "Summarises a long piece of text. Pass the text in the `text` field.".to_string(),
-        parameters: json!({
+        parameters: json_schema!({
             "type": "object",
             "properties": { "text": { "type": "string" } },
             "required": ["text"]
@@ -485,8 +489,21 @@ let summarise_tool = AgentTool::new(
     child_runner,
 );
 
+// --- A child with tools of its own ---
+let verify_tool = AgentTool::with_tools(
+    ToolDefinition {
+        name: "verify".to_string(),
+        description: "Checks a claim against the source code.".to_string(),
+        parameters: json_schema!({ "type": "object" }),
+    },
+    verifier_agent,
+    Arc::new(verifier_model),
+    Arc::new(ToolRegistry::new().register(ReadFileTool::default())),
+)
+.on_usage(|usage| println!("verifier usage: {usage:?}"));
+
 // --- Parent runner ---
-let registry = ToolRegistry::new().register(summarise_tool);
+let registry = ToolRegistry::new().register(summarise_tool).register(verify_tool);
 let parent_model  = GeminiModel::builder(&api_key, MODEL).build();
 let parent_runner = AgentRunner::with_tools(Arc::new(parent_model), registry.definitions());
 
@@ -497,7 +514,7 @@ let parent_agent = Agent::builder()
     .build();
 
 let mut stream = parent_runner.run(&parent_agent,
-    vec![Arc::new(Message::user("Summarise: Rust is …"))]);
+    vec![Message::user("Summarise: Rust is …")].into());
 while let Some(event) = stream.next().await {
     // ... handle event.agent_event ...
 }
@@ -508,8 +525,15 @@ while let Some(event) = stream.next().await {
 - `AgentTool` **owns** its `AgentRunner` (not a shared reference). Each child has its own model
   binding. Multiple concurrent `call` invocations are safe.
 - Internally, `AgentTool::call` serialises the call's `args` JSON to a string and passes it as the
-  child's user message. The child's `TextDelta` chunks are accumulated; the tool result returned to
-  the parent model is the raw accumulated string (returned as `ToolResult::Ok`).
+  child's user message. The child's `ToolCall` requests are executed against its registry (calls
+  from one turn run concurrently, each with the request's cancellation token); unregistered tools
+  resolve as `ToolCallResult::Unknown`. The tool result returned to the parent model is the text of
+  the last assistant message in the child's `TurnFinish` thread (`ToolResult::Ok`; an empty string
+  if the final turn had no text). Text written before tool calls is not included. A child `Error`,
+  `Cancelled`, or a stream ending without `TurnFinish` returns `ToolResult::Err`.
+- Child tool calls are dispatched by `AgentTool`, not surfaced to the parent's consumer, so they
+  bypass any client-side approval flow. To gate a child tool, wrap it in a `Tool` that checks inside
+  `call`.
 - Child agents can have their own tools and even their own sub-agents. Nesting is unlimited.
 - Because `AgentTool` encapsulates the child run, the parent's event stream remains completely flat. Child events (such as the child's `ThinkingDelta` or its own tool calls) do not pollute the parent's event stream.
 

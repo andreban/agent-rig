@@ -39,6 +39,12 @@ type UsageObserver = Box<dyn Fn(&TokenUsage) + Send + Sync>;
 /// Use [`new`](Self::new) for a child without tools and
 /// [`with_tools`](Self::with_tools) for a child that calls tools of its own.
 ///
+/// The child's tool calls are dispatched by `AgentTool` itself: they never
+/// surface as [`AgentEvent::ToolCall`] on the parent stream, so they bypass
+/// any approval flow the consumer applies there. To gate a child tool, wrap
+/// it in a [`Tool`] that performs the check inside
+/// [`call`](Tool::call).
+///
 /// # Examples
 ///
 /// ```no_run
@@ -83,6 +89,10 @@ impl AgentTool {
     /// The child's tool calls are resolved against an empty registry, so any
     /// call the child makes resolves as [`ToolCallResult::Unknown`]. Use
     /// [`with_tools`](Self::with_tools) for a child that needs tools.
+    ///
+    /// `runner` should be built with [`AgentRunner::new`]. A runner built with
+    /// [`AgentRunner::with_tools`] advertises tools to the child model that
+    /// this `AgentTool` can't execute.
     pub fn new(definition: ToolDefinition, agent: Agent, runner: AgentRunner) -> Self {
         Self {
             definition,
@@ -177,8 +187,10 @@ impl Tool for AgentTool {
     /// events are not forwarded to the parent stream.
     ///
     /// Returns [`ToolResult::Ok`] with the text of the last assistant message
-    /// in the child's final thread. Returns [`ToolResult::Err`] if the child
-    /// run errors, is cancelled, or ends without finishing.
+    /// in the child's final thread. If the child's final turn produced no
+    /// text, that is an empty string: the run finished, so it is still a
+    /// success. Returns [`ToolResult::Err`] if the child run errors, is
+    /// cancelled, or ends without finishing.
     ///
     /// `cancel` is propagated into the child run via
     /// [`AgentRunner::run_with_cancellation`], so cancelling the parent run

@@ -413,6 +413,46 @@ async fn cancel_returns_err() {
     assert!(matches!(result, ToolResult::Err(_)), "got {result:?}");
 }
 
+/// Reports whether its cancellation token had fired when it was called.
+struct TokenProbeTool {
+    definition: ToolDefinition,
+}
+
+#[async_trait]
+impl Tool for TokenProbeTool {
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
+    }
+
+    async fn call(&self, _: Arc<ToolCall>, cancel: CancellationToken) -> ToolResult {
+        ToolResult::ok(cancel.is_cancelled())
+    }
+}
+
+/// Each child tool call receives its request's cancellation token.
+#[tokio::test]
+async fn child_tool_receives_request_cancellation_token() {
+    let tool = build_agent_tool_with_tools(
+        ScriptedModel::new(vec![]),
+        ToolRegistry::new().register(TokenProbeTool {
+            definition: definition("probe"),
+        }),
+    );
+
+    let token = CancellationToken::new();
+    token.cancel();
+    let (resolve_tx, resolve_rx) = tokio::sync::oneshot::channel();
+    let details = Arc::new(ToolCall::new(
+        "c1".to_string(),
+        "probe".to_string(),
+        json!({}),
+    ));
+    tool.execute(ToolCallRequest::new(details, token, resolve_tx))
+        .await;
+
+    assert_eq!(resolve_rx.await.unwrap(), json!({"success": true}));
+}
+
 /// An error from the child model ends the call with an error.
 #[tokio::test]
 async fn child_error_returns_err() {
