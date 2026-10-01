@@ -55,6 +55,18 @@ pub struct Message {
     pub role: Role,
     /// The content of the message.
     pub content: MessageContent,
+    /// Reasoning/thinking text the model produced on this assistant turn.
+    ///
+    /// The runner populates this from the model's thinking output when it
+    /// appends an assistant message (text or tool calls) to the thread, so
+    /// adapters whose provider expects prior reasoning to be replayed (e.g.
+    /// DeepSeek's `reasoning_content` in thinking mode with tools) can send it
+    /// back on later turns. Adapters that do not need it ignore the field.
+    ///
+    /// Omitted from serialized output when `None`, and defaults to `None` when
+    /// absent, so previously persisted conversations still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
 }
 
 impl Message {
@@ -71,6 +83,7 @@ impl Message {
         Self {
             role: Role::User,
             content: MessageContent::Text(content.into()),
+            thinking: None,
         }
     }
 
@@ -87,6 +100,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: MessageContent::Text(content.into()),
+            thinking: None,
         }
     }
 
@@ -95,6 +109,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: MessageContent::ToolCalls(calls),
+            thinking: None,
         }
     }
 
@@ -103,7 +118,25 @@ impl Message {
         Self {
             role: Role::User,
             content: MessageContent::ToolResult { tool_call, result },
+            thinking: None,
         }
+    }
+
+    /// Attaches the model's reasoning/thinking text to this message.
+    ///
+    /// Intended for assistant messages; see [`Message::thinking`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use agent_rig::model::Message;
+    ///
+    /// let msg = Message::assistant("Paris.").with_thinking("The user asks about France...");
+    /// assert_eq!(msg.thinking.as_deref(), Some("The user asks about France..."));
+    /// ```
+    pub fn with_thinking(mut self, thinking: impl Into<String>) -> Self {
+        self.thinking = Some(thinking.into());
+        self
     }
 }
 
@@ -328,10 +361,12 @@ pub struct ModelResponse {
     /// Reasoning/thinking text produced by the model before its final answer.
     ///
     /// Only populated by provider adapters that support extended thinking
-    /// (currently [`GeminiModel`] when `include_thoughts` is enabled via
-    /// [`ThinkingConfig`]). All other adapters leave this as `None`.
+    /// (e.g. [`GeminiModel`] when `include_thoughts` is enabled via
+    /// [`ThinkingConfig`], or [`DeepSeekModel`] in thinking mode). Other
+    /// adapters leave this as `None`.
     ///
     /// [`GeminiModel`]: crate::models::gemini::GeminiModel
+    /// [`DeepSeekModel`]: crate::models::deepseek::DeepSeekModel
     /// [`ThinkingConfig`]: geologia::prelude::ThinkingConfig
     pub thinking: Option<String>,
     /// Token counts reported by the provider for this call.
@@ -450,6 +485,30 @@ mod tests {
         let msg = Message::assistant("hi");
         assert_eq!(msg.role, Role::Assistant);
         assert!(matches!(msg.content, MessageContent::Text(t) if t == "hi"));
+    }
+
+    #[test]
+    fn message_with_thinking_round_trips_through_serde() {
+        let msg = Message::assistant("hi").with_thinking("let me think");
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["thinking"], "let me think");
+        let back: Message = serde_json::from_value(json).unwrap();
+        assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn message_without_thinking_omits_field_and_loads_legacy_json() {
+        let msg = Message::assistant("hi");
+        let json = serde_json::to_value(&msg).unwrap();
+        assert!(json.get("thinking").is_none());
+
+        // Conversations persisted before the field existed still load.
+        let legacy = serde_json::json!({
+            "role": "assistant",
+            "content": { "type": "text", "content": "hi" }
+        });
+        let back: Message = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back, msg);
     }
 
     #[test]

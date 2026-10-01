@@ -208,6 +208,7 @@ impl AgentRunner {
             let mut model_stream = self.model.generate_stream(request);
             let mut tool_calls: Vec<Arc<ToolCall>> = Vec::new();
             let mut reply = String::new();
+            let mut thinking = String::new();
             loop {
                 tokio::select! {
                     biased;
@@ -223,6 +224,7 @@ impl AgentRunner {
                         let Some(chunk) = next else { break };
                         match chunk {
                             Ok(ModelStreamChunk::Thinking(t)) => {
+                                thinking.push_str(&t);
                                 let _ = tx.send(AgentEvent::ThinkingDelta(t)).await;
                             }
                             Ok(ModelStreamChunk::TextDelta(t)) => {
@@ -244,13 +246,23 @@ impl AgentRunner {
                 }
             }
 
+            // Kept with the assistant message so adapters that must replay
+            // prior reasoning (e.g. DeepSeek thinking mode) can send it back.
+            let thinking = (!thinking.is_empty()).then_some(thinking);
+
             if tool_calls.is_empty() {
                 if !reply.is_empty() {
-                    thread.push(Message::assistant(reply));
+                    let mut message = Message::assistant(reply);
+                    message.thinking = thinking;
+                    thread.push(message);
                 }
                 let _ = tx.send(AgentEvent::TurnFinish { thread }).await;
                 return;
             }
+
+            let mut message = Message::tool_calls(tool_calls.clone());
+            message.thinking = thinking;
+            thread.push(message);
 
             self.handle_tool_calls(&tx, tool_calls, &mut thread, &cancel)
                 .await;
@@ -274,7 +286,6 @@ impl AgentRunner {
         thread: &mut MessageList,
         cancel: &CancellationToken,
     ) {
-        thread.push(Message::tool_calls(tool_calls.clone()));
         let tool_futures = tool_calls.into_iter().map(|call| {
             info!("Invoking tool '{}' with args '{:?}'", call.name, call.args);
             let cancel = cancel.clone();

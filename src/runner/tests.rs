@@ -213,6 +213,67 @@ async fn turn_finish_thread_contains_full_history() {
 }
 
 #[tokio::test]
+async fn thinking_is_stored_on_assistant_messages() {
+    let model = ScriptedModel::new(vec![
+        Ok(ModelResponse {
+            text: None,
+            tool_calls: vec![ToolCall::new("c1".into(), "greet".into(), json!({}))],
+            thinking: Some("call greet first".to_string()),
+            token_usage: None,
+        }),
+        Ok(ModelResponse {
+            text: Some("done".to_string()),
+            tool_calls: vec![],
+            thinking: Some("now answer".to_string()),
+            token_usage: None,
+        }),
+    ]);
+    let runner = AgentRunner::new(model.clone());
+
+    let mut finish_thread: Option<MessageList> = None;
+    let mut stream = runner.run(&agent(), vec![Message::user("hello")].into());
+    while let Some(ev) = stream.next().await {
+        match ev.agent_event {
+            AgentEvent::ToolCall(call) => call.resolve(json!({"ok": true})),
+            AgentEvent::TurnFinish { thread } => finish_thread = Some(thread),
+            _ => {}
+        }
+    }
+
+    let thread = finish_thread.unwrap();
+    assert_eq!(thread[0].thinking, None);
+    assert_eq!(thread[1].thinking.as_deref(), Some("call greet first"));
+    assert_eq!(thread[2].thinking, None);
+    assert_eq!(thread[3].thinking.as_deref(), Some("now answer"));
+
+    // The second request replays the tool-call turn with its thinking.
+    let requests = model.requests();
+    assert_eq!(
+        requests[1].messages[1].thinking.as_deref(),
+        Some("call greet first")
+    );
+}
+
+#[tokio::test]
+async fn assistant_messages_without_thinking_leave_it_none() {
+    let model = ScriptedModel::new(vec![tool_call("c1", "greet", json!({})), text("done")]);
+    let runner = AgentRunner::new(model);
+
+    let mut finish_thread: Option<MessageList> = None;
+    let mut stream = runner.run(&agent(), vec![Message::user("hello")].into());
+    while let Some(ev) = stream.next().await {
+        match ev.agent_event {
+            AgentEvent::ToolCall(call) => call.resolve(json!({"ok": true})),
+            AgentEvent::TurnFinish { thread } => finish_thread = Some(thread),
+            _ => {}
+        }
+    }
+
+    let thread = finish_thread.unwrap();
+    assert!(thread.iter().all(|m| m.thinking.is_none()));
+}
+
+#[tokio::test]
 async fn multiple_tool_calls_all_resolved_in_one_turn() {
     let model = ScriptedModel::new(vec![
         Ok(ModelResponse {

@@ -9,6 +9,9 @@
 
 /// Re-export of the underlying [`cetologia`] crate.
 pub use cetologia;
+/// Re-export of [`cetologia`]'s reasoning effort level, used by
+/// [`DeepSeekModelBuilder::reasoning_effort`].
+pub use cetologia::prelude::ReasoningEffort;
 
 use std::pin::Pin;
 
@@ -34,6 +37,12 @@ use crate::{
 ///
 /// Supports both `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
 ///
+/// In thinking mode the model's reasoning (`reasoning_content`) is surfaced as
+/// [`ModelResponse::thinking`]. When the runner stores it on the assistant
+/// [`Message`](crate::model::Message), this adapter replays it as
+/// `reasoning_content` on every later request, as DeepSeek requires for
+/// tool-using conversations.
+///
 /// The underlying [`CetologiaClient`] can be accessed via [`DeepSeekModel::client`].
 ///
 /// # Examples
@@ -49,6 +58,12 @@ use crate::{
 ///     .temperature(0.6)
 ///     .max_tokens(4096)
 ///     .build();
+///
+/// // With thinking effort
+/// use agent_rig::models::deepseek::ReasoningEffort;
+/// let model = DeepSeekModel::builder("DEEPSEEK_API_KEY", "deepseek-reasoner")
+///     .reasoning_effort(ReasoningEffort::Max)
+///     .build();
 /// ```
 pub struct DeepSeekModel {
     client: CetologiaClient,
@@ -56,6 +71,7 @@ pub struct DeepSeekModel {
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     top_p: Option<f32>,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl DeepSeekModel {
@@ -70,6 +86,7 @@ impl DeepSeekModel {
             temperature: None,
             max_tokens: None,
             top_p: None,
+            reasoning_effort: None,
         }
     }
 
@@ -97,6 +114,7 @@ pub struct DeepSeekModelBuilder {
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     top_p: Option<f32>,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl DeepSeekModelBuilder {
@@ -109,6 +127,7 @@ impl DeepSeekModelBuilder {
             temperature: None,
             max_tokens: None,
             top_p: None,
+            reasoning_effort: None,
         }
     }
 
@@ -136,6 +155,29 @@ impl DeepSeekModelBuilder {
         self
     }
 
+    /// Sets the reasoning effort for thinking mode.
+    ///
+    /// [`ReasoningEffort::Low`], [`ReasoningEffort::High`] and
+    /// [`ReasoningEffort::Max`] select how much the model thinks;
+    /// [`ReasoningEffort::None`] turns thinking off. When unset, the field is
+    /// omitted from the request and DeepSeek's default applies.
+    ///
+    /// Note: in thinking mode DeepSeek ignores `temperature`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use agent_rig::models::deepseek::{DeepSeekModel, ReasoningEffort};
+    ///
+    /// let model = DeepSeekModel::builder("DEEPSEEK_API_KEY", "deepseek-reasoner")
+    ///     .reasoning_effort(ReasoningEffort::Low)
+    ///     .build();
+    /// ```
+    pub fn reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
+
     /// Builds the [`DeepSeekModel`].
     pub fn build(self) -> DeepSeekModel {
         let mut client_builder = CetologiaClient::builder(self.api_key);
@@ -149,6 +191,7 @@ impl DeepSeekModelBuilder {
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             top_p: self.top_p,
+            reasoning_effort: self.reasoning_effort,
         }
     }
 }
@@ -188,6 +231,7 @@ fn build_chat_request(
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     top_p: Option<f32>,
+    reasoning_effort: Option<ReasoningEffort>,
     request: ModelRequest,
 ) -> ChatCompletionRequest {
     let mut messages: Vec<ChatMessage> = Vec::new();
@@ -213,7 +257,10 @@ fn build_chat_request(
         match &msg.content {
             MessageContent::Text(text) => match msg.role {
                 Role::User => messages.push(ChatMessage::user(text.clone())),
-                Role::Assistant => messages.push(ChatMessage::assistant(text.clone())),
+                Role::Assistant => messages.push(ChatMessage::assistant_with_reasoning(
+                    Some(text.clone()),
+                    msg.thinking.clone(),
+                )),
             },
             MessageContent::ToolCalls(calls) => {
                 let tool_calls: Vec<CetologiaToolCall> = calls
@@ -230,7 +277,7 @@ fn build_chat_request(
                 messages.push(ChatMessage {
                     role: CetologiaRole::Assistant,
                     content: None,
-                    reasoning_content: None,
+                    reasoning_content: msg.thinking.clone(),
                     tool_calls: Some(tool_calls),
                     ..Default::default()
                 });
@@ -251,6 +298,9 @@ fn build_chat_request(
     }
     if let Some(p) = top_p {
         builder = builder.top_p(p);
+    }
+    if let Some(effort) = reasoning_effort {
+        builder = builder.reasoning_effort(effort);
     }
 
     if !request.tools.is_empty() {
@@ -273,6 +323,7 @@ impl LlmModel for DeepSeekModel {
             self.temperature,
             self.max_tokens,
             self.top_p,
+            self.reasoning_effort,
             request,
         );
 
@@ -335,6 +386,7 @@ impl LlmModel for DeepSeekModel {
                 self.temperature,
                 self.max_tokens,
                 self.top_p,
+                self.reasoning_effort,
                 request,
             );
 
