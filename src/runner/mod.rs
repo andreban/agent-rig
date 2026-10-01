@@ -208,7 +208,7 @@ impl AgentRunner {
             let mut model_stream = self.model.generate_stream(request);
             let mut tool_calls: Vec<Arc<ToolCall>> = Vec::new();
             let mut reply = String::new();
-            let mut thinking = String::new();
+            let mut provider_metadata: Option<Value> = None;
             loop {
                 tokio::select! {
                     biased;
@@ -224,7 +224,6 @@ impl AgentRunner {
                         let Some(chunk) = next else { break };
                         match chunk {
                             Ok(ModelStreamChunk::Thinking(t)) => {
-                                thinking.push_str(&t);
                                 let _ = tx.send(AgentEvent::ThinkingDelta(t)).await;
                             }
                             Ok(ModelStreamChunk::TextDelta(t)) => {
@@ -237,6 +236,9 @@ impl AgentRunner {
                             Ok(ModelStreamChunk::Usage(usage)) => {
                                 let _ = tx.send(AgentEvent::Usage(usage)).await;
                             }
+                            Ok(ModelStreamChunk::ProviderMetadata(metadata)) => {
+                                provider_metadata = Some(metadata);
+                            }
                             Err(error) => {
                                 let _ = tx.send(AgentEvent::Error(error)).await;
                                 return;
@@ -246,22 +248,20 @@ impl AgentRunner {
                 }
             }
 
-            // Kept with the assistant message so adapters that must replay
-            // prior reasoning (e.g. DeepSeek thinking mode) can send it back.
-            let thinking = (!thinking.is_empty()).then_some(thinking);
-
             if tool_calls.is_empty() {
                 if !reply.is_empty() {
                     let mut message = Message::assistant(reply);
-                    message.thinking = thinking;
+                    message.provider_metadata = provider_metadata;
                     thread.push(message);
                 }
                 let _ = tx.send(AgentEvent::TurnFinish { thread }).await;
                 return;
             }
 
+            // Opaque adapter state rides on the assistant message so the
+            // adapter can replay it on later turns.
             let mut message = Message::tool_calls(tool_calls.clone());
-            message.thinking = thinking;
+            message.provider_metadata = provider_metadata;
             thread.push(message);
 
             self.handle_tool_calls(&tx, tool_calls, &mut thread, &cancel)

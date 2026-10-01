@@ -64,6 +64,7 @@ fn text_only(text: &str) -> Result<ModelResponse, Error> {
         text: Some(text.to_string()),
         tool_calls: vec![],
         thinking: None,
+        provider_metadata: None,
         token_usage: None,
     })
 }
@@ -137,6 +138,7 @@ fn tool_calls(calls: &[(&str, &str)]) -> Result<ModelResponse, Error> {
             .map(|(id, name)| ToolCall::new(id.to_string(), name.to_string(), json!({})))
             .collect(),
         thinking: None,
+        provider_metadata: None,
         token_usage: None,
     })
 }

@@ -56,6 +56,7 @@ pub enum ModelStreamChunk {
     TextDelta(String),      // incremental text output chunk
     ToolCall(ToolCall),     // a complete tool call (not streamed mid-call)
     Usage(TokenUsage),      // per-call token counts (at most one per stream)
+    ProviderMetadata(serde_json::Value), // opaque replay state for this turn's assistant message (at most one per stream)
 }
 ```
 
@@ -141,7 +142,8 @@ pub struct ToolCall {
 pub struct ModelResponse {
     pub text: Option<String>,          // None when the model issued tool calls
     pub tool_calls: Vec<ToolCall>,     // empty on a final text response
-    pub thinking: Option<String>,      // reasoning trace; set by Gemini (include_thoughts) and DeepSeek (thinking mode)
+    pub thinking: Option<String>,      // reasoning trace for display; set by Gemini (include_thoughts) and DeepSeek (thinking mode)
+    pub provider_metadata: Option<serde_json::Value>, // opaque replay state for the assistant message (DeepSeek reasoning_content)
     pub token_usage: Option<TokenUsage>, // per-call token counts; None when the provider did not report usage
 }
 
@@ -154,7 +156,7 @@ pub struct TokenUsage {
 }
 ```
 
-`Message` carries a `Role` (`User` | `Assistant`), a `content: MessageContent`, and an optional `thinking: Option<String>` — the model's reasoning for that assistant turn. The runner sets `thinking` from the turn's `Thinking` chunks when it appends an assistant message (text or tool calls); `Message::with_thinking(..)` sets it manually. It is `#[serde(default, skip_serializing_if = "Option::is_none")]`, so threads persisted before the field existed still load. Adapters that must replay prior reasoning read it (DeepSeek); others ignore it. `MessageContent` is an enum with three variants:
+`Message` carries a `Role` (`User` | `Assistant`), a `content: MessageContent`, and an optional `provider_metadata: Option<serde_json::Value>` — opaque adapter state for that assistant turn, the message-level counterpart of `ToolCall::provider_metadata`. Adapters that need state replayed emit it as a `ModelStreamChunk::ProviderMetadata` chunk (or `ModelResponse::provider_metadata`); the runner attaches whatever it received to the assistant message it appends (text or tool calls) and never looks inside. Each adapter namespaces its value under its own key and reads only that key, so a thread moved across providers is ignored rather than misreplayed. `Message::with_provider_metadata(..)` sets it manually. It is `#[serde(default, skip_serializing_if = "Option::is_none")]`, so threads persisted before the field existed still load. Reasoning text for display is not stored in the thread; it reaches consumers only through `ThinkingDelta` events. `MessageContent` is an enum with three variants:
 - `Text(String)` — a plain text turn
 - `ToolCalls(Vec<ToolCall>)` — all tool calls from one model turn (one assistant message)
 - `ToolResult { id, name, result, provider_metadata }` — the result of one tool execution (one user message)
@@ -284,14 +286,14 @@ Owns the LLM model and a list of tool definitions. The runner is `Clone` (intern
 
 `run_with_cancellation` is the same as `run` but also fires when the supplied `cancel` token fires. The runner derives a child token from `cancel` and binds the drop-on-stream-drop guard to that child, so dropping the stream cancels the run without cancelling the caller's token (which may be shared with siblings). `run` is sugar for `run_with_cancellation(agent, thread, CancellationToken::new())`.
 
-The caller is responsible for maintaining conversation history across turns: each `run` call starts a fresh loop with the supplied `thread`. For multi-turn dialogue, append the user input to the thread before calling `run`, drive the stream to completion, then append the final assistant message from `TurnFinish { thread }` (or a `Message::assistant(reply)` built from the accumulated `TextDelta` chunks, plus `.with_thinking(..)` from `ThinkingDelta` if the provider needs reasoning replayed). See `examples/multi_turn.rs` for a complete REPL.
+The caller is responsible for maintaining conversation history across turns: each `run` call starts a fresh loop with the supplied `thread`. For multi-turn dialogue, append the user input to the thread before calling `run`, drive the stream to completion, then continue from the thread returned in `TurnFinish { thread }`, which already holds the assistant reply and any provider metadata the adapter needs replayed. See `examples/multi_turn.rs` for a complete REPL.
 
 **Agentic loop semantics:**
 
 1. Build a `ModelRequest` from the current thread (typed as `Vec<Arc<Message>>`), agent instructions, output schema, and the runner's tool definitions.
 2. Drive `model.generate_stream(request)` — forward `ThinkingDelta`/`TextDelta` events; collect any tool calls.
 3. If no tool calls were issued, the loop ends.
-4. Append the tool calls as a single assistant turn (`Message::tool_calls`), carrying the turn's accumulated thinking in `Message::thinking`. (A final text turn is likewise appended as `Message::assistant(reply)` with its thinking.)
+4. Append the tool calls as a single assistant turn (`Message::tool_calls`), carrying any `ProviderMetadata` the adapter emitted for the turn in `Message::provider_metadata`. (A final text turn is likewise appended as `Message::assistant(reply)` with its metadata.)
 5. For each tool call, the runner packages the call and its cancel token into a `ToolCallRequest`, emits it via `AgentEvent::ToolCall(call)`, and waits on a oneshot channel for the consumer to resolve it. Decoupled from the runner, the consumer is responsible for looking up the tool, orchestrating an optional approval workflow, invoking `Tool::call`, and calling `call.resolve(result)`.
 6. All tool futures run **concurrently** via `futures_util::future::join_all`. `join_all` preserves input order in its return value, so tool-result messages are appended in the same order the model issued them.
 7. Repeat from step 1.
@@ -453,7 +455,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Optional parameters (`temperature`, `max_tokens`, `top_p`, `base_url`, `reasoning_effort`) configurable via `DeepSeekModel::builder(…)`. `reasoning_effort` takes `ReasoningEffort` (re-exported from `cetologia`): `Low`, `High`, `Max`, or `None` to disable thinking; omitted from the request when unset.
 - Structured output: when `ModelRequest::output_schema` is set, `response_format` is set to `json_object` and schema constraints are injected into the system prompt.
 - Extended thinking: reasoning tokens emitted in stream chunks under `reasoning_content` are forwarded as `ModelStreamChunk::Thinking` and `AgentEvent::ThinkingDelta`.
-- Reasoning replay: every assistant message in the thread (tool-call and text turns) is sent with `reasoning_content` set from `Message::thinking`, as DeepSeek's thinking mode requires for requests carrying `tools`.
+- Reasoning replay: the adapter buffers each turn's `reasoning_content` and emits it as provider metadata `{"deepseek": {"reasoning_content": "..."}}` (a `ProviderMetadata` chunk at the end of the stream, or `ModelResponse::provider_metadata`). Every assistant message in the thread (tool-call and text turns) is sent back with `reasoning_content` read from that key, as DeepSeek's thinking mode requires for requests carrying `tools`.
 - Tool calling: multi-turn assistant tool calls and corresponding `tool` role messages are accurately mapped. Streaming tool calls are accumulated via `ToolCallAccumulator`.
 - Token usage: mapped from `Usage`, reporting `input_tokens`, `output_tokens`, and `cached_input_tokens` (via `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens`).
 

@@ -27,8 +27,8 @@ use serde_json::Value;
 use crate::{
     error::Error,
     model::{
-        LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role, TokenUsage,
-        ToolCall,
+        LlmModel, Message, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role,
+        TokenUsage, ToolCall,
     },
     tools::ToolDefinition,
 };
@@ -38,8 +38,10 @@ use crate::{
 /// Supports both `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
 ///
 /// In thinking mode the model's reasoning (`reasoning_content`) is surfaced as
-/// [`ModelResponse::thinking`]. When the runner stores it on the assistant
-/// [`Message`](crate::model::Message), this adapter replays it as
+/// [`ModelResponse::thinking`] / [`ModelStreamChunk::Thinking`] for display, and
+/// also emitted as opaque provider metadata (`{"deepseek": {"reasoning_content":
+/// ...}}`) that the runner stores on the assistant
+/// [`Message`](crate::model::Message). This adapter replays it as
 /// `reasoning_content` on every later request, as DeepSeek requires for
 /// tool-using conversations.
 ///
@@ -225,6 +227,27 @@ fn to_token_usage(usage: &CetologiaUsage) -> Option<TokenUsage> {
     })
 }
 
+/// Key under which this adapter stores its state in
+/// [`Message::provider_metadata`]. Other adapters' keys are ignored.
+const METADATA_KEY: &str = "deepseek";
+
+/// Wraps a turn's accumulated reasoning as provider metadata, or `None` when the
+/// model produced no reasoning.
+fn reasoning_metadata(reasoning: &str) -> Option<Value> {
+    (!reasoning.is_empty())
+        .then(|| serde_json::json!({ METADATA_KEY: { "reasoning_content": reasoning } }))
+}
+
+/// Reads back the reasoning this adapter stored on an assistant message.
+fn replayed_reasoning(msg: &Message) -> Option<String> {
+    msg.provider_metadata
+        .as_ref()?
+        .get(METADATA_KEY)?
+        .get("reasoning_content")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 /// Helper to build a DeepSeek [`ChatCompletionRequest`] from a [`ModelRequest`].
 fn build_chat_request(
     model: &str,
@@ -259,7 +282,7 @@ fn build_chat_request(
                 Role::User => messages.push(ChatMessage::user(text.clone())),
                 Role::Assistant => messages.push(ChatMessage::assistant_with_reasoning(
                     Some(text.clone()),
-                    msg.thinking.clone(),
+                    replayed_reasoning(&msg),
                 )),
             },
             MessageContent::ToolCalls(calls) => {
@@ -277,7 +300,7 @@ fn build_chat_request(
                 messages.push(ChatMessage {
                     role: CetologiaRole::Assistant,
                     content: None,
-                    reasoning_content: msg.thinking.clone(),
+                    reasoning_content: replayed_reasoning(&msg),
                     tool_calls: Some(tool_calls),
                     ..Default::default()
                 });
@@ -340,6 +363,7 @@ impl LlmModel for DeepSeekModel {
             .ok_or_else(|| Error::Provider("empty choices in DeepSeek response".into()))?;
 
         let thinking = choice.message.reasoning_content;
+        let provider_metadata = thinking.as_deref().and_then(reasoning_metadata);
         let token_usage = response.usage.as_ref().and_then(to_token_usage);
 
         let tool_calls: Vec<ToolCall> = choice
@@ -364,6 +388,7 @@ impl LlmModel for DeepSeekModel {
                 text: None,
                 tool_calls,
                 thinking,
+                provider_metadata,
                 token_usage,
             });
         }
@@ -372,6 +397,7 @@ impl LlmModel for DeepSeekModel {
             text: choice.message.content,
             tool_calls: vec![],
             thinking,
+            provider_metadata,
             token_usage,
         })
     }
@@ -400,6 +426,8 @@ impl LlmModel for DeepSeekModel {
 
             let mut tool_accumulator = ToolCallAccumulator::new();
             let mut latest_usage: Option<TokenUsage> = None;
+            // Buffered so it can be replayed on later turns.
+            let mut reasoning = String::new();
 
             while let Some(chunk_res) = stream.next().await {
                 let chunk = match chunk_res {
@@ -415,10 +443,11 @@ impl LlmModel for DeepSeekModel {
                 }
 
                 for choice in chunk.choices {
-                    if let Some(reasoning) = choice.delta.reasoning_content
-                        && !reasoning.is_empty()
+                    if let Some(delta_reasoning) = choice.delta.reasoning_content
+                        && !delta_reasoning.is_empty()
                     {
-                        yield Ok(ModelStreamChunk::Thinking(reasoning));
+                        reasoning.push_str(&delta_reasoning);
+                        yield Ok(ModelStreamChunk::Thinking(delta_reasoning));
                     }
 
                     if let Some(text) = choice.delta.content
@@ -442,6 +471,10 @@ impl LlmModel for DeepSeekModel {
                     args,
                     provider_metadata: None,
                 }));
+            }
+
+            if let Some(metadata) = reasoning_metadata(&reasoning) {
+                yield Ok(ModelStreamChunk::ProviderMetadata(metadata));
             }
 
             if let Some(usage) = latest_usage {

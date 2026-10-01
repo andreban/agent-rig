@@ -138,7 +138,7 @@ fn test_build_chat_request_with_tool_calls_and_results() {
                     tool_call: Arc::clone(&call),
                     result: json!({ "success": true }),
                 },
-                thinking: None,
+                provider_metadata: None,
             },
         ]),
         system: None,
@@ -180,10 +180,15 @@ fn test_build_chat_request_replays_reasoning_on_assistant_turns() {
     let req = ModelRequest {
         messages: MessageList::from(vec![
             Message::user("hi"),
-            Message::tool_calls(vec![Arc::clone(&call)]).with_thinking("tool reasoning"),
+            Message::tool_calls(vec![Arc::clone(&call)])
+                .with_provider_metadata(reasoning_metadata("tool reasoning").unwrap()),
             Message::tool_result(Arc::clone(&call), json!({ "ok": true })),
-            Message::assistant("done").with_thinking("text reasoning"),
-            Message::assistant("no thinking"),
+            Message::assistant("done")
+                .with_provider_metadata(reasoning_metadata("text reasoning").unwrap()),
+            Message::assistant("no metadata"),
+            // Another provider's state is ignored, not misreplayed.
+            Message::assistant("foreign")
+                .with_provider_metadata(json!({ "other": { "reasoning_content": "x" } })),
         ]),
         system: None,
         output_schema: None,
@@ -192,7 +197,7 @@ fn test_build_chat_request_replays_reasoning_on_assistant_turns() {
 
     let chat_req = build_chat_request("deepseek-reasoner", None, None, None, None, req);
 
-    assert_eq!(chat_req.messages.len(), 5);
+    assert_eq!(chat_req.messages.len(), 6);
     assert_eq!(chat_req.messages[0].reasoning_content, None);
     assert_eq!(
         chat_req.messages[1].reasoning_content.as_deref(),
@@ -205,6 +210,16 @@ fn test_build_chat_request_replays_reasoning_on_assistant_turns() {
         Some("text reasoning")
     );
     assert_eq!(chat_req.messages[4].reasoning_content, None);
+    assert_eq!(chat_req.messages[5].reasoning_content, None);
+}
+
+#[test]
+fn test_reasoning_metadata_shape() {
+    assert_eq!(
+        reasoning_metadata("why"),
+        Some(json!({ "deepseek": { "reasoning_content": "why" } }))
+    );
+    assert_eq!(reasoning_metadata(""), None);
 }
 
 #[test]

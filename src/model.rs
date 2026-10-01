@@ -55,18 +55,24 @@ pub struct Message {
     pub role: Role,
     /// The content of the message.
     pub content: MessageContent,
-    /// Reasoning/thinking text the model produced on this assistant turn.
+    /// Opaque provider state attached to an assistant turn, round-tripped back
+    /// to the adapter that produced it on later requests.
     ///
-    /// The runner populates this from the model's thinking output when it
-    /// appends an assistant message (text or tool calls) to the thread, so
-    /// adapters whose provider expects prior reasoning to be replayed (e.g.
-    /// DeepSeek's `reasoning_content` in thinking mode with tools) can send it
-    /// back on later turns. Adapters that do not need it ignore the field.
+    /// This is the message-level counterpart of [`ToolCall::provider_metadata`].
+    /// Adapters emit it via [`ModelStreamChunk::ProviderMetadata`] (or
+    /// [`ModelResponse::provider_metadata`]) when their provider needs state
+    /// replayed — e.g. [`DeepSeekModel`] stores the turn's `reasoning_content`
+    /// under a `"deepseek"` key. The runner attaches whatever it received to the
+    /// assistant message it appends and never looks inside. Adapters read only
+    /// their own key, so a thread moved across providers is ignored rather than
+    /// misreplayed.
     ///
     /// Omitted from serialized output when `None`, and defaults to `None` when
     /// absent, so previously persisted conversations still deserialize.
+    ///
+    /// [`DeepSeekModel`]: crate::models::deepseek::DeepSeekModel
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<String>,
+    pub provider_metadata: Option<serde_json::Value>,
 }
 
 impl Message {
@@ -83,7 +89,7 @@ impl Message {
         Self {
             role: Role::User,
             content: MessageContent::Text(content.into()),
-            thinking: None,
+            provider_metadata: None,
         }
     }
 
@@ -100,7 +106,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: MessageContent::Text(content.into()),
-            thinking: None,
+            provider_metadata: None,
         }
     }
 
@@ -109,7 +115,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: MessageContent::ToolCalls(calls),
-            thinking: None,
+            provider_metadata: None,
         }
     }
 
@@ -118,24 +124,25 @@ impl Message {
         Self {
             role: Role::User,
             content: MessageContent::ToolResult { tool_call, result },
-            thinking: None,
+            provider_metadata: None,
         }
     }
 
-    /// Attaches the model's reasoning/thinking text to this message.
-    ///
-    /// Intended for assistant messages; see [`Message::thinking`].
+    /// Attaches opaque provider state to this message; see
+    /// [`Message::provider_metadata`].
     ///
     /// # Examples
     ///
     /// ```
     /// use agent_rig::model::Message;
+    /// use serde_json::json;
     ///
-    /// let msg = Message::assistant("Paris.").with_thinking("The user asks about France...");
-    /// assert_eq!(msg.thinking.as_deref(), Some("The user asks about France..."));
+    /// let msg = Message::assistant("Paris.")
+    ///     .with_provider_metadata(json!({ "my_provider": { "state": "..." } }));
+    /// assert!(msg.provider_metadata.is_some());
     /// ```
-    pub fn with_thinking(mut self, thinking: impl Into<String>) -> Self {
-        self.thinking = Some(thinking.into());
+    pub fn with_provider_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.provider_metadata = Some(metadata);
         self
     }
 }
@@ -369,6 +376,13 @@ pub struct ModelResponse {
     /// [`DeepSeekModel`]: crate::models::deepseek::DeepSeekModel
     /// [`ThinkingConfig`]: geologia::prelude::ThinkingConfig
     pub thinking: Option<String>,
+    /// Opaque provider state to store on the assistant message for this turn
+    /// and replay on later requests; see [`Message::provider_metadata`].
+    ///
+    /// The default [`LlmModel::generate_stream`] forwards it as a
+    /// [`ModelStreamChunk::ProviderMetadata`] chunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<serde_json::Value>,
     /// Token counts reported by the provider for this call.
     ///
     /// `None` when the provider did not report usage on this response.
@@ -401,6 +415,13 @@ pub enum ModelStreamChunk {
     /// typically as the final chunk before the stream ends. Provider
     /// adapters that do not report usage simply never yield this variant.
     Usage(TokenUsage),
+    /// Opaque provider state for this turn, to be stored on the assistant
+    /// message the runner appends (see [`Message::provider_metadata`]).
+    ///
+    /// Emitted at most once per [`LlmModel::generate_stream`] invocation,
+    /// after the turn's content. Adapters that need no replay state never
+    /// yield this variant.
+    ProviderMetadata(serde_json::Value),
 }
 
 /// Trait implemented by all LLM provider backends.
@@ -424,7 +445,13 @@ pub enum ModelStreamChunk {
 ///         let echo = request.messages.last().and_then(|m| {
 ///             if let MessageContent::Text(t) = &m.content { Some(t.clone()) } else { None }
 ///         });
-///         Ok(ModelResponse { text: echo, tool_calls: vec![], thinking: None, token_usage: None })
+///         Ok(ModelResponse {
+///             text: echo,
+///             tool_calls: vec![],
+///             thinking: None,
+///             provider_metadata: None,
+///             token_usage: None,
+///         })
 ///     }
 /// }
 /// ```
@@ -462,6 +489,9 @@ pub trait LlmModel: Send + Sync {
             if let Some(text) = response.text {
                 yield Ok(ModelStreamChunk::TextDelta(text));
             }
+            if let Some(metadata) = response.provider_metadata {
+                yield Ok(ModelStreamChunk::ProviderMetadata(metadata));
+            }
             if let Some(token_usage) = response.token_usage {
                 yield Ok(ModelStreamChunk::Usage(token_usage));
             }
@@ -488,19 +518,19 @@ mod tests {
     }
 
     #[test]
-    fn message_with_thinking_round_trips_through_serde() {
-        let msg = Message::assistant("hi").with_thinking("let me think");
+    fn message_provider_metadata_round_trips_through_serde() {
+        let msg = Message::assistant("hi").with_provider_metadata(serde_json::json!({ "p": 1 }));
         let json = serde_json::to_value(&msg).unwrap();
-        assert_eq!(json["thinking"], "let me think");
+        assert_eq!(json["provider_metadata"], serde_json::json!({ "p": 1 }));
         let back: Message = serde_json::from_value(json).unwrap();
         assert_eq!(back, msg);
     }
 
     #[test]
-    fn message_without_thinking_omits_field_and_loads_legacy_json() {
+    fn message_without_provider_metadata_omits_field_and_loads_legacy_json() {
         let msg = Message::assistant("hi");
         let json = serde_json::to_value(&msg).unwrap();
-        assert!(json.get("thinking").is_none());
+        assert!(json.get("provider_metadata").is_none());
 
         // Conversations persisted before the field existed still load.
         let legacy = serde_json::json!({

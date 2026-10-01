@@ -412,6 +412,7 @@ impl LlmModel for GeminiModel {
                 text: None,
                 tool_calls,
                 thinking,
+                provider_metadata: None,
                 token_usage,
             });
         }
@@ -420,6 +421,7 @@ impl LlmModel for GeminiModel {
             text,
             tool_calls: vec![],
             thinking,
+            provider_metadata: None,
             token_usage,
         })
     }
