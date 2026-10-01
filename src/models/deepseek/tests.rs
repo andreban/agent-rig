@@ -26,7 +26,7 @@ struct TestSchema {
 
 #[test]
 fn test_build_chat_request_empty() {
-    let req = build_chat_request("deepseek-chat", None, None, None, empty_request());
+    let req = build_chat_request("deepseek-chat", None, None, None, None, empty_request());
     assert_eq!(req.model, "deepseek-chat");
     assert!(req.messages.is_empty());
 }
@@ -77,7 +77,7 @@ fn test_build_chat_request_with_system_and_messages() {
         tools: vec![],
     };
 
-    let chat_req = build_chat_request("deepseek-chat", Some(0.7), Some(100), Some(0.9), req);
+    let chat_req = build_chat_request("deepseek-chat", Some(0.7), Some(100), Some(0.9), None, req);
 
     assert_eq!(chat_req.model, "deepseek-chat");
     assert_eq!(chat_req.temperature, Some(0.7));
@@ -110,7 +110,7 @@ fn test_build_chat_request_with_tools_and_schema() {
         tools: vec![tool_def],
     };
 
-    let chat_req = build_chat_request("deepseek-chat", None, None, None, req);
+    let chat_req = build_chat_request("deepseek-chat", None, None, None, None, req);
 
     assert_eq!(chat_req.response_format, Some(ResponseFormat::JsonObject));
     assert_eq!(chat_req.tools.as_ref().unwrap().len(), 1);
@@ -138,6 +138,7 @@ fn test_build_chat_request_with_tool_calls_and_results() {
                     tool_call: Arc::clone(&call),
                     result: json!({ "success": true }),
                 },
+                provider_metadata: None,
             },
         ]),
         system: None,
@@ -145,7 +146,7 @@ fn test_build_chat_request_with_tool_calls_and_results() {
         tools: vec![],
     };
 
-    let chat_req = build_chat_request("deepseek-chat", None, None, None, req);
+    let chat_req = build_chat_request("deepseek-chat", None, None, None, None, req);
 
     assert_eq!(chat_req.messages.len(), 2);
     assert_eq!(chat_req.messages[0].role, CetologiaRole::Assistant);
@@ -170,4 +171,72 @@ fn test_deepseek_model_accessors_and_reexport() {
 
     // Verify the re-exported cetologia crate is directly usable
     let _req = cetologia::prelude::ChatCompletionRequest::builder("deepseek-chat").build();
+}
+
+#[test]
+fn test_build_chat_request_replays_reasoning_on_assistant_turns() {
+    let call = Arc::new(ToolCall::new("call_1".into(), "f".into(), json!({})));
+
+    let req = ModelRequest {
+        messages: MessageList::from(vec![
+            Message::user("hi"),
+            Message::tool_calls(vec![Arc::clone(&call)])
+                .with_provider_metadata(reasoning_metadata("tool reasoning").unwrap()),
+            Message::tool_result(Arc::clone(&call), json!({ "ok": true })),
+            Message::assistant("done")
+                .with_provider_metadata(reasoning_metadata("text reasoning").unwrap()),
+            Message::assistant("no metadata"),
+            // Another provider's state is ignored, not misreplayed.
+            Message::assistant("foreign")
+                .with_provider_metadata(json!({ "other": { "reasoning_content": "x" } })),
+        ]),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    };
+
+    let chat_req = build_chat_request("deepseek-reasoner", None, None, None, None, req);
+
+    assert_eq!(chat_req.messages.len(), 6);
+    assert_eq!(chat_req.messages[0].reasoning_content, None);
+    assert_eq!(
+        chat_req.messages[1].reasoning_content.as_deref(),
+        Some("tool reasoning")
+    );
+    assert_eq!(chat_req.messages[2].reasoning_content, None);
+    assert_eq!(chat_req.messages[3].content.as_deref(), Some("done"));
+    assert_eq!(
+        chat_req.messages[3].reasoning_content.as_deref(),
+        Some("text reasoning")
+    );
+    assert_eq!(chat_req.messages[4].reasoning_content, None);
+    assert_eq!(chat_req.messages[5].reasoning_content, None);
+}
+
+#[test]
+fn test_reasoning_metadata_shape() {
+    assert_eq!(
+        reasoning_metadata("why"),
+        Some(json!({ "deepseek": { "reasoning_content": "why" } }))
+    );
+    assert_eq!(reasoning_metadata(""), None);
+}
+
+#[test]
+fn test_build_chat_request_reasoning_effort() {
+    let req = build_chat_request(
+        "deepseek-reasoner",
+        None,
+        None,
+        None,
+        Some(ReasoningEffort::None),
+        empty_request(),
+    );
+    assert_eq!(req.reasoning_effort, Some(ReasoningEffort::None));
+    let body = serde_json::to_value(&req).unwrap();
+    assert_eq!(body["reasoning_effort"], "none");
+
+    let req = build_chat_request("deepseek-reasoner", None, None, None, None, empty_request());
+    let body = serde_json::to_value(&req).unwrap();
+    assert!(body.get("reasoning_effort").is_none());
 }

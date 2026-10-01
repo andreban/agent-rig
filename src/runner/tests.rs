@@ -54,6 +54,7 @@ fn text(s: &str) -> Result<ModelResponse, Error> {
         text: Some(s.to_string()),
         tool_calls: vec![],
         thinking: None,
+        provider_metadata: None,
         token_usage: None,
     })
 }
@@ -63,6 +64,7 @@ fn tool_call(id: &str, name: &str, args: serde_json::Value) -> Result<ModelRespo
         text: None,
         tool_calls: vec![ToolCall::new(id.to_string(), name.to_string(), args)],
         thinking: None,
+        provider_metadata: None,
         token_usage: None,
     })
 }
@@ -96,6 +98,7 @@ async fn thinking_delta_is_forwarded() {
         text: Some("answer".to_string()),
         tool_calls: vec![],
         thinking: Some("reasoning".to_string()),
+        provider_metadata: None,
         token_usage: None,
     })]);
     let runner = AgentRunner::new(model);
@@ -117,6 +120,7 @@ async fn usage_event_is_forwarded() {
         text: Some("hi".to_string()),
         tool_calls: vec![],
         thinking: None,
+        provider_metadata: None,
         token_usage: Some(TokenUsage {
             input_tokens: Some(10),
             output_tokens: Some(5),
@@ -213,6 +217,86 @@ async fn turn_finish_thread_contains_full_history() {
 }
 
 #[tokio::test]
+async fn provider_metadata_is_stored_on_assistant_messages() {
+    let model = ScriptedModel::new(vec![
+        Ok(ModelResponse {
+            text: None,
+            tool_calls: vec![ToolCall::new("c1".into(), "greet".into(), json!({}))],
+            thinking: Some("display only".to_string()),
+            provider_metadata: Some(json!({ "p": "tool turn" })),
+            token_usage: None,
+        }),
+        Ok(ModelResponse {
+            text: Some("done".to_string()),
+            tool_calls: vec![],
+            thinking: None,
+            provider_metadata: Some(json!({ "p": "text turn" })),
+            token_usage: None,
+        }),
+    ]);
+    let runner = AgentRunner::new(model.clone());
+
+    let mut finish_thread: Option<MessageList> = None;
+    let mut stream = runner.run(&agent(), vec![Message::user("hello")].into());
+    while let Some(ev) = stream.next().await {
+        match ev.agent_event {
+            AgentEvent::ToolCall(call) => call.resolve(json!({"ok": true})),
+            AgentEvent::TurnFinish { thread } => finish_thread = Some(thread),
+            _ => {}
+        }
+    }
+
+    let thread = finish_thread.unwrap();
+    assert_eq!(thread[0].provider_metadata, None);
+    assert_eq!(
+        thread[1].provider_metadata,
+        Some(json!({ "p": "tool turn" }))
+    );
+    assert_eq!(thread[2].provider_metadata, None);
+    assert_eq!(
+        thread[3].provider_metadata,
+        Some(json!({ "p": "text turn" }))
+    );
+
+    // The second request replays the tool-call turn with its metadata.
+    let requests = model.requests();
+    assert_eq!(
+        requests[1].messages[1].provider_metadata,
+        Some(json!({ "p": "tool turn" }))
+    );
+}
+
+#[tokio::test]
+async fn thinking_alone_is_not_stored_on_messages() {
+    // Reasoning text is for display (ThinkingDelta); only adapter-emitted
+    // provider metadata is kept in the thread.
+    let model = ScriptedModel::new(vec![
+        Ok(ModelResponse {
+            text: None,
+            tool_calls: vec![ToolCall::new("c1".into(), "greet".into(), json!({}))],
+            thinking: Some("reasoning".to_string()),
+            provider_metadata: None,
+            token_usage: None,
+        }),
+        text("done"),
+    ]);
+    let runner = AgentRunner::new(model);
+
+    let mut finish_thread: Option<MessageList> = None;
+    let mut stream = runner.run(&agent(), vec![Message::user("hello")].into());
+    while let Some(ev) = stream.next().await {
+        match ev.agent_event {
+            AgentEvent::ToolCall(call) => call.resolve(json!({"ok": true})),
+            AgentEvent::TurnFinish { thread } => finish_thread = Some(thread),
+            _ => {}
+        }
+    }
+
+    let thread = finish_thread.unwrap();
+    assert!(thread.iter().all(|m| m.provider_metadata.is_none()));
+}
+
+#[tokio::test]
 async fn multiple_tool_calls_all_resolved_in_one_turn() {
     let model = ScriptedModel::new(vec![
         Ok(ModelResponse {
@@ -222,6 +306,7 @@ async fn multiple_tool_calls_all_resolved_in_one_turn() {
                 ToolCall::new("c2".to_string(), "b".to_string(), json!({})),
             ],
             thinking: None,
+            provider_metadata: None,
             token_usage: None,
         }),
         text("all done"),

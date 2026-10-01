@@ -208,6 +208,7 @@ impl AgentRunner {
             let mut model_stream = self.model.generate_stream(request);
             let mut tool_calls: Vec<Arc<ToolCall>> = Vec::new();
             let mut reply = String::new();
+            let mut provider_metadata: Option<Value> = None;
             loop {
                 tokio::select! {
                     biased;
@@ -235,6 +236,9 @@ impl AgentRunner {
                             Ok(ModelStreamChunk::Usage(usage)) => {
                                 let _ = tx.send(AgentEvent::Usage(usage)).await;
                             }
+                            Ok(ModelStreamChunk::ProviderMetadata(metadata)) => {
+                                provider_metadata = Some(metadata);
+                            }
                             Err(error) => {
                                 let _ = tx.send(AgentEvent::Error(error)).await;
                                 return;
@@ -246,11 +250,19 @@ impl AgentRunner {
 
             if tool_calls.is_empty() {
                 if !reply.is_empty() {
-                    thread.push(Message::assistant(reply));
+                    let mut message = Message::assistant(reply);
+                    message.provider_metadata = provider_metadata;
+                    thread.push(message);
                 }
                 let _ = tx.send(AgentEvent::TurnFinish { thread }).await;
                 return;
             }
+
+            // Opaque adapter state rides on the assistant message so the
+            // adapter can replay it on later turns.
+            let mut message = Message::tool_calls(tool_calls.clone());
+            message.provider_metadata = provider_metadata;
+            thread.push(message);
 
             self.handle_tool_calls(&tx, tool_calls, &mut thread, &cancel)
                 .await;
@@ -274,7 +286,6 @@ impl AgentRunner {
         thread: &mut MessageList,
         cancel: &CancellationToken,
     ) {
-        thread.push(Message::tool_calls(tool_calls.clone()));
         let tool_futures = tool_calls.into_iter().map(|call| {
             info!("Invoking tool '{}' with args '{:?}'", call.name, call.args);
             let cancel = cancel.clone();

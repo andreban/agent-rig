@@ -345,6 +345,7 @@ impl LlmModel for OllamaModel {
                 text: None,
                 tool_calls,
                 thinking: None,
+                provider_metadata: None,
                 token_usage,
             });
         }
@@ -353,6 +354,7 @@ impl LlmModel for OllamaModel {
             text: Some(output),
             tool_calls: vec![],
             thinking: None,
+            provider_metadata: None,
             token_usage,
         })
     }

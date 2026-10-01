@@ -30,6 +30,7 @@ schemars = "1"
 schemars = "1.2.1"
 dotenvy = "0.15"
 reqwest = { version = "0.13", features = ["json"] }
+wiremock = "0.6"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [[test]]
@@ -42,6 +43,10 @@ required-features = ["ollama"]
 
 [[test]]
 name = "integration_deepseek"
+required-features = ["deepseek"]
+
+[[test]]
+name = "deepseek_reasoning_replay"
 required-features = ["deepseek"]
 
 # Gemini Examples
