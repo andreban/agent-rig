@@ -5,7 +5,7 @@
 //!
 //! Each submodule provides a concrete [`LlmModel`](crate::model::LlmModel)
 //! implementation for a specific provider. Modules are gated behind Cargo
-//! features; enable `gemini`, `ollama`, or `deepseek` (or `full`) to include them.
+//! features; enable `gemini`, `ollama`, `deepseek`, or `anthropic` (or `full`) to include them.
 
 #[cfg(feature = "gemini")]
 pub mod gemini;
@@ -15,3 +15,6 @@ pub mod ollama;
 
 #[cfg(feature = "deepseek")]
 pub mod deepseek;
+
+#[cfg(feature = "anthropic")]
+pub mod anthropic;

@@ -17,7 +17,7 @@
        │ implements
 ┌──────┴─────────────────────────┐
 ▼                ▼               ▼
-GeminiModel     OllamaModel     DeepSeekModel   (more providers …)
+GeminiModel     OllamaModel     DeepSeekModel   AnthropicModel   (more providers …)
 ```
 
 The library is a single crate (`agent-rig`). Provider adapters live in `src/models/`. Agent logic lives in `src/agent.rs` and `src/runner/`. The `LlmModel` trait in `src/model.rs` is the extension point. Tool types live under `src/tools/`.
@@ -142,8 +142,8 @@ pub struct ToolCall {
 pub struct ModelResponse {
     pub text: Option<String>,          // None when the model issued tool calls
     pub tool_calls: Vec<ToolCall>,     // empty on a final text response
-    pub thinking: Option<String>,      // reasoning trace for display; set by Gemini (include_thoughts) and DeepSeek (thinking mode)
-    pub provider_metadata: Option<serde_json::Value>, // opaque replay state for the assistant message (DeepSeek reasoning_content)
+    pub thinking: Option<String>,      // reasoning trace for display; set by Gemini (include_thoughts), DeepSeek (thinking mode) and Anthropic (summarized thinking)
+    pub provider_metadata: Option<serde_json::Value>, // opaque replay state for the assistant message (DeepSeek reasoning_content, Anthropic content blocks)
     pub token_usage: Option<TokenUsage>, // per-call token counts; None when the provider did not report usage
 }
 
@@ -459,6 +459,20 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Tool calling: multi-turn assistant tool calls and corresponding `tool` role messages are accurately mapped. Streaming tool calls are accumulated via `ToolCallAccumulator`.
 - Token usage: mapped from `Usage`, reporting `input_tokens`, `output_tokens`, and `cached_input_tokens` (via `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens`).
 
+### `AnthropicModel` (`src/models/anthropic/mod.rs`)
+
+- Wraps the `antropologia` crate (`AntropologiaClient`). Re-exports `antropologia` from `agent_rig::models::anthropic::antropologia`, and `Effort`, `ThinkingConfig` and `ThinkingDisplay` from `agent_rig::models::anthropic`.
+- Exposes `.client()` (`&AntropologiaClient`) and `.model()` (`&str`) accessors.
+- System instructions become the request's top-level `system` field.
+- Optional parameters (`max_tokens`, `effort`, `thinking`, `temperature`, `top_p`, `base_url`) configurable via `AnthropicModel::builder(…)`. `max_tokens` defaults to `antropologia::DEFAULT_MAX_TOKENS` (16,000); unset `effort` and `thinking` are omitted so the model's defaults apply.
+- Messages: consecutive same-role agent-rig messages are merged into one Claude message, since Claude requires alternating roles (the runner appends one `ToolResult` message per call). Tool results are sent as `tool_result` blocks; a `{"error": …}` envelope sets `is_error: true`.
+- Structured output: when `ModelRequest::output_schema` is set, it is sent as `output_config.format` (`json_schema`). `antropologia` removes `$schema` and adds `additionalProperties: false` to object schemas, as the API requires; callers keep schemas provider-neutral.
+- Content-block replay: each turn's content blocks (thinking blocks with signatures, text, tool calls, and block types `antropologia` does not model) are emitted as provider metadata `{"anthropic": {"content": [...]}}`. Assistant messages carrying that key are sent back with exactly those blocks, as Claude requires when thinking precedes tool calls; other assistant messages are rebuilt from their `MessageContent`.
+- Extended thinking: non-empty thinking text (returned when `display` is `summarized`) is forwarded as `ModelStreamChunk::Thinking` / `ModelResponse::thinking`.
+- Streaming: `generate_stream` forwards thinking and text deltas as they arrive, rebuilds the message with `MessageAccumulator`, then emits tool calls, provider metadata and usage.
+- Refusals: `stop_reason: "refusal"` is returned as `Error::Provider`, with `stop_details` in the message.
+- Token usage: `input_tokens` is the sum of uncached input, cache writes and cache reads (Claude reports them separately); `cached_input_tokens` is `cache_read_input_tokens`.
+
 ## Cargo Features
 
 Provider adapters are opt-in via Cargo features. The core types (`LlmModel`, `Agent`, `AgentRunner`, `Tool`, `ToolRegistry`, `Error`, etc.) are always available regardless of which features are enabled.
@@ -468,7 +482,8 @@ Provider adapters are opt-in via Cargo features. The core types (`LlmModel`, `Ag
 | `gemini`   | `GeminiModel` (`geologia`)       |
 | `ollama`   | `OllamaModel` (`ollama-rs`)      |
 | `deepseek` | `DeepSeekModel` (`cetologia`)    |
-| `full`     | All providers (`gemini`, `ollama`, `deepseek`) |
+| `anthropic` | `AnthropicModel` (`antropologia`) |
+| `full`     | All providers (`gemini`, `ollama`, `deepseek`, `anthropic`) |
 
 The `default` feature set is empty — no provider is compiled unless explicitly requested.
 
@@ -510,7 +525,11 @@ src/
     gemini/           — GeminiModel, GeminiModelBuilder, re-exports geologia     (feature: gemini)
     ollama/           — OllamaModel, OllamaModelBuilder, re-exports ollama_rs    (feature: ollama)
     deepseek/         — DeepSeekModel, DeepSeekModelBuilder, re-exports cetologia (feature: deepseek)
+    anthropic/        — AnthropicModel, AnthropicModelBuilder, re-exports antropologia (feature: anthropic)
 examples/
+  anthropic/
+    chat.rs               — streaming chat with claude-haiku-5-5
+    tool_calling.rs       — tool execution and synthesis
   deepseek/
     chat.rs               — streaming chat with deepseek-chat (V3)
     reasoner.rs           — thinking trace with deepseek-reasoner (R1)
@@ -535,6 +554,7 @@ tests/
   integration_gemini.rs   — live Gemini integration tests
   integration_ollama.rs   — live Ollama integration tests
   integration_deepseek.rs — live DeepSeek integration tests
+  integration_anthropic.rs — live Anthropic integration tests
 docs/
   PRD.md                  — product requirements
   SPEC.md                 — this document

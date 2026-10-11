@@ -6,7 +6,7 @@ Define your agent once and run it against any supported LLM backend — swap pro
 
 ## Features
 
-- **Provider-agnostic API** — same `Agent` + `AgentRunner` code works with Google Gemini, Ollama, DeepSeek, or any custom `LlmModel` implementation
+- **Provider-agnostic API** — same `Agent` + `AgentRunner` code works with Google Gemini, Ollama, DeepSeek, Anthropic Claude, or any custom `LlmModel` implementation
 - **Streaming agentic loop** — the runner spawns a background task and yields `AgentEvent`s (text deltas, thinking tokens, tool-call lifecycle) until the model produces a final reply
 - **Concurrent tool execution** — multiple tool calls in a single model turn are executed in parallel; tool-result messages are paired back to the model in request order
 - **Client-side approval** — gate individual tool calls in your event loop before invoking `Tool::call` (e.g. user approval prompts for destructive actions)
@@ -22,6 +22,7 @@ Define your agent once and run it against any supported LLM backend — swap pro
 | `gemini`   | Google Gemini    | Structured output, thinking tokens                                           |
 | `ollama`   | Ollama (local)   | Structured output, native streaming                                          |
 | `deepseek` | DeepSeek (Cloud) | `deepseek-chat` (V3), `deepseek-reasoner` (R1 / thinking), prompt cache hits |
+| `anthropic` | Anthropic Claude | Structured output, adaptive thinking and effort, thinking-block replay, prompt cache reads |
 
 ## Installation
 
@@ -36,6 +37,9 @@ agent-rig = { git = "...", features = ["ollama"] }
 
 # DeepSeek only
 agent-rig = { git = "...", features = ["deepseek"] }
+
+# Anthropic Claude only
+agent-rig = { git = "...", features = ["anthropic"] }
 
 # All providers
 agent-rig = { git = "...", features = ["full"] }
@@ -481,6 +485,20 @@ let model = DeepSeekModel::builder("API_KEY", "deepseek-chat")
     .build();
 ```
 
+### Anthropic Claude
+
+Requires an `ANTHROPIC_API_KEY` environment variable. Each assistant turn's content blocks, thinking blocks included, are replayed unchanged on later requests, as Claude requires.
+
+```rust
+use agent_rig::models::anthropic::{AnthropicModel, Effort, ThinkingConfig};
+
+let model = AnthropicModel::builder("API_KEY", "claude-opus-5-5")
+    .max_tokens(32_000)
+    .effort(Effort::High)
+    .thinking(ThinkingConfig::adaptive_summarized())
+    .build();
+```
+
 ### Direct Client Access & Provider Re-exports
 
 Each provider module re-exports its underlying client crate, eliminating version drift and allowing downstream users to access provider types without declaring additional dependencies:
@@ -488,11 +506,12 @@ Each provider module re-exports its underlying client crate, eliminating version
 - `agent_rig::models::gemini::geologia`
 - `agent_rig::models::ollama::ollama_rs`
 - `agent_rig::models::deepseek::cetologia`
+- `agent_rig::models::anthropic::antropologia`
 
 Each model struct also exposes `.client()` and `.model()` accessors for escaping directly to provider-specific APIs (such as listing models, token counting, or specialized endpoints):
 
 ```rust
-let client = model.client(); // &GeminiClient, &OllamaClient, or &CetologiaClient
+let client = model.client(); // &GeminiClient, &OllamaClient, &CetologiaClient, or &AntropologiaClient
 let name = model.model();    // &str
 ```
 
@@ -506,6 +525,7 @@ graph TD
     LM -->|implements| GM[GeminiModel]
     LM -->|implements| OM[OllamaModel]
     LM -->|implements| DM[DeepSeekModel]
+    LM -->|implements| AM[AnthropicModel]
     LM -->|implements| MORE[more providers…]
 ```
 

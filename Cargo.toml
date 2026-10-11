@@ -9,7 +9,8 @@ default = []
 gemini = ["dep:geologia"]
 ollama = ["dep:ollama-rs"]
 deepseek = ["dep:cetologia"]
-full = ["gemini", "ollama", "deepseek"]
+anthropic = ["dep:antropologia"]
+full = ["gemini", "ollama", "deepseek", "anthropic"]
 
 [dependencies]
 ollama-rs = { git = "https://github.com/andreban/ollama-rs", optional = true }
@@ -25,6 +26,7 @@ tracing = "0.1"
 async-stream = "0.3"
 tokio-util = { version = "0.7", features = ["rt"] }
 schemars = "1"
+antropologia = { git = "https://github.com/andreban/antropologia", version = "0.1.0", optional = true }
 
 [dev-dependencies]
 schemars = "1.2.1"
@@ -130,6 +132,17 @@ required-features = ["deepseek"]
 name = "deepseek_structured_output"
 path = "examples/deepseek/structured_output.rs"
 required-features = ["deepseek"]
+
+# Anthropic Examples
+[[example]]
+name = "anthropic_chat"
+path = "examples/anthropic/chat.rs"
+required-features = ["anthropic"]
+
+[[example]]
+name = "anthropic_tool_calling"
+path = "examples/anthropic/tool_calling.rs"
+required-features = ["anthropic"]
 
 # Ollama Examples
 [[example]]
