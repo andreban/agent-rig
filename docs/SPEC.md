@@ -161,7 +161,7 @@ pub struct TokenUsage {
 `Message` carries a `Role` (`User` | `Assistant`), a `content: MessageContent`, and an optional `provider_metadata: Option<serde_json::Value>` — opaque adapter state for that assistant turn, the message-level counterpart of `ToolCall::provider_metadata`. Adapters that need state replayed emit it as a `ModelStreamChunk::ProviderMetadata` chunk (or `ModelResponse::provider_metadata`); the runner attaches whatever it received to the assistant message it appends (text or tool calls) and never looks inside. Each adapter namespaces its value under its own key and reads only that key, so a thread moved across providers is ignored rather than misreplayed. `Message::with_provider_metadata(..)` sets it manually. It is `#[serde(default, skip_serializing_if = "Option::is_none")]`, so threads persisted before the field existed still load. Reasoning text for display is not stored in the thread; it reaches consumers only through `ThinkingDelta` events. `MessageContent` is an enum with three variants:
 - `Text(String)` — a plain text turn
 - `ToolCalls(Vec<ToolCall>)` — all tool calls from one model turn (one assistant message)
-- `ToolResult { tool_call, result, media }` — the result of one tool execution (one user message). `media: Vec<Media>` carries inline media the tool returned, such as a screenshot (`Media { mime_type, data }`, `data` base64). It is `#[serde(default, skip_serializing_if = "Vec::is_empty")]`, so threads persisted before the field existed still load. `Message::tool_result_with_media(..)` builds one; `Message::tool_result(..)` leaves `media` empty. Media referenced by URL is not supported (see #86).
+- `ToolResult { tool_call, result, media }` — the result of one tool execution (one user message). `media: Vec<Media>` carries media the tool returned, such as a screenshot. `Media` is a `#[non_exhaustive]` enum, serialized with a `type` tag; its only variant today is `Inline { mime_type, data }` (`data` base64), built with `Media::inline(..)`. A URL variant is planned (#86). It is `#[serde(default, skip_serializing_if = "Vec::is_empty")]`, so threads persisted before the field existed still load. `Message::tool_result_with_media(..)` builds one; `Message::tool_result(..)` leaves `media` empty. Only callers driving `LlmModel` directly can attach media today: tools run through `AgentRunner` return a JSON value only (#92).
 
 `output_schema`, when set, instructs the provider adapter to constrain the response to the supplied JSON Schema. Providers that do not support structured output ignore the field silently.
 
@@ -511,7 +511,7 @@ src/
   lib.rs              — crate root, public re-exports
   error.rs            — Error enum
   model.rs            — LlmModel trait, ModelStreamChunk, Message, MessageContent,
-                        ModelRequest, ModelResponse, TokenUsage, ToolCall, Role
+                        Media, ModelRequest, ModelResponse, TokenUsage, ToolCall, Role
   agent.rs            — Agent, AgentBuilder
   runner/
     mod.rs            — AgentRunner, RunEmitter, agentic loop
@@ -553,6 +553,7 @@ examples/
     mpsc_auth_flow.rs     — client-side per-tool approval orchestration, stdin y/N prompt
     mpsc_runner.rs        — runner basics
     cancellation.rs       — drop-the-stream, external CancellationToken, deadline
+    tool_result_image.rs  — image returned in a tool result, checked against the live API
   ollama/
     simple_agent.rs       — local Ollama assistant
 tests/

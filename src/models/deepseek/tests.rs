@@ -250,10 +250,7 @@ fn request_with_tool_result_media() -> ModelRequest {
         "take_screenshot".into(),
         serde_json::json!({}),
     ));
-    let image = Media {
-        mime_type: "image/png".into(),
-        data: "aGVsbG8=".into(),
-    };
+    let image = Media::inline("image/png", "aGVsbG8=");
     ModelRequest {
         messages: MessageList::from(vec![Message::tool_result_with_media(
             call,

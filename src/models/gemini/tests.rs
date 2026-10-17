@@ -271,10 +271,7 @@ fn tool_result_media_becomes_function_response_inline_data() {
             crate::model::Message::tool_result_with_media(
                 call,
                 json!({"ok": true}),
-                vec![Media {
-                    mime_type: "image/png".into(),
-                    data: "aGVsbG8=".into(),
-                }],
+                vec![Media::inline("image/png", "aGVsbG8=")],
             ),
         ]),
         system: None,

@@ -53,13 +53,31 @@ pub enum MessageContent {
     },
 }
 
-/// Media passed to the model inline, such as an image returned by a tool.
+/// Media passed to the model, such as an image returned by a tool.
+///
+/// Non-exhaustive so new sources (such as media referenced by URL) can be
+/// added without breaking callers; match it with a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Media {
-    /// IANA media type, such as `image/png`.
-    pub mime_type: String,
-    /// The media bytes, base64-encoded.
-    pub data: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Media {
+    /// Media carried in the message itself.
+    Inline {
+        /// IANA media type, such as `image/png`.
+        mime_type: String,
+        /// The media bytes, base64-encoded.
+        data: String,
+    },
+}
+
+impl Media {
+    /// Creates inline media from a MIME type and base64-encoded bytes.
+    pub fn inline(mime_type: impl Into<String>, data: impl Into<String>) -> Self {
+        Self::Inline {
+            mime_type: mime_type.into(),
+            data: data.into(),
+        }
+    }
 }
 
 /// A single message in a conversation.
@@ -142,7 +160,9 @@ impl Message {
     /// with media the tool returned, such as a screenshot.
     ///
     /// Adapters that can't send tool-result media return an error rather
-    /// than dropping it.
+    /// than dropping it. Tools run through [`AgentRunner`](crate::runner::AgentRunner)
+    /// can't return media yet (#92): build the message with this constructor
+    /// when calling [`LlmModel`] directly.
     ///
     /// # Examples
     ///
@@ -156,7 +176,7 @@ impl Message {
     ///     args: serde_json::json!({}),
     ///     provider_metadata: None,
     /// });
-    /// let image = Media { mime_type: "image/png".into(), data: "iVBORw0KGgo=".into() };
+    /// let image = Media::inline("image/png", "iVBORw0KGgo=");
     /// let msg = Message::tool_result_with_media(call, serde_json::json!({"ok": true}), vec![image]);
     /// assert!(matches!(msg.content, MessageContent::ToolResult { ref media, .. } if media.len() == 1));
     /// ```
@@ -643,10 +663,7 @@ mod tests {
 
     #[test]
     fn tool_result_media_round_trips_through_serde() {
-        let image = Media {
-            mime_type: "image/png".into(),
-            data: "aGVsbG8=".into(),
-        };
+        let image = Media::inline("image/png", "aGVsbG8=");
         let msg = Message::tool_result_with_media(
             screenshot_call(),
             serde_json::json!({"ok": true}),
@@ -656,7 +673,7 @@ mod tests {
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(
             json["content"]["content"]["media"],
-            serde_json::json!([{"mime_type": "image/png", "data": "aGVsbG8="}])
+            serde_json::json!([{"type": "inline", "mime_type": "image/png", "data": "aGVsbG8="}])
         );
         let restored: Message = serde_json::from_value(json).unwrap();
         assert_eq!(restored, msg);
@@ -686,10 +703,7 @@ mod tests {
         let with_media = Message::tool_result_with_media(
             screenshot_call(),
             serde_json::json!({}),
-            vec![Media {
-                mime_type: "image/png".into(),
-                data: "aGVsbG8=".into(),
-            }],
+            vec![Media::inline("image/png", "aGVsbG8=")],
         );
 
         assert!(!request(vec![Message::user("hi"), plain]).has_tool_result_media());

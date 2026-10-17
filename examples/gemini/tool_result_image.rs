@@ -96,10 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     messages.push(Message::tool_result_with_media(
         call,
         json!({"status": "ok"}),
-        vec![Media {
-            mime_type: "image/png".into(),
-            data: square_png(rgb)?,
-        }],
+        vec![Media::inline("image/png", square_png(rgb)?)],
     ));
 
     let second = model

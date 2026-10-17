@@ -363,11 +363,13 @@ fn function_response_parts(media: &[Media]) -> Option<Vec<FunctionResponsePart>>
     (!media.is_empty()).then(|| {
         media
             .iter()
-            .map(|m| {
-                FunctionResponsePart::InlineData(FunctionResponseBlob {
-                    mime_type: m.mime_type.clone(),
-                    data: m.data.clone(),
-                })
+            .map(|m| match m {
+                Media::Inline { mime_type, data } => {
+                    FunctionResponsePart::InlineData(FunctionResponseBlob {
+                        mime_type: mime_type.clone(),
+                        data: data.clone(),
+                    })
+                }
             })
             .collect()
     })

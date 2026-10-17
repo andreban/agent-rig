@@ -644,7 +644,7 @@ impl LlmModel for MyModel {
         //    Role::User → user, Role::Assistant → assistant/model
         //    MessageContent::Text(s)                                    → plain text turn
         //    MessageContent::ToolCalls(calls)                            → assistant tool-call turn (Vec<Arc<ToolCall>>)
-        //    MessageContent::ToolResult { tool_call, result }            → tool result (echo `tool_call.id`)
+        //    MessageContent::ToolResult { tool_call, result, media }     → tool result (echo `tool_call.id`; send `media`, or return an error if unsupported)
         //
         // 2. Map request.system → system prompt (if supported).
         // 3. Map request.tools → provider function declarations (if non-empty).
