@@ -18,17 +18,17 @@ use std::pin::Pin;
 use antropologia::prelude::{
     AntropologiaClient, ContentBlock, ContentDelta, Message as ClaudeMessage, MessageAccumulator,
     MessagesRequest, MessagesResponse, Role as ClaudeRole, StopReason, StreamEvent,
-    Tool as ClaudeTool, ToolResultContent, Usage as ClaudeUsage,
+    Tool as ClaudeTool, ToolResultContent as ClaudeToolResultContent, Usage as ClaudeUsage,
 };
 use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     error::Error,
     model::{
-        LlmModel, Message, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role,
-        TokenUsage, ToolCall, tool_result_json,
+        LlmModel, Media, Message, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk,
+        Role, TokenUsage, ToolCall, ToolResultContent, tool_result_json,
     },
     tools::ToolDefinition,
 };
@@ -216,41 +216,97 @@ fn replayed_content(msg: &Message) -> Option<Vec<ContentBlock>> {
     serde_json::from_value(content.clone()).ok()
 }
 
-/// Converts a tool result envelope into a Claude tool-result block. agent-rig wraps results
-/// as `{"success": ...}` or `{"error": ...}`; the latter sets `is_error`.
-fn tool_result_block(tool_use_id: &str, result: &Value) -> ContentBlock {
-    let is_error = result
-        .as_object()
-        .is_some_and(|map| map.len() == 1 && map.contains_key("error"));
-    let text = match result {
+/// Converts a JSON value into text for a Claude tool-result block.
+fn json_to_text(value: &Value) -> String {
+    match value {
         Value::String(s) => s.clone(),
         other => other.to_string(),
-    };
-    ContentBlock::ToolResult {
-        tool_use_id: tool_use_id.to_string(),
-        content: ToolResultContent::Text(text),
-        is_error: is_error.then_some(true),
-        cache_control: None,
     }
 }
 
+/// Converts a single [`Media`] into a Claude content block (`image` for supported image types,
+/// `document` for `application/pdf`). Returns an error for unsupported MIME types.
+fn media_block(media: &Media) -> Result<ContentBlock, Error> {
+    match media {
+        Media::Inline { mime_type, data } => {
+            let block_type = match mime_type.as_str() {
+                "image/jpeg" | "image/png" | "image/gif" | "image/webp" => "image",
+                "application/pdf" => "document",
+                other => {
+                    return Err(Error::Provider(format!(
+                        "Anthropic adapter does not support tool-result media type: {other}"
+                    )));
+                }
+            };
+            Ok(ContentBlock::Other(json!({
+                "type": block_type,
+                "source": {
+                    "type": "base64",
+                    "media_type": mime_type,
+                    "data": data,
+                }
+            })))
+        }
+    }
+}
+
+/// Converts tool-result content blocks into a Claude tool-result block. agent-rig wraps results
+/// as `{"success": ...}` or `{"error": ...}`; the latter sets `is_error`. When media blocks are
+/// present, `content` is sent as an array of `text` and `image`/`document` blocks; otherwise it
+/// is sent as a string.
+fn tool_result_block(
+    tool_use_id: &str,
+    content: &[ToolResultContent],
+) -> Result<ContentBlock, Error> {
+    let result = tool_result_json(content);
+    let is_error = result
+        .as_object()
+        .is_some_and(|map| map.len() == 1 && map.contains_key("error"))
+        .then_some(true);
+    let has_media = content
+        .iter()
+        .any(|part| matches!(part, ToolResultContent::Media(_)));
+    if !has_media {
+        return Ok(ContentBlock::ToolResult {
+            tool_use_id: tool_use_id.to_string(),
+            content: ClaudeToolResultContent::Text(json_to_text(&result)),
+            is_error,
+            cache_control: None,
+        });
+    }
+
+    let blocks = content
+        .iter()
+        .map(|part| match part {
+            ToolResultContent::Json(v) => Ok(ContentBlock::text(json_to_text(v))),
+            ToolResultContent::Media(m) => media_block(m),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ContentBlock::ToolResult {
+        tool_use_id: tool_use_id.to_string(),
+        content: ClaudeToolResultContent::Blocks(blocks),
+        is_error,
+        cache_control: None,
+    })
+}
+
 /// Content blocks for one agent-rig message.
-fn content_blocks(msg: &Message) -> Vec<ContentBlock> {
+fn content_blocks(msg: &Message) -> Result<Vec<ContentBlock>, Error> {
     if msg.role == Role::Assistant
         && let Some(content) = replayed_content(msg)
     {
-        return content;
+        return Ok(content);
     }
     match &msg.content {
-        MessageContent::Text(text) => vec![ContentBlock::text(text.clone())],
-        MessageContent::ToolCalls(calls) => calls
+        MessageContent::Text(text) => Ok(vec![ContentBlock::text(text.clone())]),
+        MessageContent::ToolCalls(calls) => Ok(calls
             .iter()
             .map(|call| {
                 ContentBlock::tool_use(call.id.clone(), call.name.clone(), call.args.clone())
             })
-            .collect(),
+            .collect()),
         MessageContent::ToolResult { tool_call, content } => {
-            vec![tool_result_block(&tool_call.id, &tool_result_json(content))]
+            Ok(vec![tool_result_block(&tool_call.id, content)?])
         }
     }
 }
@@ -260,14 +316,14 @@ fn build_messages_request(
     model: &str,
     settings: &Settings,
     request: ModelRequest,
-) -> MessagesRequest {
+) -> Result<MessagesRequest, Error> {
     let mut messages: Vec<ClaudeMessage> = Vec::new();
     for msg in request.messages.iter() {
         let role = match msg.role {
             Role::User => ClaudeRole::User,
             Role::Assistant => ClaudeRole::Assistant,
         };
-        let blocks = content_blocks(msg);
+        let blocks = content_blocks(msg)?;
         // Claude requires alternating roles, so consecutive same-role messages (e.g. one tool
         // result per call) are merged into one.
         match messages.last_mut() {
@@ -301,7 +357,7 @@ fn build_messages_request(
     if let Some(top_p) = settings.top_p {
         builder = builder.top_p(top_p);
     }
-    builder.build()
+    Ok(builder.build())
 }
 
 /// Converts Claude usage into [`TokenUsage`]. Claude reports cache reads and writes apart from
@@ -356,17 +412,10 @@ fn provider_error(error: antropologia::AntropologiaError) -> Error {
     Error::Provider(error.to_string())
 }
 
-/// Returned when a request contains tool-result media, which this adapter can't send yet.
-const TOOL_RESULT_MEDIA_UNSUPPORTED: &str =
-    "Anthropic adapter does not support media in tool results yet";
-
 #[async_trait]
 impl LlmModel for AnthropicModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
-        if request.has_tool_result_media() {
-            return Err(Error::Provider(TOOL_RESULT_MEDIA_UNSUPPORTED.into()));
-        }
-        let request = build_messages_request(&self.model, &self.settings, request);
+        let request = build_messages_request(&self.model, &self.settings, request)?;
         let response = self
             .client
             .messages(&request)
@@ -380,11 +429,13 @@ impl LlmModel for AnthropicModel {
         request: ModelRequest,
     ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
         Box::pin(async_stream::stream! {
-            if request.has_tool_result_media() {
-                yield Err(Error::Provider(TOOL_RESULT_MEDIA_UNSUPPORTED.into()));
-                return;
-            }
-            let request = build_messages_request(&self.model, &self.settings, request);
+            let request = match build_messages_request(&self.model, &self.settings, request) {
+                Ok(request) => request,
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            };
             let mut stream = match self.client.messages_stream(&request).await {
                 Ok(stream) => Box::pin(stream),
                 Err(e) => {

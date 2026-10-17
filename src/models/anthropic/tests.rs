@@ -54,7 +54,8 @@ fn test_build_request_with_system_tools_schema_and_settings() {
     };
 
     let body =
-        serde_json::to_value(build_messages_request("claude-opus-5-5", &settings, req)).unwrap();
+        serde_json::to_value(build_messages_request("claude-opus-5-5", &settings, req).unwrap())
+            .unwrap();
 
     assert_eq!(body["model"], "claude-opus-5-5");
     assert_eq!(body["max_tokens"], 1000);
@@ -81,7 +82,7 @@ fn test_tool_results_merge_into_one_user_turn_and_flag_errors() {
         Message::tool_result(second, json!({ "error": "unknown city" })),
     ]);
 
-    let claude = build_messages_request("claude-opus-5-5", &Settings::default(), req);
+    let claude = build_messages_request("claude-opus-5-5", &Settings::default(), req).unwrap();
 
     assert_eq!(claude.messages.len(), 3);
     assert_eq!(claude.messages[1].role, ClaudeRole::Assistant);
@@ -113,7 +114,8 @@ fn test_assistant_turns_replay_stored_content_blocks() {
         "claude-opus-5-5",
         &Settings::default(),
         request(vec![Message::user("Weather?"), turn]),
-    );
+    )
+    .unwrap();
 
     assert_eq!(claude.messages[1].content, stored);
 }
@@ -124,7 +126,8 @@ fn test_other_providers_metadata_is_ignored() {
         .with_provider_metadata(json!({ "deepseek": { "reasoning_content": "..." } }));
 
     let claude =
-        build_messages_request("claude-opus-5-5", &Settings::default(), request(vec![turn]));
+        build_messages_request("claude-opus-5-5", &Settings::default(), request(vec![turn]))
+            .unwrap();
 
     assert_eq!(
         claude.messages[0].content,
@@ -261,45 +264,179 @@ fn test_anthropic_model_accessors_and_reexport() {
     let _req = antropologia::prelude::MessagesRequest::builder("claude-opus-5-5").build();
 }
 
-/// A request whose only message is a tool result carrying one image.
-fn request_with_tool_result_media() -> ModelRequest {
+#[test]
+fn tool_result_media_becomes_nested_image_block() {
     let call = Arc::new(ToolCall::new(
-        "call-1".into(),
+        "toolu_1".into(),
         "take_screenshot".into(),
-        serde_json::json!({}),
+        json!({}),
     ));
     let image = Media::inline("image/png", "aGVsbG8=");
-    ModelRequest {
-        messages: MessageList::from(vec![Message::tool_result(call, image)]),
-        system: None,
-        output_schema: None,
-        tools: vec![],
-    }
+    let req = request(vec![Message::tool_result(call, image)]);
+
+    let claude = build_messages_request("claude-opus-5-5", &Settings::default(), req).unwrap();
+
+    let results = serde_json::to_value(&claude.messages[0].content).unwrap();
+    assert_eq!(
+        results,
+        json!([
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "aGVsbG8="
+                        }
+                    }
+                ]
+            }
+        ])
+    );
 }
 
-#[tokio::test]
-async fn generate_rejects_tool_result_media() {
-    let model = AnthropicModel::builder("test-key", "claude-opus-5-5").build();
+#[test]
+fn tool_result_with_json_and_media_becomes_text_and_image_blocks() {
+    let call = Arc::new(ToolCall::new(
+        "toolu_1".into(),
+        "take_screenshot".into(),
+        json!({}),
+    ));
+    let req = request(vec![Message::tool_result(
+        call,
+        [
+            json!({ "success": { "width": 64, "height": 64 } }).into(),
+            Media::inline("image/png", "aGVsbG8=").into(),
+        ],
+    )]);
 
-    let result = model.generate(request_with_tool_result_media()).await;
+    let claude = build_messages_request("claude-opus-5-5", &Settings::default(), req).unwrap();
 
-    assert!(
-        matches!(&result, Err(Error::Provider(msg)) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
-        "{result:?}"
+    let results = serde_json::to_value(&claude.messages[0].content).unwrap();
+    assert_eq!(
+        results,
+        json!([
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "{\"success\":{\"height\":64,\"width\":64}}"
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "aGVsbG8="
+                        }
+                    }
+                ]
+            }
+        ])
+    );
+}
+
+#[test]
+fn tool_result_with_error_and_media_sets_is_error() {
+    let call = Arc::new(ToolCall::new(
+        "toolu_1".into(),
+        "take_screenshot".into(),
+        json!({}),
+    ));
+    let req = request(vec![Message::tool_result(
+        call,
+        [
+            json!({ "error": "partial capture" }).into(),
+            Media::inline("image/png", "aGVsbG8=").into(),
+        ],
+    )]);
+
+    let claude = build_messages_request("claude-opus-5-5", &Settings::default(), req).unwrap();
+
+    let results = serde_json::to_value(&claude.messages[0].content).unwrap();
+    assert_eq!(
+        results,
+        json!([
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "is_error": true,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "{\"error\":\"partial capture\"}"
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "aGVsbG8="
+                        }
+                    }
+                ]
+            }
+        ])
+    );
+}
+
+#[test]
+fn tool_result_pdf_media_becomes_nested_document_block() {
+    let call = Arc::new(ToolCall::new(
+        "toolu_1".into(),
+        "fetch_pdf".into(),
+        json!({}),
+    ));
+    let pdf = Media::inline("application/pdf", "JVBERi0xLjc=");
+    let req = request(vec![Message::tool_result(call, pdf)]);
+
+    let claude = build_messages_request("claude-opus-5-5", &Settings::default(), req).unwrap();
+
+    let results = serde_json::to_value(&claude.messages[0].content).unwrap();
+    assert_eq!(
+        results,
+        json!([
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": "JVBERi0xLjc="
+                        }
+                    }
+                ]
+            }
+        ])
     );
 }
 
 #[tokio::test]
-async fn generate_stream_rejects_tool_result_media() {
+async fn unsupported_tool_result_media_type_returns_provider_error() {
+    let call = Arc::new(ToolCall::new("toolu_1".into(), "capture".into(), json!({})));
+    let req = request(vec![Message::tool_result(
+        call,
+        Media::inline("image/bmp", "aGVsbG8="),
+    )]);
     let model = AnthropicModel::builder("test-key", "claude-opus-5-5").build();
 
-    let first = model
-        .generate_stream(request_with_tool_result_media())
-        .next()
-        .await;
-
+    let generate_err = model.generate(req.clone()).await;
     assert!(
-        matches!(&first, Some(Err(Error::Provider(msg))) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
-        "{first:?}"
+        matches!(&generate_err, Err(Error::Provider(msg)) if msg.contains("image/bmp")),
+        "{generate_err:?}"
+    );
+
+    let stream_first = model.generate_stream(req).next().await;
+    assert!(
+        matches!(&stream_first, Some(Err(Error::Provider(msg))) if msg.contains("image/bmp")),
+        "{stream_first:?}"
     );
 }

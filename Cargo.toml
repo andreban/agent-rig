@@ -53,6 +53,10 @@ required-features = ["deepseek"]
 name = "deepseek_reasoning_replay"
 required-features = ["deepseek"]
 
+[[test]]
+name = "integration_anthropic"
+required-features = ["anthropic"]
+
 # Gemini Examples
 [[example]]
 name = "simple_agent"
@@ -149,6 +153,11 @@ required-features = ["anthropic"]
 [[example]]
 name = "anthropic_tool_calling"
 path = "examples/anthropic/tool_calling.rs"
+required-features = ["anthropic"]
+
+[[example]]
+name = "anthropic_tool_result_image"
+path = "examples/anthropic/tool_result_image.rs"
 required-features = ["anthropic"]
 
 # Ollama Examples
