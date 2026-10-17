@@ -98,10 +98,7 @@ async fn call_returns_final_reply_as_success() {
             CancellationToken::new(),
         )
         .await;
-    let ToolResult::Ok(output) = result else {
-        panic!("expected Ok, got {result:?}");
-    };
-    assert_eq!(output, json!("hello world"));
+    assert_eq!(result, ToolResult::ok("hello world"));
 }
 
 /// The JSON args become the child run's user message verbatim (after
@@ -177,9 +174,9 @@ fn build_agent_tool_with_tools(model: Arc<ScriptedModel>, tools: ToolRegistry) -
 /// Returns the result the child model received for the tool call `name`.
 fn tool_result_in(request: &ModelRequest, name: &str) -> Option<serde_json::Value> {
     request.messages.iter().find_map(|m| match &m.content {
-        MessageContent::ToolResult {
-            tool_call, result, ..
-        } if tool_call.name == name => Some(result.clone()),
+        MessageContent::ToolResult { tool_call, content } if tool_call.name == name => {
+            Some(crate::model::tool_result_json(content))
+        }
         _ => None,
     })
 }
@@ -253,10 +250,7 @@ async fn child_tool_call_runs_and_result_reaches_child() {
     let result = tool
         .call(tool_call(json!({})), CancellationToken::new())
         .await;
-    let ToolResult::Ok(output) = result else {
-        panic!("expected Ok, got {result:?}");
-    };
-    assert_eq!(output, json!("done"));
+    assert_eq!(result, ToolResult::ok("done"));
 
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
@@ -323,13 +317,12 @@ async fn unknown_child_tool_resolves_instead_of_hanging() {
     )
     .await
     .expect("unknown tool call was never resolved");
-    let ToolResult::Ok(output) = result else {
-        panic!("expected Ok, got {result:?}");
-    };
-    assert_eq!(output, json!("done"));
+    assert_eq!(result, ToolResult::ok("done"));
     assert_eq!(
         tool_result_in(&model.requests()[1], "missing"),
-        Some(serde_json::Value::from(ToolCallResult::Unknown))
+        Some(serde_json::Value::from(ToolResult::from(
+            ToolCallResult::Unknown
+        )))
     );
 }
 
@@ -384,10 +377,7 @@ async fn result_is_only_the_final_reply() {
     let result = tool
         .call(tool_call(json!({})), CancellationToken::new())
         .await;
-    let ToolResult::Ok(output) = result else {
-        panic!("expected Ok, got {result:?}");
-    };
-    assert_eq!(output, json!("The answer is 42."));
+    assert_eq!(result, ToolResult::ok("The answer is 42."));
 }
 
 /// A final turn with no text is a successful, empty reply; earlier text is
@@ -409,10 +399,7 @@ async fn empty_final_reply_is_ok_empty_string() {
     let result = tool
         .call(tool_call(json!({})), CancellationToken::new())
         .await;
-    let ToolResult::Ok(output) = result else {
-        panic!("expected Ok, got {result:?}");
-    };
-    assert_eq!(output, json!(""));
+    assert_eq!(result, ToolResult::ok(""));
 }
 
 /// Cancelling while a child tool is running ends the call with an error.
@@ -477,7 +464,7 @@ async fn child_tool_receives_request_cancellation_token() {
     tool.execute(ToolCallRequest::new(details, token, resolve_tx))
         .await;
 
-    assert_eq!(resolve_rx.await.unwrap(), json!({"success": true}));
+    assert_eq!(resolve_rx.await.unwrap(), ToolResult::ok(true));
 }
 
 /// An error from the child model ends the call with an error.

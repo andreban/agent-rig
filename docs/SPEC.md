@@ -120,7 +120,7 @@ pub enum ToolCallResult {
 }
 ```
 
-A convenience enum the consumer can build to describe a call's outcome and hand to `ToolCallRequest::resolve` — `From<ToolCallResult> for Value` envelopes each variant into the JSON the model receives (`Ok` passes the value through; `Err`, `Denied`, and `Unknown` become descriptive strings). `Denied` covers a call the consumer chose not to run after its own approval prompt; `Unknown` covers a hallucinated tool name, where resolving with *some* result still keeps the assistant turn and tool-result messages paired. Using `ToolCallResult` is optional — the consumer may resolve with any `serde_json::Value` directly.
+A convenience enum the consumer can build to describe a call's outcome and hand to `ToolCallRequest::resolve` — `From<ToolCallResult> for ToolResult` converts each variant into a `ToolResult` (`Ok` becomes `ToolResult::ok`; `Err`, `Denied`, and `Unknown` become `ToolResult::error` with descriptive strings). `Denied` covers a call the consumer chose not to run after its own approval prompt; `Unknown` covers a hallucinated tool name, where resolving with *some* result still keeps the assistant turn and tool-result messages paired. Using `ToolCallResult` is optional — the consumer may resolve with a `ToolResult` or any `serde_json::Value` directly.
 
 ### `ModelRequest` / `ModelResponse` / `ToolCall` (`src/model.rs`)
 
@@ -161,7 +161,7 @@ pub struct TokenUsage {
 `Message` carries a `Role` (`User` | `Assistant`), a `content: MessageContent`, and an optional `provider_metadata: Option<serde_json::Value>` — opaque adapter state for that assistant turn, the message-level counterpart of `ToolCall::provider_metadata`. Adapters that need state replayed emit it as a `ModelStreamChunk::ProviderMetadata` chunk (or `ModelResponse::provider_metadata`); the runner attaches whatever it received to the assistant message it appends (text or tool calls) and never looks inside. Each adapter namespaces its value under its own key and reads only that key, so a thread moved across providers is ignored rather than misreplayed. `Message::with_provider_metadata(..)` sets it manually. It is `#[serde(default, skip_serializing_if = "Option::is_none")]`, so threads persisted before the field existed still load. Reasoning text for display is not stored in the thread; it reaches consumers only through `ThinkingDelta` events. `MessageContent` is an enum with three variants:
 - `Text(String)` — a plain text turn
 - `ToolCalls(Vec<ToolCall>)` — all tool calls from one model turn (one assistant message)
-- `ToolResult { tool_call, result, media }` — the result of one tool execution (one user message). `media: Vec<Media>` carries media the tool returned, such as a screenshot. `Media` is a `#[non_exhaustive]` enum, serialized with a `type` tag; its only variant today is `Inline { mime_type, data }` (`data` base64), built with `Media::inline(..)`. A URL variant is planned (#86). It is `#[serde(default, skip_serializing_if = "Vec::is_empty")]`, so threads persisted before the field existed still load. `Message::tool_result_with_media(..)` builds one; `Message::tool_result(..)` leaves `media` empty. Only callers driving `LlmModel` directly can attach media today: tools run through `AgentRunner` return a JSON value only (#92).
+- `ToolResult { tool_call, content }` — the result of one tool execution (one user message), built with `Message::tool_result(tool_call, content)`. `content: Vec<ToolResultContent>` holds one or more content blocks, where each `ToolResultContent` is `Json(serde_json::Value)` or `Media(Media)`. `Media` is a `#[non_exhaustive]` enum, serialized with a `type` tag; its only variant today is `Inline { mime_type, data }` (`data` base64), built with `Media::inline(..)`. A URL variant is planned (#86). `Message::tool_result` accepts anything implementing `IntoToolResultContents` (a single `Value`, `Media`, `ToolResultContent`, `String`, `&str`, `bool`, `[ToolResultContent; N]`, `Vec<ToolResultContent>`, or `ToolResult`).
 
 `output_schema`, when set, instructs the provider adapter to constrain the response to the supplied JSON Schema. Providers that do not support structured output ignore the field silently.
 
@@ -221,12 +221,14 @@ pub trait Tool: Send + Sync {
     ) -> ToolResult;
 }
 
-// A tool outcome carrying untyped JSON. Errors are *soft*: an `Err` is sent
-// back to the model as data, not raised as a control-flow error. Converting to
-// a `serde_json::Value` (before the result reaches the model) envelopes the
-// payload — `Ok(v)` → `{"success": v}`, `Err(v)` → `{"error": v}`.
+// A tool outcome carrying content blocks (`ToolResultContent::Json` or `ToolResultContent::Media`)
+// on success, or a JSON error value. Errors are *soft*: an `Err` is sent back
+// to the model as data, not raised as a control-flow error. Converting to
+// `Vec<ToolResultContent>` (before the result reaches the model) envelopes JSON
+// payloads — `Ok` wraps `ToolResultContent::Json(v)` in `{"success": v}` and keeps
+// `ToolResultContent::Media` blocks unchanged; `Err(v)` becomes `[ToolResultContent::Json({"error": v})]`.
 pub enum ToolResult {
-    Ok(serde_json::Value),
+    Ok(Vec<ToolResultContent>),
     Err(serde_json::Value),
 }
 
@@ -246,11 +248,11 @@ impl ToolRegistry {
 
 `Tool` is the object-safe trait the registry stores: its arguments and results are raw `serde_json::Value`s. A call is a single phase: `call` receives the whole `ToolCall` (its `id`, `name`, and `args`), runs the tool, and returns the result. A tool deserializes `tool_call.args` into whatever parameters it expects. Gating a call behind user approval is the consumer's concern, applied in the event loop before `call` is invoked (see [Client-Side Authorization Patterns](#client-side-authorization-patterns)); a tool that reaches `call` may assume it is authorized to run.
 
-`call` returns a `ToolResult` — `Ok(value)` on success, `Err(value)` for a failure the model should see. Tool errors are *soft*: an `Err` is not a control-flow failure that aborts the run; converting the `ToolResult` into the JSON the model receives envelopes the payload as `{"success": …}` or `{"error": …}` so the model can tell them apart and react.
+`call` returns a `ToolResult` — `Ok(Vec<ToolResultContent>)` on success (built with `ToolResult::ok(content)` where `content` can be a single `Value`, `Media`, `ToolResultContent`, `[ToolResultContent; N]`, or `Vec<ToolResultContent>`), `Err(value)` for a failure the model should see. Tool errors are *soft*: an `Err` is not a control-flow failure that aborts the run; converting the `ToolResult` into the `Vec<ToolResultContent>` the model receives envelopes JSON blocks as `{"success": …}` or `{"error": …}` so the model can tell them apart and react, while passing `ToolResultContent::Media` blocks through.
 
 A single registry can hold tools of different shapes because everything is stored as `Box<dyn Tool>`. `register` accepts any `Tool` and boxes it directly — there is no separate wrapper type.
 
-The registry holds two kinds of callables: plain [`Tool`] implementations and sub-agents wrapped in [`AgentTool`]. Since `AgentTool` implements `Tool`, both are registered and invoked identically — plain tools resolve to a single JSON value, while sub-agents drive their child run internally (executing the child's own tool calls) and return the child's final reply as a standard JSON string.
+The registry holds two kinds of callables: plain [`Tool`] implementations and sub-agents wrapped in [`AgentTool`]. Since `AgentTool` implements `Tool`, both are registered and invoked identically — plain tools resolve to a `ToolResult` (JSON and/or media content blocks), while sub-agents drive their child run internally (executing the child's own tool calls) and return the child's final reply as a standard JSON string.
 
 `ToolRegistry` is independent of any runner; share it across multiple runners via `Arc<ToolRegistry>`.
 
@@ -337,10 +339,10 @@ Registered via the standard `ToolRegistry::register` method (since it implements
 
 1. Serializes the call's `args` to a JSON string and passes it as the user message of a fresh run on the inner `AgentRunner`.
 2. Drives the child's event stream internally. It plays the consumer role for the child run:
-   - `AgentEvent::ToolCall` — looks the tool up in the child's `ToolRegistry`, calls it with the request's `cancellation_token`, and resolves the request with the `ToolResult` converted to `Value`. A tool that isn't registered resolves with `ToolCallResult::Unknown`, so the child never hangs. In-flight calls are kept in a `FuturesUnordered` polled in a `tokio::select!` alongside `stream.next()`, because the runner waits for all of a turn's calls before emitting more events; calls from one turn therefore run concurrently.
+   - `AgentEvent::ToolCall` — looks the tool up in the child's `ToolRegistry`, calls it with the request's `cancellation_token`, and resolves the request with the `ToolResult`. A tool that isn't registered resolves with `ToolCallResult::Unknown`, so the child never hangs. In-flight calls are kept in a `FuturesUnordered` polled in a `tokio::select!` alongside `stream.next()`, because the runner waits for all of a turn's calls before emitting more events; calls from one turn therefore run concurrently.
    - `AgentEvent::Usage` — passed to the `on_usage` observer, if set. This lets the caller count the child's tokens toward the parent run's usage, cost, or limits.
    - Other events (text and thinking deltas, `TurnStart`) are ignored. The child's events are **not** forwarded onto the parent runner's stream, keeping the parent stream clean and flat.
-3. On `TurnFinish`, returns the text of the last assistant message in the child's thread as `ToolResult::Ok(Value)` — the parent model sees it (enveloped as `{"success": "..."}`) as the tool result on its next turn. Text the child wrote in earlier, tool-calling turns is not included.
+3. On `TurnFinish`, returns the text of the last assistant message in the child's thread as `ToolResult::ok(text)` — the parent model sees it (enveloped as `{"success": "..."}`) as the tool result on its next turn. Text the child wrote in earlier, tool-calling turns is not included.
 4. On `Error`, on `Cancelled`, or if the stream ends without `TurnFinish`, returns `ToolResult::Err` (there is no final reply) rather than aborting the parent.
 
 The `cancel` token is forwarded to the child via `run_with_cancellation`, so cancelling the parent (either by dropping its stream or by firing its external token) cancels every nested agent in the tree, including the child's in-flight tool calls.
@@ -350,7 +352,7 @@ The `cancel` token is forwarded to the child via `run_with_cancellation`, so can
 - `AgentTool` implements `Tool` directly, allowing it to be registered and invoked identically to custom code-based tools.
 - `AgentTool` owns its `AgentRunner` (not a shared reference). Each sub-agent maintains its own model binding. The child's `ToolRegistry` is shared via `Arc`, so the same tools can back several sub-agents. Multiple concurrent `call` invocations are safe because `AgentRunner::run` takes `&self`.
 - Child tool calls are dispatched by `AgentTool`, not surfaced to the parent's consumer, so they bypass the [client-side approval flow](#client-side-authorization-patterns). A child tool that needs gating is wrapped in a `Tool` that performs the check inside `call`.
-- An empty final reply (the child's last turn produced no text) is `ToolResult::Ok("")`, not an error: the run finished normally, and the parent model can react to the empty result.
+- An empty final reply (the child's last turn produced no text) is `ToolResult::ok("")`, not an error: the run finished normally, and the parent model can react to the empty result.
 - `AgentTool::new` takes a caller-built runner, which should come from `AgentRunner::new`; a runner built with `AgentRunner::with_tools` would advertise tools `AgentTool` can't execute. `with_tools` avoids this by building the runner itself.
 - The caller supplies the `ToolDefinition` explicitly: the `name` is what the parent model uses to invoke the sub-agent, the `description` guides the parent model's routing decision, and `parameters` describes what args the parent model should pass.
 - `AgentTool` lives in its own module (`src/tools/agent_tool/`) to avoid a circular dependency: `tool.rs` must not import the runner, and the runner must not import `agent_tool` directly (it imports it via `crate::tools`).
@@ -511,15 +513,15 @@ src/
   lib.rs              — crate root, public re-exports
   error.rs            — Error enum
   model.rs            — LlmModel trait, ModelStreamChunk, Message, MessageContent,
-                        Media, ModelRequest, ModelResponse, TokenUsage, ToolCall, Role
+                        Media, ToolResultContent, ModelRequest, ModelResponse, TokenUsage, ToolCall, Role
   agent.rs            — Agent, AgentBuilder
   runner/
     mod.rs            — AgentRunner, RunEmitter, agentic loop
     events.rs         — AgentEvent, RunEvent, ToolCallResult
     tests.rs          — runner unit tests (with scripted LlmModel)
   tools/
-    mod.rs            — re-exports Tool, ToolDefinition, ToolRegistry, AgentTool
-    tool.rs           — Tool trait, ToolDefinition
+    mod.rs            — re-exports Tool, ToolDefinition, ToolResult, ToolResultContent, ToolCallRequest, ToolRegistry, AgentTool
+    tool.rs           — Tool trait, ToolDefinition, ToolResult
     registry.rs       — ToolRegistry, ToolRegistryEntry
     request.rs        — ToolCallRequest
     agent_tool/

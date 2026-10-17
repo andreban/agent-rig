@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::{fmt::Display, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
-use crate::model::ToolCall;
+use crate::model::{IntoToolResultContents, Media, ToolCall, ToolResultContent, tool_result_json};
 
 /// Describes a tool to the model: its name, purpose, and parameter schema.
 ///
@@ -33,64 +33,143 @@ pub struct ToolDefinition {
     pub parameters: Schema,
 }
 
-/// The outcome of a [`Tool`] call: a success payload or an error, each
-/// carrying arbitrary JSON.
+/// The outcome of a [`Tool`] call: a list of [`ToolResultContent`] blocks on success,
+/// or an error [`Value`].
 ///
 /// Tool errors are *soft*. An [`Err`](ToolResult::Err) is not a control-flow
 /// failure that aborts the run — it is sent back to the model as data so it
 /// can react (retry, apologise, pick a different approach). Converting a
-/// `ToolResult` into a [`Value`] — which happens before the result reaches the
-/// model — wraps the payload in an envelope so the model can tell the two
-/// apart:
+/// `ToolResult` into `Vec<ToolResultContent>` — which happens before the result
+/// reaches the model — wraps JSON payloads in an envelope so the model can tell
+/// success and error apart:
 ///
-/// - [`Ok(v)`](ToolResult::Ok) becomes `{"success": v}`
-/// - [`Err(v)`](ToolResult::Err) becomes `{"error": v}`
-///
-/// The [`Display`] impl produces the same envelope as compact JSON.
-#[derive(Debug)]
+/// - [`Ok(blocks)`](ToolResult::Ok) wraps each [`ToolResultContent::Json(v)`](ToolResultContent::Json) in
+///   `{"success": v}` and passes [`ToolResultContent::Media`] blocks through unchanged.
+/// - [`Err(v)`](ToolResult::Err) becomes `[ToolResultContent::Json({"error": v})]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
 pub enum ToolResult {
-    /// A successful call. The payload is the tool's output and reaches the
-    /// model under a `"success"` key.
-    Ok(Value),
+    /// A successful call carrying one or more [`ToolResultContent`] blocks (JSON,
+    /// [`Media`], or both).
+    Ok(Vec<ToolResultContent>),
     /// A failed call. The payload describes the error and reaches the model
     /// under an `"error"` key; it does **not** abort the run.
     Err(Value),
 }
 
 impl ToolResult {
-    /// Builds an [`Ok`](ToolResult::Ok) from anything convertible into a [`Value`].
-    pub fn ok<T: Into<Value>>(result: T) -> Self {
-        ToolResult::Ok(result.into())
+    /// Builds an [`Ok`](ToolResult::Ok) from anything convertible into
+    /// `Vec<ToolResultContent>` (a single [`Value`], [`Media`], [`ToolResultContent`],
+    /// `String`, `&str`, `bool`, or a `Vec<ToolResultContent>`).
+    pub fn ok(content: impl IntoToolResultContents) -> Self {
+        ToolResult::Ok(content.into_tool_result_contents())
     }
 
     /// Builds an [`Err`](ToolResult::Err) from anything convertible into a [`Value`].
     pub fn error<T: Into<Value>>(error: T) -> Self {
         ToolResult::Err(error.into())
     }
+}
 
-    fn key(&self) -> &'static str {
-        match self {
-            ToolResult::Ok(_) => "success",
-            ToolResult::Err(_) => "error",
+impl From<ToolResult> for Vec<ToolResultContent> {
+    fn from(result: ToolResult) -> Self {
+        match result {
+            ToolResult::Ok(blocks) => blocks
+                .into_iter()
+                .map(|block| match block {
+                    ToolResultContent::Json(v) => {
+                        let mut map = serde_json::Map::new();
+                        map.insert("success".to_string(), v);
+                        ToolResultContent::Json(Value::Object(map))
+                    }
+                    ToolResultContent::Media(m) => ToolResultContent::Media(m),
+                })
+                .collect(),
+            ToolResult::Err(v) => {
+                let mut map = serde_json::Map::new();
+                map.insert("error".to_string(), v);
+                vec![ToolResultContent::Json(Value::Object(map))]
+            }
         }
+    }
+}
+
+impl IntoToolResultContents for ToolResult {
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent> {
+        Vec::<ToolResultContent>::from(self)
+    }
+}
+
+impl From<Value> for ToolResult {
+    fn from(value: Value) -> Self {
+        ToolResult::ok(value)
+    }
+}
+
+impl From<Media> for ToolResult {
+    fn from(media: Media) -> Self {
+        ToolResult::ok(media)
+    }
+}
+
+impl From<ToolResultContent> for ToolResult {
+    fn from(content: ToolResultContent) -> Self {
+        ToolResult::ok(content)
+    }
+}
+
+impl From<Vec<ToolResultContent>> for ToolResult {
+    fn from(content: Vec<ToolResultContent>) -> Self {
+        ToolResult::Ok(content)
+    }
+}
+
+impl<const N: usize> From<[ToolResultContent; N]> for ToolResult {
+    fn from(content: [ToolResultContent; N]) -> Self {
+        ToolResult::Ok(Vec::from(content))
+    }
+}
+
+impl From<String> for ToolResult {
+    fn from(value: String) -> Self {
+        ToolResult::ok(value)
+    }
+}
+
+impl From<&str> for ToolResult {
+    fn from(value: &str) -> Self {
+        ToolResult::ok(value)
+    }
+}
+
+impl From<bool> for ToolResult {
+    fn from(value: bool) -> Self {
+        ToolResult::ok(value)
     }
 }
 
 impl From<ToolResult> for Value {
     fn from(result: ToolResult) -> Value {
-        let key = result.key(); // borrow ends here (&'static str)
-        let (ToolResult::Ok(v) | ToolResult::Err(v)) = result; // now free to move v out
-        let mut map = serde_json::Map::new();
-        map.insert(key.to_string(), v);
-        Value::Object(map)
+        tool_result_json(&Vec::<ToolResultContent>::from(result))
     }
 }
 
 impl Display for ToolResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (ToolResult::Ok(v) | ToolResult::Err(v)) = self;
-        write!(f, r#"{{"{}": {}}}"#, self.key(), v)
+        match self {
+            ToolResult::Ok(blocks) => match blocks.as_slice() {
+                [ToolResultContent::Json(v)] => write!(f, r#"{{"success": {v}}}"#),
+                _ => {
+                    let converted = Vec::<ToolResultContent>::from(self.clone());
+                    write!(
+                        f,
+                        "{}",
+                        serde_json::to_string(&converted).unwrap_or_default()
+                    )
+                }
+            },
+            ToolResult::Err(v) => write!(f, r#"{{"error": {v}}}"#),
+        }
     }
 }
 

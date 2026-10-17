@@ -123,7 +123,7 @@ mod tests {
             _tool_call: Arc<ToolCall>,
             _cancel: tokio_util::sync::CancellationToken,
         ) -> ToolResult {
-            ToolResult::Ok(json!({}))
+            ToolResult::ok(json!({}))
         }
     }
 

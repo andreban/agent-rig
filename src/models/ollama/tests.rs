@@ -110,11 +110,7 @@ fn request_with_tool_result_media() -> ModelRequest {
     ));
     let image = Media::inline("image/png", "aGVsbG8=");
     ModelRequest {
-        messages: MessageList::from(vec![Message::tool_result_with_media(
-            call,
-            serde_json::json!({"ok": true}),
-            vec![image],
-        )]),
+        messages: MessageList::from(vec![Message::tool_result(call, image)]),
         system: None,
         output_schema: None,
         tools: vec![],

@@ -52,9 +52,10 @@ dotenvy        = "0.15"
 | `Agent` / `AgentBuilder` | Pure data blueprint: name, instructions, optional output schema, allowed tool names. Implements `Serialize`/`Deserialize` so configs can be stored as JSON/YAML. **Carries no model reference** — the same blueprint can run on any `AgentRunner`. |
 | `AgentRunner` | Execution engine; owns an `Arc<dyn LlmModel>` and a list of tool definitions. Cheap to `Clone` (everything is behind `Arc`). |
 | `LlmModel` | Async trait every provider implements. Has `generate` (required) and `generate_stream` (default impl wraps `generate`). The extension point for new providers. |
-| `Message` / `MessageContent` | Conversation history elements. `MessageContent` is either `Text`, `ToolCalls(Vec<Arc<ToolCall>>)`, or `ToolResult` |
+| `Message` / `MessageContent` | Conversation history elements. `MessageContent` is either `Text`, `ToolCalls(Vec<Arc<ToolCall>>)`, or `ToolResult { tool_call, content: Vec<ToolResultContent> }`. |
+| `ToolResultContent` / `Media` | Content blocks inside a tool result: `Json(Value)` or `Media(Media)` (e.g. `Media::inline(mime_type, base64_data)`). |
 | `ModelRequest` / `ModelResponse` / `ToolCall` | Provider-agnostic request/response envelope. `ModelResponse::text` and `tool_calls` are mutually exclusive per turn. |
-| `Tool` / `ToolDefinition` | Async trait for callable tools. `parameters` is a `schemars::Schema`, typically built with `schemars::json_schema!`. |
+| `Tool` / `ToolDefinition` / `ToolResult` | Async trait for callable tools. `parameters` is a `schemars::Schema`, typically built with `schemars::json_schema!`. `call` returns `ToolResult::Ok(Vec<ToolResultContent>)` or `ToolResult::Err(Value)`. |
 | `ToolRegistry` | Client-side registry of `Tool` and `AgentTool` entries, keyed by name, used to resolve tool calls. |
 | `AgentTool` | Wraps an `Agent` (plus its runner and, via `with_tools`, its own `ToolRegistry`) so it can be invoked through the same tool-call mechanism. Runs the child's tool calls and returns its final reply. Registered via `ToolRegistry::register`. |
 | `AgentEvent` | Stream event: `TurnStart`, `ThinkingDelta`, `TextDelta`, `ToolCall`, `Usage`, `TurnFinish`, `Cancelled`, `Error`. |
@@ -258,6 +259,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   emitted; the consumer resolves it with an error (e.g. via `ToolCallResult::Unknown`) so a
   synthetic result message keeps the assistant turn and tool-result messages paired.
 - `ToolRegistry` is shared via `Arc` so a single registry can be reused across runners.
+- `ToolResult::ok(...)` accepts any type implementing `IntoToolResultContents`: a single JSON `Value`, a `Media` (e.g. `Media::inline("image/png", base64_png)`), or a slice/vec of `ToolResultContent` blocks (e.g. `ToolResult::ok([json!({ "width": 100 }).into(), Media::inline("image/png", base64_png).into()])`).
 
 ---
 
@@ -643,8 +645,8 @@ impl LlmModel for MyModel {
         // 1. Translate request.messages → your provider's format.
         //    Role::User → user, Role::Assistant → assistant/model
         //    MessageContent::Text(s)                                    → plain text turn
-        //    MessageContent::ToolCalls(calls)                            → assistant tool-call turn (Vec<Arc<ToolCall>>)
-        //    MessageContent::ToolResult { tool_call, result, media }     → tool result (echo `tool_call.id`; send `media`, or return an error if unsupported)
+        //    MessageContent::ToolCalls(calls)                           → assistant tool-call turn (Vec<Arc<ToolCall>>)
+        //    MessageContent::ToolResult { tool_call, content }          → tool result (echo `tool_call.id`; translate `content: Vec<ToolResultContent>` blocks, or return an error if `ToolResultContent::Media` is unsupported)
         //
         // 2. Map request.system → system prompt (if supported).
         // 3. Map request.tools → provider function declarations (if non-empty).
