@@ -160,11 +160,25 @@ impl Display for ToolResult {
             ToolResult::Ok(blocks) => match blocks.as_slice() {
                 [ToolResultContent::Json(v)] => write!(f, r#"{{"success": {v}}}"#),
                 _ => {
-                    let converted = Vec::<ToolResultContent>::from(self.clone());
+                    let summarized: Vec<Value> = blocks
+                        .iter()
+                        .map(|block| match block {
+                            ToolResultContent::Json(v) => serde_json::json!({ "success": v }),
+                            ToolResultContent::Media(Media::Inline { mime_type, data }) => {
+                                serde_json::json!({
+                                    "media": {
+                                        "type": "inline",
+                                        "mime_type": mime_type,
+                                        "data_len": data.len(),
+                                    }
+                                })
+                            }
+                        })
+                        .collect();
                     write!(
                         f,
                         "{}",
-                        serde_json::to_string(&converted).unwrap_or_default()
+                        serde_json::to_string(&summarized).unwrap_or_default()
                     )
                 }
             },

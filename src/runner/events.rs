@@ -20,7 +20,15 @@ use crate::tools::{ToolCallRequest, ToolResult};
 ///
 /// Reported back to the model as the tool result on the next turn (via
 /// [`From<ToolCallResult> for ToolResult`](#impl-From<ToolCallResult>-for-ToolResult)
+/// when passed to [`ToolCallRequest::resolve`](crate::tools::ToolCallRequest::resolve),
 /// or [`From<ToolCallResult> for Value`](#impl-From<ToolCallResult>-for-Value)).
+///
+/// Converting to [`ToolResult`] maps [`Ok(v)`](ToolCallResult::Ok) to
+/// [`ToolResult::ok(v)`](crate::tools::ToolResult::ok) (which envelopes JSON
+/// payloads as `{"success": v}` when sent to the model) and
+/// [`Err`](ToolCallResult::Err), [`Denied`](ToolCallResult::Denied), and
+/// [`Unknown`](ToolCallResult::Unknown) to [`ToolResult::error`](crate::tools::ToolResult::error)
+/// (`{"error": ...}`).
 #[derive(Clone, Debug)]
 pub enum ToolCallResult {
     /// The tool ran and returned this JSON value.

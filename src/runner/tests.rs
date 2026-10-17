@@ -483,3 +483,64 @@ async fn tool_in_registry_returning_media_passes_media_to_model() {
     };
     assert_eq!(*content, expected_content);
 }
+
+#[tokio::test]
+async fn tool_in_registry_returning_json_and_media_passes_both_to_model() {
+    use crate::model::{Media, ToolResultContent};
+    use crate::tools::{Tool, ToolRegistry, ToolResult};
+    use schemars::json_schema;
+
+    struct RichSnapshotTool {
+        definition: ToolDefinition,
+    }
+
+    #[async_trait]
+    impl Tool for RichSnapshotTool {
+        fn definition(&self) -> &ToolDefinition {
+            &self.definition
+        }
+
+        async fn call(&self, _call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+            ToolResult::ok([
+                json!({"width": 64, "height": 64}).into(),
+                Media::inline("image/png", "iVBORw0KGgo=").into(),
+            ])
+        }
+    }
+
+    let registry = ToolRegistry::new().register(RichSnapshotTool {
+        definition: ToolDefinition {
+            name: "take_snapshot".to_string(),
+            description: "Takes a snapshot with metadata".to_string(),
+            parameters: json_schema!({"type": "object"}),
+        },
+    });
+    let model = ScriptedModel::new(vec![
+        tool_call("c1", "take_snapshot", json!({})),
+        text("64x64 png"),
+    ]);
+    let runner = AgentRunner::with_tools(model.clone(), registry.definitions());
+
+    let mut stream = runner.run(&agent(), vec![Message::user("snap")].into());
+    while let Some(ev) = stream.next().await {
+        if let AgentEvent::ToolCall(call) = ev.agent_event {
+            let tool = registry.get(&call.details.name).unwrap();
+            let res = tool
+                .call(call.details.clone(), call.cancellation_token.clone())
+                .await;
+            call.resolve(res);
+        }
+    }
+
+    let expected_content = vec![
+        ToolResultContent::Json(json!({"success": {"width": 64, "height": 64}})),
+        ToolResultContent::Media(Media::inline("image/png", "iVBORw0KGgo=")),
+    ];
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].has_tool_result_media());
+    let MessageContent::ToolResult { content, .. } = &requests[1].messages[2].content else {
+        panic!("expected ToolResult message in second request");
+    };
+    assert_eq!(*content, expected_content);
+}

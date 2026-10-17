@@ -108,7 +108,7 @@ pub(crate) fn tool_result_json(content: &[ToolResultContent]) -> serde_json::Val
 /// Conversion into the [`Vec<ToolResultContent>`] blocks of a tool result.
 ///
 /// Implemented for a single [`serde_json::Value`], [`Media`], [`ToolResultContent`],
-/// `String`, `&str`, `bool`, as well as `Vec<ToolResultContent>`, `Vec<Media>`,
+/// `String`, `&str`, `bool`, as well as `Vec<ToolResultContent>`,
 /// `[ToolResultContent; N]`, and [`ToolResult`](crate::tools::ToolResult).
 pub trait IntoToolResultContents {
     /// Converts `self` into a list of [`ToolResultContent`] blocks.
@@ -167,7 +167,7 @@ impl IntoToolResultContents for bool {
 ///
 /// Non-exhaustive so new sources (such as media referenced by URL) can be
 /// added without breaking callers; match it with a wildcard arm.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Media {
@@ -178,6 +178,18 @@ pub enum Media {
         /// The media bytes, base64-encoded.
         data: String,
     },
+}
+
+impl std::fmt::Debug for Media {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inline { mime_type, data } => f
+                .debug_struct("Inline")
+                .field("mime_type", mime_type)
+                .field("data_len", &data.len())
+                .finish(),
+        }
+    }
 }
 
 impl Media {
@@ -816,5 +828,40 @@ mod tests {
 
         assert!(!request(vec![Message::user("hi"), plain]).has_tool_result_media());
         assert!(request(vec![Message::user("hi"), with_media]).has_tool_result_media());
+    }
+
+    #[test]
+    fn tool_result_json_handles_zero_one_and_multiple_json_blocks() {
+        let img = ToolResultContent::Media(Media::inline("image/png", "aGVsbG8="));
+        assert_eq!(
+            tool_result_json(std::slice::from_ref(&img)),
+            serde_json::json!({})
+        );
+
+        let one = [
+            ToolResultContent::Json(serde_json::json!({"a": 1})),
+            img.clone(),
+        ];
+        assert_eq!(tool_result_json(&one), serde_json::json!({"a": 1}));
+
+        let two = [
+            ToolResultContent::Json(serde_json::json!({"a": 1})),
+            img,
+            ToolResultContent::Json(serde_json::json!({"b": 2})),
+        ];
+        assert_eq!(
+            tool_result_json(&two),
+            serde_json::json!([{"a": 1}, {"b": 2}])
+        );
+    }
+
+    #[test]
+    fn media_debug_omits_raw_base64_payload() {
+        let secret_b64 = "SUPER_SECRET_BASE64_PAYLOAD";
+        let media = Media::inline("image/png", secret_b64);
+        let debug_str = format!("{media:?}");
+        assert!(!debug_str.contains(secret_b64));
+        assert!(debug_str.contains("image/png"));
+        assert!(debug_str.contains(&secret_b64.len().to_string()));
     }
 }
