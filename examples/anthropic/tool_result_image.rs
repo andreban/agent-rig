@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Demonstrates returning an image from a tool run by `AgentRunner` against
-//! Anthropic Claude (`claude-haiku-4-5`).
+//! Anthropic Claude (`claude-haiku-5-5`).
 //!
 //! The model calls a `take_snapshot` tool registered in a `ToolRegistry`,
 //! which returns a solid square in a colour picked at random via
@@ -34,7 +34,7 @@ use image::{ImageFormat, Rgb, RgbImage};
 use schemars::json_schema;
 use tokio_util::sync::CancellationToken;
 
-const MODEL: &str = "claude-haiku-4-5";
+const MODEL: &str = "claude-haiku-5-5";
 
 const COLORS: [(&str, [u8; 3]); 4] = [
     ("red", [220, 20, 20]),
