@@ -45,7 +45,39 @@ pub enum MessageContent {
     ToolResult {
         tool_call: Arc<ToolCall>,
         result: serde_json::Value,
+        /// Media the tool returned alongside `result`, such as a screenshot.
+        /// Omitted from serialization when empty, so threads persisted before
+        /// the field existed still load.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        media: Vec<Media>,
     },
+}
+
+/// Media passed to the model, such as an image returned by a tool.
+///
+/// Non-exhaustive so new sources (such as media referenced by URL) can be
+/// added without breaking callers; match it with a wildcard arm.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Media {
+    /// Media carried in the message itself.
+    Inline {
+        /// IANA media type, such as `image/png`.
+        mime_type: String,
+        /// The media bytes, base64-encoded.
+        data: String,
+    },
+}
+
+impl Media {
+    /// Creates inline media from a MIME type and base64-encoded bytes.
+    pub fn inline(mime_type: impl Into<String>, data: impl Into<String>) -> Self {
+        Self::Inline {
+            mime_type: mime_type.into(),
+            data: data.into(),
+        }
+    }
 }
 
 /// A single message in a conversation.
@@ -121,9 +153,45 @@ impl Message {
 
     /// Creates a message carrying the result of one tool execution.
     pub fn tool_result(tool_call: Arc<ToolCall>, result: serde_json::Value) -> Self {
+        Self::tool_result_with_media(tool_call, result, Vec::new())
+    }
+
+    /// Creates a message carrying the result of one tool execution together
+    /// with media the tool returned, such as a screenshot.
+    ///
+    /// Adapters that can't send tool-result media return an error rather
+    /// than dropping it. Tools run through [`AgentRunner`](crate::runner::AgentRunner)
+    /// can't return media yet (#92): build the message with this constructor
+    /// when calling [`LlmModel`] directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use agent_rig::model::{Media, Message, MessageContent, ToolCall};
+    ///
+    /// let call = Arc::new(ToolCall {
+    ///     id: "call-1".into(),
+    ///     name: "take_screenshot".into(),
+    ///     args: serde_json::json!({}),
+    ///     provider_metadata: None,
+    /// });
+    /// let image = Media::inline("image/png", "iVBORw0KGgo=");
+    /// let msg = Message::tool_result_with_media(call, serde_json::json!({"ok": true}), vec![image]);
+    /// assert!(matches!(msg.content, MessageContent::ToolResult { ref media, .. } if media.len() == 1));
+    /// ```
+    pub fn tool_result_with_media(
+        tool_call: Arc<ToolCall>,
+        result: serde_json::Value,
+        media: Vec<Media>,
+    ) -> Self {
         Self {
             role: Role::User,
-            content: MessageContent::ToolResult { tool_call, result },
+            content: MessageContent::ToolResult {
+                tool_call,
+                result,
+                media,
+            },
             provider_metadata: None,
         }
     }
@@ -280,6 +348,18 @@ pub struct ModelRequest {
     ///
     /// An empty `Vec` means no tools are available.
     pub tools: Vec<ToolDefinition>,
+}
+
+impl ModelRequest {
+    /// Returns `true` if any tool result in the conversation carries media.
+    ///
+    /// Adapters that can't send tool-result media use this to fail with a
+    /// clear error instead of silently dropping it.
+    pub fn has_tool_result_media(&self) -> bool {
+        self.messages.iter().any(
+            |m| matches!(&m.content, MessageContent::ToolResult { media, .. } if !media.is_empty()),
+        )
+    }
 }
 
 /// A tool call issued by the model.
@@ -571,5 +651,62 @@ mod tests {
         let val: serde_json::Value = serde_json::from_str(&serialized).unwrap();
         assert!(val.is_array());
         assert_eq!(val.as_array().unwrap().len(), 2);
+    }
+
+    fn screenshot_call() -> Arc<ToolCall> {
+        Arc::new(ToolCall::new(
+            "call-1".into(),
+            "take_screenshot".into(),
+            serde_json::json!({}),
+        ))
+    }
+
+    #[test]
+    fn tool_result_media_round_trips_through_serde() {
+        let image = Media::inline("image/png", "aGVsbG8=");
+        let msg = Message::tool_result_with_media(
+            screenshot_call(),
+            serde_json::json!({"ok": true}),
+            vec![image],
+        );
+
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(
+            json["content"]["content"]["media"],
+            serde_json::json!([{"type": "inline", "mime_type": "image/png", "data": "aGVsbG8="}])
+        );
+        let restored: Message = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, msg);
+    }
+
+    #[test]
+    fn tool_result_without_media_omits_the_field_and_still_loads() {
+        let msg = Message::tool_result(screenshot_call(), serde_json::json!({"ok": true}));
+
+        let json = serde_json::to_value(&msg).unwrap();
+        assert!(json["content"]["content"].get("media").is_none());
+        let restored: Message = serde_json::from_value(json).unwrap();
+        assert!(
+            matches!(restored.content, MessageContent::ToolResult { ref media, .. } if media.is_empty())
+        );
+    }
+
+    #[test]
+    fn has_tool_result_media_is_true_only_for_non_empty_media() {
+        let request = |messages: Vec<Message>| ModelRequest {
+            messages: MessageList::from(messages),
+            system: None,
+            output_schema: None,
+            tools: vec![],
+        };
+        let plain = Message::tool_result(screenshot_call(), serde_json::json!({}));
+        let with_media = Message::tool_result_with_media(
+            screenshot_call(),
+            serde_json::json!({}),
+            vec![Media::inline("image/png", "aGVsbG8=")],
+        );
+
+        assert!(!request(vec![Message::user("hi"), plain]).has_tool_result_media());
+        assert!(request(vec![Message::user("hi"), with_media]).has_tool_result_media());
     }
 }

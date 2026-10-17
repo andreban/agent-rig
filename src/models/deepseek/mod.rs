@@ -305,7 +305,9 @@ fn build_chat_request(
                     ..Default::default()
                 });
             }
-            MessageContent::ToolResult { tool_call, result } => {
+            MessageContent::ToolResult {
+                tool_call, result, ..
+            } => {
                 messages.push(ChatMessage::tool(tool_call.id.clone(), result.to_string()));
             }
         }
@@ -338,9 +340,16 @@ fn build_chat_request(
     builder.build()
 }
 
+/// Returned when a request contains tool-result media, which this adapter can't send yet.
+const TOOL_RESULT_MEDIA_UNSUPPORTED: &str =
+    "DeepSeek adapter does not support media in tool results yet";
+
 #[async_trait]
 impl LlmModel for DeepSeekModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
+        if request.has_tool_result_media() {
+            return Err(Error::Provider(TOOL_RESULT_MEDIA_UNSUPPORTED.into()));
+        }
         let chat_request = build_chat_request(
             &self.model,
             self.temperature,
@@ -407,6 +416,10 @@ impl LlmModel for DeepSeekModel {
         request: ModelRequest,
     ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
         Box::pin(async_stream::stream! {
+            if request.has_tool_result_media() {
+                yield Err(Error::Provider(TOOL_RESULT_MEDIA_UNSUPPORTED.into()));
+                return;
+            }
             let chat_request = build_chat_request(
                 &self.model,
                 self.temperature,

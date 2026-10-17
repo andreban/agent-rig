@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::model::Media;
 use crate::model::{Message, MessageList};
 use futures_util::StreamExt;
 use schemars::JsonSchema;
@@ -258,4 +259,51 @@ fn test_anthropic_model_accessors_and_reexport() {
 
     // The re-exported antropologia crate is directly usable.
     let _req = antropologia::prelude::MessagesRequest::builder("claude-opus-5-5").build();
+}
+
+/// A request whose only message is a tool result carrying one image.
+fn request_with_tool_result_media() -> ModelRequest {
+    let call = Arc::new(ToolCall::new(
+        "call-1".into(),
+        "take_screenshot".into(),
+        serde_json::json!({}),
+    ));
+    let image = Media::inline("image/png", "aGVsbG8=");
+    ModelRequest {
+        messages: MessageList::from(vec![Message::tool_result_with_media(
+            call,
+            serde_json::json!({"ok": true}),
+            vec![image],
+        )]),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    }
+}
+
+#[tokio::test]
+async fn generate_rejects_tool_result_media() {
+    let model = AnthropicModel::builder("test-key", "claude-opus-5-5").build();
+
+    let result = model.generate(request_with_tool_result_media()).await;
+
+    assert!(
+        matches!(&result, Err(Error::Provider(msg)) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn generate_stream_rejects_tool_result_media() {
+    let model = AnthropicModel::builder("test-key", "claude-opus-5-5").build();
+
+    let first = model
+        .generate_stream(request_with_tool_result_media())
+        .next()
+        .await;
+
+    assert!(
+        matches!(&first, Some(Err(Error::Provider(msg))) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
+        "{first:?}"
+    );
 }

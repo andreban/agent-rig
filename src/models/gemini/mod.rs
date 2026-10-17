@@ -15,17 +15,17 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use geologia::prelude::{
-    Candidate, Content, FunctionDeclaration, FunctionResponse, GeminiClient,
-    GenerateContentRequest, GenerationConfig, Part, PartData, Role, ThinkingConfig, Tools,
-    UsageMetadata,
+    Candidate, Content, FunctionDeclaration, FunctionResponse, FunctionResponseBlob,
+    FunctionResponsePart, GeminiClient, GenerateContentRequest, GenerationConfig, Part, PartData,
+    Role, ThinkingConfig, Tools, UsageMetadata,
 };
 use serde_json::Value;
 
 use crate::{
     error::Error,
     model::{
-        LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role as AgentRole,
-        TokenUsage, ToolCall,
+        LlmModel, Media, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk,
+        Role as AgentRole, TokenUsage, ToolCall,
     },
     tools::ToolDefinition,
 };
@@ -275,7 +275,11 @@ impl GeminiModel {
                                 .collect(),
                         ),
                     },
-                    MessageContent::ToolResult { tool_call, result } => {
+                    MessageContent::ToolResult {
+                        tool_call,
+                        result,
+                        media,
+                    } => {
                         let thought_signature = tool_call
                             .provider_metadata
                             .as_ref()
@@ -288,7 +292,7 @@ impl GeminiModel {
                                     id: Some(tool_call.id.clone()),
                                     name: tool_call.name.clone(),
                                     response: ensure_object_response(result.clone()),
-                                    parts: None,
+                                    parts: function_response_parts(media),
                                     will_continue: None,
                                     scheduling: None,
                                 }),
@@ -352,6 +356,23 @@ impl GeminiModel {
 
         builder.build()
     }
+}
+
+/// Maps tool-result media to `functionResponse.parts` (inline data), or `None` when there is none.
+fn function_response_parts(media: &[Media]) -> Option<Vec<FunctionResponsePart>> {
+    (!media.is_empty()).then(|| {
+        media
+            .iter()
+            .map(|m| match m {
+                Media::Inline { mime_type, data } => {
+                    FunctionResponsePart::InlineData(FunctionResponseBlob {
+                        mime_type: mime_type.clone(),
+                        data: data.clone(),
+                    })
+                }
+            })
+            .collect()
+    })
 }
 
 #[async_trait]
