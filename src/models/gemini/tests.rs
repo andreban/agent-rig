@@ -267,13 +267,10 @@ fn tool_result_media_becomes_function_response_inline_data() {
         json!({}),
     ));
     let request = ModelRequest {
-        messages: crate::model::MessageList::from(vec![
-            crate::model::Message::tool_result_with_media(
-                call,
-                json!({"ok": true}),
-                vec![Media::inline("image/png", "aGVsbG8=")],
-            ),
-        ]),
+        messages: crate::model::MessageList::from(vec![crate::model::Message::tool_result(
+            call,
+            Media::inline("image/png", "aGVsbG8="),
+        )]),
         system: None,
         output_schema: None,
         tools: vec![],
@@ -281,6 +278,10 @@ fn tool_result_media_becomes_function_response_inline_data() {
 
     let json = serde_json::to_value(model.build_gemini_request(request)).unwrap();
 
+    assert_eq!(
+        json["contents"][0]["parts"][0]["functionResponse"]["response"],
+        json!({})
+    );
     assert_eq!(
         json["contents"][0]["parts"][0]["functionResponse"]["parts"],
         json!([{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}])

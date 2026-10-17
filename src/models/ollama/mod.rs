@@ -28,7 +28,7 @@ use crate::{
     error::Error,
     model::{
         LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role, TokenUsage,
-        ToolCall,
+        ToolCall, tool_result_json,
     },
     tools::ToolDefinition,
 };
@@ -285,8 +285,9 @@ fn build_chat_request(
                     })
                     .collect(),
             },
-            MessageContent::ToolResult { result, .. } => {
-                OllamaMessage::tool_response(result).map_err(|e| Error::Provider(e.to_string()))?
+            MessageContent::ToolResult { content, .. } => {
+                OllamaMessage::tool_response(&tool_result_json(content))
+                    .map_err(|e| Error::Provider(e.to_string()))?
             }
         };
         messages.push(ollama_msg);

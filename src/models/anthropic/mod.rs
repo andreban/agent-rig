@@ -28,7 +28,7 @@ use crate::{
     error::Error,
     model::{
         LlmModel, Message, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role,
-        TokenUsage, ToolCall,
+        TokenUsage, ToolCall, tool_result_json,
     },
     tools::ToolDefinition,
 };
@@ -249,10 +249,8 @@ fn content_blocks(msg: &Message) -> Vec<ContentBlock> {
                 ContentBlock::tool_use(call.id.clone(), call.name.clone(), call.args.clone())
             })
             .collect(),
-        MessageContent::ToolResult {
-            tool_call, result, ..
-        } => {
-            vec![tool_result_block(&tool_call.id, result)]
+        MessageContent::ToolResult { tool_call, content } => {
+            vec![tool_result_block(&tool_call.id, &tool_result_json(content))]
         }
     }
 }

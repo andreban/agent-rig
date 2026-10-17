@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, stream::FuturesUnordered};
-use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -144,11 +143,11 @@ impl AgentTool {
 
     /// Runs one of the child's tool calls and resolves its request.
     async fn execute(&self, request: ToolCallRequest) {
-        let result: Value = match self.tools.get(&request.details.name) {
-            Some(tool) => tool
-                .call(request.details.clone(), request.cancellation_token.clone())
-                .await
-                .into(),
+        let result = match self.tools.get(&request.details.name) {
+            Some(tool) => {
+                tool.call(request.details.clone(), request.cancellation_token.clone())
+                    .await
+            }
             None => ToolCallResult::Unknown.into(),
         };
         request.resolve(result);

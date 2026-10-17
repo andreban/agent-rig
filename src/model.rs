@@ -44,20 +44,130 @@ pub enum MessageContent {
     /// The result of executing one tool (one message per result).
     ToolResult {
         tool_call: Arc<ToolCall>,
-        result: serde_json::Value,
-        /// Media the tool returned alongside `result`, such as a screenshot.
-        /// Omitted from serialization when empty, so threads persisted before
-        /// the field existed still load.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        media: Vec<Media>,
+        content: Vec<ToolResultContent>,
     },
+}
+
+/// A single content block in a tool result: either JSON data or [`Media`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "content", rename_all = "snake_case")]
+pub enum ToolResultContent {
+    /// Structured JSON data (or a scalar/string JSON value).
+    Json(serde_json::Value),
+    /// Media such as an image or screenshot.
+    Media(Media),
+}
+
+impl From<serde_json::Value> for ToolResultContent {
+    fn from(value: serde_json::Value) -> Self {
+        Self::Json(value)
+    }
+}
+
+impl From<Media> for ToolResultContent {
+    fn from(media: Media) -> Self {
+        Self::Media(media)
+    }
+}
+
+impl From<String> for ToolResultContent {
+    fn from(value: String) -> Self {
+        Self::Json(value.into())
+    }
+}
+
+impl From<&str> for ToolResultContent {
+    fn from(value: &str) -> Self {
+        Self::Json(value.into())
+    }
+}
+
+impl From<bool> for ToolResultContent {
+    fn from(value: bool) -> Self {
+        Self::Json(value.into())
+    }
+}
+
+/// Extracts the JSON value from tool-result content blocks for adapters that
+/// serialize a single JSON payload alongside or instead of media blocks.
+pub(crate) fn tool_result_json(content: &[ToolResultContent]) -> serde_json::Value {
+    let mut values: Vec<serde_json::Value> = content
+        .iter()
+        .filter_map(|part| match part {
+            ToolResultContent::Json(v) => Some(v.clone()),
+            ToolResultContent::Media(_) => None,
+        })
+        .collect();
+    match values.len() {
+        0 => serde_json::json!({}),
+        1 => values.pop().unwrap(),
+        _ => serde_json::Value::Array(values),
+    }
+}
+
+/// Conversion into the [`Vec<ToolResultContent>`] blocks of a tool result.
+///
+/// Implemented for a single [`serde_json::Value`], [`Media`], [`ToolResultContent`],
+/// `String`, `&str`, `bool`, as well as `Vec<ToolResultContent>`,
+/// `[ToolResultContent; N]`, and [`ToolResult`](crate::tools::ToolResult).
+pub trait IntoToolResultContents {
+    /// Converts `self` into a list of [`ToolResultContent`] blocks.
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent>;
+}
+
+impl IntoToolResultContents for Vec<ToolResultContent> {
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent> {
+        self
+    }
+}
+
+impl<const N: usize> IntoToolResultContents for [ToolResultContent; N] {
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent> {
+        Vec::from(self)
+    }
+}
+
+impl IntoToolResultContents for ToolResultContent {
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent> {
+        vec![self]
+    }
+}
+
+impl IntoToolResultContents for serde_json::Value {
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent> {
+        vec![ToolResultContent::Json(self)]
+    }
+}
+
+impl IntoToolResultContents for Media {
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent> {
+        vec![ToolResultContent::Media(self)]
+    }
+}
+
+impl IntoToolResultContents for String {
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent> {
+        vec![ToolResultContent::Json(self.into())]
+    }
+}
+
+impl IntoToolResultContents for &str {
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent> {
+        vec![ToolResultContent::Json(self.into())]
+    }
+}
+
+impl IntoToolResultContents for bool {
+    fn into_tool_result_contents(self) -> Vec<ToolResultContent> {
+        vec![ToolResultContent::Json(self.into())]
+    }
 }
 
 /// Media passed to the model, such as an image returned by a tool.
 ///
 /// Non-exhaustive so new sources (such as media referenced by URL) can be
 /// added without breaking callers; match it with a wildcard arm.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Media {
@@ -68,6 +178,18 @@ pub enum Media {
         /// The media bytes, base64-encoded.
         data: String,
     },
+}
+
+impl std::fmt::Debug for Media {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inline { mime_type, data } => f
+                .debug_struct("Inline")
+                .field("mime_type", mime_type)
+                .field("data_len", &data.len())
+                .finish(),
+        }
+    }
 }
 
 impl Media {
@@ -152,23 +274,17 @@ impl Message {
     }
 
     /// Creates a message carrying the result of one tool execution.
-    pub fn tool_result(tool_call: Arc<ToolCall>, result: serde_json::Value) -> Self {
-        Self::tool_result_with_media(tool_call, result, Vec::new())
-    }
-
-    /// Creates a message carrying the result of one tool execution together
-    /// with media the tool returned, such as a screenshot.
     ///
+    /// `content` accepts a single [`serde_json::Value`], [`Media`],
+    /// [`ToolResultContent`], a `Vec<ToolResultContent>`, or a [`ToolResult`](crate::tools::ToolResult).
     /// Adapters that can't send tool-result media return an error rather
-    /// than dropping it. Tools run through [`AgentRunner`](crate::runner::AgentRunner)
-    /// can't return media yet (#92): build the message with this constructor
-    /// when calling [`LlmModel`] directly.
+    /// than dropping it.
     ///
     /// # Examples
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use agent_rig::model::{Media, Message, MessageContent, ToolCall};
+    /// use agent_rig::model::{Media, Message, MessageContent, ToolCall, ToolResultContent};
     ///
     /// let call = Arc::new(ToolCall {
     ///     id: "call-1".into(),
@@ -177,20 +293,18 @@ impl Message {
     ///     provider_metadata: None,
     /// });
     /// let image = Media::inline("image/png", "iVBORw0KGgo=");
-    /// let msg = Message::tool_result_with_media(call, serde_json::json!({"ok": true}), vec![image]);
-    /// assert!(matches!(msg.content, MessageContent::ToolResult { ref media, .. } if media.len() == 1));
+    /// let msg = Message::tool_result(call, image.clone());
+    /// assert!(matches!(
+    ///     &msg.content,
+    ///     MessageContent::ToolResult { content, .. } if content == &[ToolResultContent::Media(image)]
+    /// ));
     /// ```
-    pub fn tool_result_with_media(
-        tool_call: Arc<ToolCall>,
-        result: serde_json::Value,
-        media: Vec<Media>,
-    ) -> Self {
+    pub fn tool_result(tool_call: Arc<ToolCall>, content: impl IntoToolResultContents) -> Self {
         Self {
             role: Role::User,
             content: MessageContent::ToolResult {
                 tool_call,
-                result,
-                media,
+                content: content.into_tool_result_contents(),
             },
             provider_metadata: None,
         }
@@ -356,9 +470,12 @@ impl ModelRequest {
     /// Adapters that can't send tool-result media use this to fail with a
     /// clear error instead of silently dropping it.
     pub fn has_tool_result_media(&self) -> bool {
-        self.messages.iter().any(
-            |m| matches!(&m.content, MessageContent::ToolResult { media, .. } if !media.is_empty()),
-        )
+        self.messages.iter().any(|m| match &m.content {
+            MessageContent::ToolResult { content, .. } => content
+                .iter()
+                .any(|part| matches!(part, ToolResultContent::Media(_))),
+            _ => false,
+        })
     }
 }
 
@@ -664,30 +781,36 @@ mod tests {
     #[test]
     fn tool_result_media_round_trips_through_serde() {
         let image = Media::inline("image/png", "aGVsbG8=");
-        let msg = Message::tool_result_with_media(
+        let msg = Message::tool_result(
             screenshot_call(),
-            serde_json::json!({"ok": true}),
-            vec![image],
+            vec![serde_json::json!({"ok": true}).into(), image.into()],
         );
 
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(
-            json["content"]["content"]["media"],
-            serde_json::json!([{"type": "inline", "mime_type": "image/png", "data": "aGVsbG8="}])
+            json["content"]["content"]["content"],
+            serde_json::json!([
+                {"type": "json", "content": {"ok": true}},
+                {"type": "media", "content": {"type": "inline", "mime_type": "image/png", "data": "aGVsbG8="}}
+            ])
         );
         let restored: Message = serde_json::from_value(json).unwrap();
         assert_eq!(restored, msg);
     }
 
     #[test]
-    fn tool_result_without_media_omits_the_field_and_still_loads() {
-        let msg = Message::tool_result(screenshot_call(), serde_json::json!({"ok": true}));
+    fn tool_result_with_single_media_round_trips_through_serde() {
+        let image = Media::inline("image/png", "aGVsbG8=");
+        let msg = Message::tool_result(screenshot_call(), image.clone());
 
         let json = serde_json::to_value(&msg).unwrap();
-        assert!(json["content"]["content"].get("media").is_none());
         let restored: Message = serde_json::from_value(json).unwrap();
-        assert!(
-            matches!(restored.content, MessageContent::ToolResult { ref media, .. } if media.is_empty())
+        assert_eq!(
+            restored.content,
+            MessageContent::ToolResult {
+                tool_call: screenshot_call(),
+                content: vec![ToolResultContent::Media(image)],
+            }
         );
     }
 
@@ -700,13 +823,45 @@ mod tests {
             tools: vec![],
         };
         let plain = Message::tool_result(screenshot_call(), serde_json::json!({}));
-        let with_media = Message::tool_result_with_media(
-            screenshot_call(),
-            serde_json::json!({}),
-            vec![Media::inline("image/png", "aGVsbG8=")],
-        );
+        let with_media =
+            Message::tool_result(screenshot_call(), Media::inline("image/png", "aGVsbG8="));
 
         assert!(!request(vec![Message::user("hi"), plain]).has_tool_result_media());
         assert!(request(vec![Message::user("hi"), with_media]).has_tool_result_media());
+    }
+
+    #[test]
+    fn tool_result_json_handles_zero_one_and_multiple_json_blocks() {
+        let img = ToolResultContent::Media(Media::inline("image/png", "aGVsbG8="));
+        assert_eq!(
+            tool_result_json(std::slice::from_ref(&img)),
+            serde_json::json!({})
+        );
+
+        let one = [
+            ToolResultContent::Json(serde_json::json!({"a": 1})),
+            img.clone(),
+        ];
+        assert_eq!(tool_result_json(&one), serde_json::json!({"a": 1}));
+
+        let two = [
+            ToolResultContent::Json(serde_json::json!({"a": 1})),
+            img,
+            ToolResultContent::Json(serde_json::json!({"b": 2})),
+        ];
+        assert_eq!(
+            tool_result_json(&two),
+            serde_json::json!([{"a": 1}, {"b": 2}])
+        );
+    }
+
+    #[test]
+    fn media_debug_omits_raw_base64_payload() {
+        let secret_b64 = "SUPER_SECRET_BASE64_PAYLOAD";
+        let media = Media::inline("image/png", secret_b64);
+        let debug_str = format!("{media:?}");
+        assert!(!debug_str.contains(secret_b64));
+        assert!(debug_str.contains("image/png"));
+        assert!(debug_str.contains(&secret_b64.len().to_string()));
     }
 }

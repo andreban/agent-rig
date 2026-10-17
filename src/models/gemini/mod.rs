@@ -25,7 +25,7 @@ use crate::{
     error::Error,
     model::{
         LlmModel, Media, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk,
-        Role as AgentRole, TokenUsage, ToolCall,
+        Role as AgentRole, TokenUsage, ToolCall, ToolResultContent, tool_result_json,
     },
     tools::ToolDefinition,
 };
@@ -275,11 +275,7 @@ impl GeminiModel {
                                 .collect(),
                         ),
                     },
-                    MessageContent::ToolResult {
-                        tool_call,
-                        result,
-                        media,
-                    } => {
+                    MessageContent::ToolResult { tool_call, content } => {
                         let thought_signature = tool_call
                             .provider_metadata
                             .as_ref()
@@ -291,8 +287,8 @@ impl GeminiModel {
                                 data: PartData::FunctionResponse(FunctionResponse {
                                     id: Some(tool_call.id.clone()),
                                     name: tool_call.name.clone(),
-                                    response: ensure_object_response(result.clone()),
-                                    parts: function_response_parts(media),
+                                    response: ensure_object_response(tool_result_json(content)),
+                                    parts: function_response_parts(content),
                                     will_continue: None,
                                     scheduling: None,
                                 }),
@@ -358,21 +354,21 @@ impl GeminiModel {
     }
 }
 
-/// Maps tool-result media to `functionResponse.parts` (inline data), or `None` when there is none.
-fn function_response_parts(media: &[Media]) -> Option<Vec<FunctionResponsePart>> {
-    (!media.is_empty()).then(|| {
-        media
-            .iter()
-            .map(|m| match m {
-                Media::Inline { mime_type, data } => {
-                    FunctionResponsePart::InlineData(FunctionResponseBlob {
-                        mime_type: mime_type.clone(),
-                        data: data.clone(),
-                    })
-                }
-            })
-            .collect()
-    })
+/// Maps tool-result media blocks to `functionResponse.parts` (inline data), or `None` when there are none.
+fn function_response_parts(content: &[ToolResultContent]) -> Option<Vec<FunctionResponsePart>> {
+    let parts: Vec<FunctionResponsePart> = content
+        .iter()
+        .filter_map(|part| match part {
+            ToolResultContent::Media(Media::Inline { mime_type, data }) => {
+                Some(FunctionResponsePart::InlineData(FunctionResponseBlob {
+                    mime_type: mime_type.clone(),
+                    data: data.clone(),
+                }))
+            }
+            ToolResultContent::Json(_) => None,
+        })
+        .collect();
+    (!parts.is_empty()).then_some(parts)
 }
 
 #[async_trait]

@@ -28,7 +28,7 @@ use crate::{
     error::Error,
     model::{
         LlmModel, Message, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role,
-        TokenUsage, ToolCall,
+        TokenUsage, ToolCall, tool_result_json,
     },
     tools::ToolDefinition,
 };
@@ -305,10 +305,11 @@ fn build_chat_request(
                     ..Default::default()
                 });
             }
-            MessageContent::ToolResult {
-                tool_call, result, ..
-            } => {
-                messages.push(ChatMessage::tool(tool_call.id.clone(), result.to_string()));
+            MessageContent::ToolResult { tool_call, content } => {
+                messages.push(ChatMessage::tool(
+                    tool_call.id.clone(),
+                    tool_result_json(content).to_string(),
+                ));
             }
         }
     }

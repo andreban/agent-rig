@@ -6,6 +6,7 @@ mod registry;
 mod request;
 mod tool;
 
+pub use crate::model::ToolResultContent;
 pub use agent_tool::AgentTool;
 pub use registry::ToolRegistry;
 pub use request::ToolCallRequest;

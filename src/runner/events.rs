@@ -14,12 +14,21 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::model::{MessageList, TokenUsage};
-use crate::tools::ToolCallRequest;
+use crate::tools::{ToolCallRequest, ToolResult};
 
 /// Outcome of executing a single tool call.
 ///
 /// Reported back to the model as the tool result on the next turn (via
-/// [`From<ToolCallResult> for Value`](#impl-From<ToolCallResult>-for-Value)).
+/// [`From<ToolCallResult> for ToolResult`](#impl-From<ToolCallResult>-for-ToolResult)
+/// when passed to [`ToolCallRequest::resolve`](crate::tools::ToolCallRequest::resolve),
+/// or [`From<ToolCallResult> for Value`](#impl-From<ToolCallResult>-for-Value)).
+///
+/// Converting to [`ToolResult`] maps [`Ok(v)`](ToolCallResult::Ok) to
+/// [`ToolResult::ok(v)`](crate::tools::ToolResult::ok) (which envelopes JSON
+/// payloads as `{"success": v}` when sent to the model) and
+/// [`Err`](ToolCallResult::Err), [`Denied`](ToolCallResult::Denied), and
+/// [`Unknown`](ToolCallResult::Unknown) to [`ToolResult::error`](crate::tools::ToolResult::error)
+/// (`{"error": ...}`).
 #[derive(Clone, Debug)]
 pub enum ToolCallResult {
     /// The tool ran and returned this JSON value.
@@ -42,6 +51,17 @@ impl From<ToolCallResult> for Value {
             ToolCallResult::Ok(result) => result,
             ToolCallResult::Err(error) => Value::from(format!("Tool call error: {error}")),
             ToolCallResult::Unknown => Value::from("Unknown tool"),
+        }
+    }
+}
+
+impl From<ToolCallResult> for ToolResult {
+    fn from(value: ToolCallResult) -> Self {
+        match value {
+            ToolCallResult::Ok(result) => ToolResult::ok(result),
+            ToolCallResult::Err(error) => ToolResult::error(format!("Tool call error: {error}")),
+            ToolCallResult::Denied => ToolResult::error("Tool call denied"),
+            ToolCallResult::Unknown => ToolResult::error("Unknown tool"),
         }
     }
 }

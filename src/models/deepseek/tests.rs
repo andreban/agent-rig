@@ -133,15 +133,7 @@ fn test_build_chat_request_with_tool_calls_and_results() {
     let req = ModelRequest {
         messages: MessageList::from(vec![
             Message::tool_calls(vec![Arc::clone(&call)]),
-            Message {
-                role: Role::User,
-                content: MessageContent::ToolResult {
-                    tool_call: Arc::clone(&call),
-                    result: json!({ "success": true }),
-                    media: vec![],
-                },
-                provider_metadata: None,
-            },
+            Message::tool_result(Arc::clone(&call), json!({ "success": true })),
         ]),
         system: None,
         output_schema: None,
@@ -252,11 +244,7 @@ fn request_with_tool_result_media() -> ModelRequest {
     ));
     let image = Media::inline("image/png", "aGVsbG8=");
     ModelRequest {
-        messages: MessageList::from(vec![Message::tool_result_with_media(
-            call,
-            serde_json::json!({"ok": true}),
-            vec![image],
-        )]),
+        messages: MessageList::from(vec![Message::tool_result(call, image)]),
         system: None,
         output_schema: None,
         tools: vec![],
