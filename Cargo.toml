@@ -34,6 +34,8 @@ dotenvy = "0.15"
 reqwest = { version = "0.13", features = ["json"] }
 wiremock = "0.6"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+base64 = "0.23.1"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [[test]]
 name = "integration_gemini"
@@ -55,6 +57,11 @@ required-features = ["deepseek"]
 [[example]]
 name = "simple_agent"
 path = "examples/gemini/simple_agent.rs"
+required-features = ["gemini"]
+
+[[example]]
+name = "tool_result_image"
+path = "examples/gemini/tool_result_image.rs"
 required-features = ["gemini"]
 
 [[example]]

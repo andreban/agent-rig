@@ -177,9 +177,9 @@ fn build_agent_tool_with_tools(model: Arc<ScriptedModel>, tools: ToolRegistry) -
 /// Returns the result the child model received for the tool call `name`.
 fn tool_result_in(request: &ModelRequest, name: &str) -> Option<serde_json::Value> {
     request.messages.iter().find_map(|m| match &m.content {
-        MessageContent::ToolResult { tool_call, result } if tool_call.name == name => {
-            Some(result.clone())
-        }
+        MessageContent::ToolResult {
+            tool_call, result, ..
+        } if tool_call.name == name => Some(result.clone()),
         _ => None,
     })
 }

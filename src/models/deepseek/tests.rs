@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::model::Media;
 use crate::model::{Message, MessageList};
 use cetologia::types::response::PromptTokensDetails;
 use schemars::JsonSchema;
@@ -137,6 +138,7 @@ fn test_build_chat_request_with_tool_calls_and_results() {
                 content: MessageContent::ToolResult {
                     tool_call: Arc::clone(&call),
                     result: json!({ "success": true }),
+                    media: vec![],
                 },
                 provider_metadata: None,
             },
@@ -239,4 +241,54 @@ fn test_build_chat_request_reasoning_effort() {
     let req = build_chat_request("deepseek-reasoner", None, None, None, None, empty_request());
     let body = serde_json::to_value(&req).unwrap();
     assert!(body.get("reasoning_effort").is_none());
+}
+
+/// A request whose only message is a tool result carrying one image.
+fn request_with_tool_result_media() -> ModelRequest {
+    let call = Arc::new(ToolCall::new(
+        "call-1".into(),
+        "take_screenshot".into(),
+        serde_json::json!({}),
+    ));
+    let image = Media {
+        mime_type: "image/png".into(),
+        data: "aGVsbG8=".into(),
+    };
+    ModelRequest {
+        messages: MessageList::from(vec![Message::tool_result_with_media(
+            call,
+            serde_json::json!({"ok": true}),
+            vec![image],
+        )]),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    }
+}
+
+#[tokio::test]
+async fn generate_rejects_tool_result_media() {
+    let model = DeepSeekModel::new("test-key", "deepseek-chat");
+
+    let result = model.generate(request_with_tool_result_media()).await;
+
+    assert!(
+        matches!(&result, Err(Error::Provider(msg)) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn generate_stream_rejects_tool_result_media() {
+    let model = DeepSeekModel::new("test-key", "deepseek-chat");
+
+    let first = model
+        .generate_stream(request_with_tool_result_media())
+        .next()
+        .await;
+
+    assert!(
+        matches!(&first, Some(Err(Error::Provider(msg))) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
+        "{first:?}"
+    );
 }

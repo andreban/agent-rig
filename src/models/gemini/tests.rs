@@ -257,3 +257,55 @@ fn test_gemini_model_accessors_and_reexport() {
         .temperature(0.5_f32)
         .build();
 }
+
+#[test]
+fn tool_result_media_becomes_function_response_inline_data() {
+    let model = GeminiModel::new("test-key", "gemini-2.5-pro");
+    let call = std::sync::Arc::new(ToolCall::new(
+        "call-1".into(),
+        "take_screenshot".into(),
+        json!({}),
+    ));
+    let request = ModelRequest {
+        messages: crate::model::MessageList::from(vec![
+            crate::model::Message::tool_result_with_media(
+                call,
+                json!({"ok": true}),
+                vec![Media {
+                    mime_type: "image/png".into(),
+                    data: "aGVsbG8=".into(),
+                }],
+            ),
+        ]),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    };
+
+    let json = serde_json::to_value(model.build_gemini_request(request)).unwrap();
+
+    assert_eq!(
+        json["contents"][0]["parts"][0]["functionResponse"]["parts"],
+        json!([{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}])
+    );
+}
+
+#[test]
+fn tool_result_without_media_sends_no_function_response_parts() {
+    let model = GeminiModel::new("test-key", "gemini-2.5-pro");
+    let call = std::sync::Arc::new(ToolCall::new("call-1".into(), "lookup".into(), json!({})));
+    let request = ModelRequest {
+        messages: crate::model::MessageList::from(vec![crate::model::Message::tool_result(
+            call,
+            json!({"ok": true}),
+        )]),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    };
+
+    let json = serde_json::to_value(model.build_gemini_request(request)).unwrap();
+
+    let parts = &json["contents"][0]["parts"][0]["functionResponse"]["parts"];
+    assert!(parts.is_null(), "unexpected parts: {parts}");
+}

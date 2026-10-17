@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use std::sync::Arc;
+
+use crate::model::{Media, Message, MessageList};
 use ollama_rs::types::chat::{Message as OllamaMessage, Role as OllamaRole};
 
 fn chat_response(prompt: Option<u64>, eval: Option<u64>) -> ChatResponse {
@@ -96,4 +99,54 @@ fn test_ollama_model_accessors_and_reexport() {
     let _options = ollama_rs::types::common::Options::builder()
         .temperature(0.7)
         .build();
+}
+
+/// A request whose only message is a tool result carrying one image.
+fn request_with_tool_result_media() -> ModelRequest {
+    let call = Arc::new(ToolCall::new(
+        "call-1".into(),
+        "take_screenshot".into(),
+        serde_json::json!({}),
+    ));
+    let image = Media {
+        mime_type: "image/png".into(),
+        data: "aGVsbG8=".into(),
+    };
+    ModelRequest {
+        messages: MessageList::from(vec![Message::tool_result_with_media(
+            call,
+            serde_json::json!({"ok": true}),
+            vec![image],
+        )]),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    }
+}
+
+#[tokio::test]
+async fn generate_rejects_tool_result_media() {
+    let model = OllamaModel::new("http://localhost:11434", "llama3.2");
+
+    let result = model.generate(request_with_tool_result_media()).await;
+
+    assert!(
+        matches!(&result, Err(Error::Provider(msg)) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn generate_stream_rejects_tool_result_media() {
+    let model = OllamaModel::new("http://localhost:11434", "llama3.2");
+
+    let first = model
+        .generate_stream(request_with_tool_result_media())
+        .next()
+        .await;
+
+    assert!(
+        matches!(&first, Some(Err(Error::Provider(msg))) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
+        "{first:?}"
+    );
 }

@@ -131,6 +131,8 @@ pub struct ModelRequest {
     pub output_schema: Option<schemars::Schema>,   // JSON Schema for structured output, typed
     pub tools: Vec<ToolDefinition>,                // tool definitions for this turn
 }
+// ModelRequest::has_tool_result_media() reports whether any tool result carries media;
+// adapters that can't send it use this to return an error instead of dropping it.
 
 pub struct ToolCall {
     pub id: String,                                    // provider-supplied call ID
@@ -159,7 +161,7 @@ pub struct TokenUsage {
 `Message` carries a `Role` (`User` | `Assistant`), a `content: MessageContent`, and an optional `provider_metadata: Option<serde_json::Value>` — opaque adapter state for that assistant turn, the message-level counterpart of `ToolCall::provider_metadata`. Adapters that need state replayed emit it as a `ModelStreamChunk::ProviderMetadata` chunk (or `ModelResponse::provider_metadata`); the runner attaches whatever it received to the assistant message it appends (text or tool calls) and never looks inside. Each adapter namespaces its value under its own key and reads only that key, so a thread moved across providers is ignored rather than misreplayed. `Message::with_provider_metadata(..)` sets it manually. It is `#[serde(default, skip_serializing_if = "Option::is_none")]`, so threads persisted before the field existed still load. Reasoning text for display is not stored in the thread; it reaches consumers only through `ThinkingDelta` events. `MessageContent` is an enum with three variants:
 - `Text(String)` — a plain text turn
 - `ToolCalls(Vec<ToolCall>)` — all tool calls from one model turn (one assistant message)
-- `ToolResult { id, name, result, provider_metadata }` — the result of one tool execution (one user message)
+- `ToolResult { tool_call, result, media }` — the result of one tool execution (one user message). `media: Vec<Media>` carries inline media the tool returned, such as a screenshot (`Media { mime_type, data }`, `data` base64). It is `#[serde(default, skip_serializing_if = "Vec::is_empty")]`, so threads persisted before the field existed still load. `Message::tool_result_with_media(..)` builds one; `Message::tool_result(..)` leaves `media` empty. Media referenced by URL is not supported (see #86).
 
 `output_schema`, when set, instructs the provider adapter to constrain the response to the supplied JSON Schema. Providers that do not support structured output ignore the field silently.
 
@@ -432,6 +434,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Structured output: when `ModelRequest::output_schema` is set, a `GenerationConfig` with `response_mime_type("application/json")` and the normalised schema is applied, overriding any model-level config (with `thinking_config` carried over). Schema normalisation (stripping `$schema`/`$defs`, inlining `$ref`) is performed internally.
 - Response parts are split by `thought` flag: parts where `thought == Some(true)` are concatenated into `ModelResponse::thinking`; remaining text parts form `ModelResponse::text`. This surfaces reasoning tokens as `AgentEvent::ThinkingDelta` via the runner.
 - `provider_metadata` carries Gemini's `thought_signature`, which the adapter echoes back on both the replayed `FunctionCall` parts and the matching `FunctionResponse` parts.
+- Tool-result media is sent as the function response's `parts` (`FunctionResponsePart::InlineData`), Gemini's multimodal function responses.
 - Token usage: `usage_metadata` is mapped via `From<&UsageMetadata> for TokenUsage` — `prompt_token_count` → `input_tokens`, `candidates_token_count` → `output_tokens`, `cached_content_token_count` → `cached_input_tokens`, `thoughts_token_count` → `thinking_tokens`, `tool_use_prompt_token_count` → `tool_use_prompt_tokens`. Per-modality breakdowns (`*_tokens_details`) and `service_tier` are not propagated.
 - Implements `generate_stream` natively on top of `GeminiClient::stream_generate_content`. Each streamed `Candidate` part is converted to a chunk in order: thought `Text` parts become `Thinking`, regular `Text` parts become `TextDelta`, and `FunctionCall` parts become `ToolCall` (with `thought_signature` preserved in `provider_metadata`). The final `UsageMetadata` reported by the provider is emitted as a trailing `Usage` chunk.
 
@@ -444,6 +447,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Structured output: when `ModelRequest::output_schema` is set, the schema is passed to the Ollama `format` field (requires Ollama ≥ 0.5 and a model that supports structured output).
 - Implements `generate_stream` natively: emits `TextDelta` chunks as they arrive (no-tools path); emits `ToolCall` chunks from the single-shot response when tools are present (Ollama requires `stream(false)` for tool calls).
 - Ollama has no call ID; the function name is currently reused as the `ToolCall::id` (sufficient because no part of the codebase keys on the id for Ollama).
+- Tool-result media is not supported yet (#90): a request containing it fails with `Error::Provider`.
 - Token usage: `prompt_eval_count` → `input_tokens`, `eval_count` → `output_tokens` (saturating `u64` → `u32` cast). The Ollama API reports these on the final chunk (`done: true`) only — non-final chunks carry no usage. When neither field is populated the adapter emits `token_usage: None` rather than an all-`None` [`TokenUsage`]. Ollama does not report cache, thinking, or tool-use prompt tokens.
 
 ### `DeepSeekModel` (`src/models/deepseek/mod.rs`)
@@ -457,6 +461,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Extended thinking: reasoning tokens emitted in stream chunks under `reasoning_content` are forwarded as `ModelStreamChunk::Thinking` and `AgentEvent::ThinkingDelta`.
 - Reasoning replay: the adapter buffers each turn's `reasoning_content` and emits it as provider metadata `{"deepseek": {"reasoning_content": "..."}}` (a `ProviderMetadata` chunk at the end of the stream, or `ModelResponse::provider_metadata`). Every assistant message in the thread (tool-call and text turns) is sent back with `reasoning_content` read from that key, as DeepSeek's thinking mode requires for requests carrying `tools`.
 - Tool calling: multi-turn assistant tool calls and corresponding `tool` role messages are accurately mapped. Streaming tool calls are accumulated via `ToolCallAccumulator`.
+- Tool-result media is not supported yet (#89): a request containing it fails with `Error::Provider`.
 - Token usage: mapped from `Usage`, reporting `input_tokens`, `output_tokens`, and `cached_input_tokens` (via `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens`).
 
 ### `AnthropicModel` (`src/models/anthropic/mod.rs`)
@@ -465,7 +470,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Exposes `.client()` (`&AntropologiaClient`) and `.model()` (`&str`) accessors.
 - System instructions become the request's top-level `system` field.
 - Optional parameters (`max_tokens`, `effort`, `thinking`, `temperature`, `top_p`, `base_url`) configurable via `AnthropicModel::builder(…)`. `max_tokens` defaults to `antropologia::DEFAULT_MAX_TOKENS` (16,000); unset `effort` and `thinking` are omitted so the model's defaults apply.
-- Messages: consecutive same-role agent-rig messages are merged into one Claude message, since Claude requires alternating roles (the runner appends one `ToolResult` message per call). Tool results are sent as `tool_result` blocks; a `{"error": …}` envelope sets `is_error: true`.
+- Messages: consecutive same-role agent-rig messages are merged into one Claude message, since Claude requires alternating roles (the runner appends one `ToolResult` message per call). Tool results are sent as `tool_result` blocks; a `{"error": …}` envelope sets `is_error: true`. Tool-result media is not supported yet (#88): a request containing it fails with `Error::Provider`.
 - Structured output: when `ModelRequest::output_schema` is set, it is sent as `output_config.format` (`json_schema`). `antropologia` removes `$schema` and adds `additionalProperties: false` to object schemas, as the API requires; callers keep schemas provider-neutral.
 - Content-block replay: each turn's content blocks (thinking blocks with signatures, text, tool calls, and block types `antropologia` does not model) are emitted as provider metadata `{"anthropic": {"content": [...]}}`. Assistant messages carrying that key are sent back with exactly those blocks, as Claude requires when thinking precedes tool calls; other assistant messages are rebuilt from their `MessageContent`.
 - Extended thinking: non-empty thinking text (returned when `display` is `summarized`) is forwarded as `ModelStreamChunk::Thinking` / `ModelResponse::thinking`.

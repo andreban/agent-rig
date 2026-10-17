@@ -248,6 +248,10 @@ fn build_chat_request(
     think: Option<Think>,
     request: ModelRequest,
 ) -> Result<ChatRequest, Error> {
+    if request.has_tool_result_media() {
+        return Err(Error::Provider(TOOL_RESULT_MEDIA_UNSUPPORTED.into()));
+    }
+
     let mut messages: Vec<OllamaMessage> = Vec::new();
 
     if let Some(system) = request.system {
@@ -310,6 +314,10 @@ fn build_chat_request(
 
     Ok(builder.build())
 }
+
+/// Returned when a request contains tool-result media, which this adapter can't send yet.
+const TOOL_RESULT_MEDIA_UNSUPPORTED: &str =
+    "Ollama adapter does not support media in tool results yet";
 
 #[async_trait]
 impl LlmModel for OllamaModel {
@@ -375,7 +383,7 @@ impl LlmModel for OllamaModel {
                 &self.model, self.options.clone(), self.think.clone(), request) {
                     Ok(chat_request) => chat_request,
                     Err(e) => {
-                        yield Err(Error::Provider(e.to_string()));
+                        yield Err(e);
                         return;
                     }
                 };

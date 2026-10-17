@@ -249,7 +249,9 @@ fn content_blocks(msg: &Message) -> Vec<ContentBlock> {
                 ContentBlock::tool_use(call.id.clone(), call.name.clone(), call.args.clone())
             })
             .collect(),
-        MessageContent::ToolResult { tool_call, result } => {
+        MessageContent::ToolResult {
+            tool_call, result, ..
+        } => {
             vec![tool_result_block(&tool_call.id, result)]
         }
     }
@@ -356,9 +358,16 @@ fn provider_error(error: antropologia::AntropologiaError) -> Error {
     Error::Provider(error.to_string())
 }
 
+/// Returned when a request contains tool-result media, which this adapter can't send yet.
+const TOOL_RESULT_MEDIA_UNSUPPORTED: &str =
+    "Anthropic adapter does not support media in tool results yet";
+
 #[async_trait]
 impl LlmModel for AnthropicModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
+        if request.has_tool_result_media() {
+            return Err(Error::Provider(TOOL_RESULT_MEDIA_UNSUPPORTED.into()));
+        }
         let request = build_messages_request(&self.model, &self.settings, request);
         let response = self
             .client
@@ -373,6 +382,10 @@ impl LlmModel for AnthropicModel {
         request: ModelRequest,
     ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
         Box::pin(async_stream::stream! {
+            if request.has_tool_result_media() {
+                yield Err(Error::Provider(TOOL_RESULT_MEDIA_UNSUPPORTED.into()));
+                return;
+            }
             let request = build_messages_request(&self.model, &self.settings, request);
             let mut stream = match self.client.messages_stream(&request).await {
                 Ok(stream) => Box::pin(stream),
