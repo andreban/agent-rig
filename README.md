@@ -259,6 +259,23 @@ while let Some(event) = stream.next().await {
 }
 ```
 
+Tools can also return binary media (such as images) or a mix of JSON and media content blocks using `Media` and `ToolResultContent` (see [`examples/gemini/tool_result_image.rs`](examples/gemini/tool_result_image.rs)):
+
+```rust
+use agent_rig::model::Media;
+use agent_rig::tools::ToolResult;
+use serde_json::json;
+
+// Media only:
+let result = ToolResult::ok(Media::inline("image/png", base64_png));
+
+// Both JSON metadata and media:
+let result = ToolResult::ok([
+    json!({ "width": 100, "height": 100 }).into(),
+    Media::inline("image/png", base64_png).into(),
+]);
+```
+
 ### Authorization
 
 Because tool execution is resolved by the client, gating tool calls behind user approval is highly straightforward — and it's purely a consumer concern. Whether a given call needs confirmation is your policy, applied in the event loop before you invoke `Tool::call`; the `Tool` contract carries no approval hook:
@@ -538,8 +555,9 @@ graph TD
 | `Agent` / `AgentBuilder` | Serializable agent blueprint (name, instructions, allowed tools, output schema) |
 | `AgentRunner` | Execution engine; owns the model and the list of allowed tool definitions |
 | `LlmModel` | Async trait that provider adapters implement (`generate`, `generate_stream`) |
-| `Message` / `MessageContent` | Conversation history elements. `MessageContent` is either `Text`, `ToolCalls(Vec<Arc<ToolCall>>)`, or `ToolResult` |
-| `Tool` / `ToolDefinition` | Async trait for callable tools; declares name, description, and parameter JSON Schema |
+| `Message` / `MessageContent` | Conversation history elements. `MessageContent` is either `Text`, `ToolCalls(Vec<Arc<ToolCall>>)`, or `ToolResult { tool_call, content: Vec<ToolResultContent> }` |
+| `ToolResultContent` / `Media` | Content blocks inside a tool result: `Json(Value)` or `Media(Media)` (e.g. `Media::inline(mime_type, base64_data)`) |
+| `Tool` / `ToolDefinition` / `ToolResult` | Async trait for callable tools; declares name, description, and parameter JSON Schema, and returns `ToolResult::Ok(Vec<ToolResultContent>)` or `ToolResult::Err(Value)` |
 | `ToolRegistry` | Client-side registry of `Tool` and `AgentTool` implementations, used to resolve tool calls |
 | `AgentTool` | Wraps an `AgentRunner` + `Agent` as a standard `Tool` for nesting and composition |
 | `AgentEvent` | Stream event: `TurnStart`, `ThinkingDelta`, `TextDelta`, `ToolCall`, `Usage`, `TurnFinish`, `Cancelled`, `Error` |
@@ -580,6 +598,9 @@ GEMINI_API_KEY=your_key cargo run --example simple_agent --features gemini
 
 # Tool calling
 GEMINI_API_KEY=your_key cargo run --example tool_calling --features gemini
+
+# Tool returning an image (media)
+GEMINI_API_KEY=your_key cargo run --example tool_result_image --features gemini
 
 # Structured output
 GEMINI_API_KEY=your_key cargo run --example structured_output --features gemini

@@ -68,7 +68,7 @@ impl Tool for GetTemperatureTool {
             _ => 20.0,
         };
         println!("[tool] get_temperature({city}) → {celsius}°C");
-        ToolResult::Ok(json!({ "city": city, "celsius": celsius }))
+        ToolResult::ok(json!({ "city": city, "celsius": celsius }))
     }
 }
 
@@ -107,7 +107,7 @@ impl Tool for CelsiusToFahrenheitTool {
         let celsius = tool_call.args["celsius"].as_f64().unwrap_or(0.0);
         let fahrenheit = celsius * 9.0 / 5.0 + 32.0;
         println!("[tool] celsius_to_fahrenheit({celsius}) → {fahrenheit}°F");
-        ToolResult::Ok(json!({ "fahrenheit": fahrenheit }))
+        ToolResult::ok(json!({ "fahrenheit": fahrenheit }))
     }
 }
 

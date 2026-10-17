@@ -30,7 +30,7 @@ use tracing::{debug, info};
 use crate::{
     Agent,
     model::{LlmModel, Message, MessageList, ModelRequest, ModelStreamChunk, ToolCall},
-    tools::{ToolCallRequest, ToolDefinition},
+    tools::{ToolCallRequest, ToolDefinition, ToolResult},
 };
 
 mod events;
@@ -302,9 +302,11 @@ impl AgentRunner {
                 let result = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => {
-                        return (call, Value::from("Cancelled"));
+                        return (call, ToolResult::error("Cancelled"));
                     }
-                    res = resolve_rx => res.unwrap_or(Value::from(format!("Tool call {} failed", call.name))),
+                    res = resolve_rx => res.unwrap_or_else(|_| {
+                        ToolResult::error(format!("Tool call {} failed", call.name))
+                    }),
                 };
 
                 info!("Tool '{}' responded with result '{:?}'", call.name, result);

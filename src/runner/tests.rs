@@ -6,7 +6,7 @@ use crate::Agent;
 use crate::error::Error;
 use crate::model::{
     LlmModel, Message, MessageContent, MessageList, ModelRequest, ModelResponse, TokenUsage,
-    ToolCall,
+    ToolCall, ToolResultContent,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -346,8 +346,11 @@ async fn dropped_tool_call_sends_error_string_to_model() {
         .iter()
         .find(|m| matches!(&m.content, MessageContent::ToolResult { .. }));
     assert!(tool_result.is_some());
-    if let MessageContent::ToolResult { result, .. } = &tool_result.unwrap().content {
-        assert!(result.as_str().unwrap_or("").contains("failed"));
+    if let MessageContent::ToolResult { content, .. } = &tool_result.unwrap().content {
+        let [ToolResultContent::Json(result)] = content.as_slice() else {
+            panic!("expected single JSON block, got {content:?}");
+        };
+        assert!(result["error"].as_str().unwrap_or("").contains("failed"));
     }
 }
 
@@ -409,4 +412,74 @@ async fn run_id_is_consistent_across_all_events_in_a_run() {
     assert!(!run_ids.is_empty());
     let first = run_ids[0];
     assert!(run_ids.iter().all(|id| *id == first));
+}
+
+#[tokio::test]
+async fn tool_in_registry_returning_media_passes_media_to_model() {
+    use crate::model::{Media, ToolResultContent};
+    use crate::tools::{Tool, ToolRegistry, ToolResult};
+    use schemars::json_schema;
+
+    struct SnapshotTool {
+        definition: ToolDefinition,
+    }
+
+    #[async_trait]
+    impl Tool for SnapshotTool {
+        fn definition(&self) -> &ToolDefinition {
+            &self.definition
+        }
+
+        async fn call(&self, _call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+            ToolResult::ok(Media::inline("image/png", "iVBORw0KGgo="))
+        }
+    }
+
+    let registry = ToolRegistry::new().register(SnapshotTool {
+        definition: ToolDefinition {
+            name: "take_snapshot".to_string(),
+            description: "Takes a snapshot".to_string(),
+            parameters: json_schema!({"type": "object"}),
+        },
+    });
+    let model = ScriptedModel::new(vec![
+        tool_call("c1", "take_snapshot", json!({})),
+        text("it is a png"),
+    ]);
+    let runner = AgentRunner::with_tools(model.clone(), registry.definitions());
+
+    let mut finish_thread: Option<MessageList> = None;
+    let mut stream = runner.run(&agent(), vec![Message::user("snap")].into());
+    while let Some(ev) = stream.next().await {
+        match ev.agent_event {
+            AgentEvent::ToolCall(call) => {
+                let tool = registry.get(&call.details.name).unwrap();
+                let res = tool
+                    .call(call.details.clone(), call.cancellation_token.clone())
+                    .await;
+                call.resolve(res);
+            }
+            AgentEvent::TurnFinish { thread } => finish_thread = Some(thread),
+            _ => {}
+        }
+    }
+
+    let expected_content = vec![ToolResultContent::Media(Media::inline(
+        "image/png",
+        "iVBORw0KGgo=",
+    ))];
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].has_tool_result_media());
+    let MessageContent::ToolResult { tool_call, content } = &requests[1].messages[2].content else {
+        panic!("expected ToolResult message in second request");
+    };
+    assert_eq!(tool_call.name, "take_snapshot");
+    assert_eq!(*content, expected_content);
+
+    let thread = finish_thread.unwrap();
+    let MessageContent::ToolResult { content, .. } = &thread[2].content else {
+        panic!("expected ToolResult message in final thread");
+    };
+    assert_eq!(*content, expected_content);
 }
