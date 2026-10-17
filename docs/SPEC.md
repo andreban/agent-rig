@@ -463,7 +463,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Extended thinking: reasoning tokens emitted in stream chunks under `reasoning_content` are forwarded as `ModelStreamChunk::Thinking` and `AgentEvent::ThinkingDelta`.
 - Reasoning replay: the adapter buffers each turn's `reasoning_content` and emits it as provider metadata `{"deepseek": {"reasoning_content": "..."}}` (a `ProviderMetadata` chunk at the end of the stream, or `ModelResponse::provider_metadata`). Every assistant message in the thread (tool-call and text turns) is sent back with `reasoning_content` read from that key, as DeepSeek's thinking mode requires for requests carrying `tools`.
 - Tool calling: multi-turn assistant tool calls and corresponding `tool` role messages are accurately mapped. Streaming tool calls are accumulated via `ToolCallAccumulator`.
-- Tool-result media is not supported yet (#89): a request containing it fails with `Error::Provider`.
+- Tool-result media: when a tool result carries [`Media`](crate::model::Media), the `role: "tool"` message's `content` is sent as an array of `text` and `image_url` (`data:<mime>;base64,<data>`, supporting `image/jpeg`, `image/png`, `image/gif`, `image/webp`) parts on vision-capable models (`deepseek-flash`, `deepseek-chat`, `deepseek-reasoner`); text-only models (such as `deepseek-v4-pro`) and unsupported media types fail with `Error::Provider`.
 - Token usage: mapped from `Usage`, reporting `input_tokens`, `output_tokens`, and `cached_input_tokens` (via `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens`).
 
 ### `AnthropicModel` (`src/models/anthropic/mod.rs`)
@@ -543,6 +543,7 @@ examples/
     reasoner.rs           — thinking trace with deepseek-reasoner (R1)
     tool_calling.rs       — tool execution and synthesis
     structured_output.rs  — JSON schema output
+    tool_result_image.rs  — image returned in a tool result, checked against the live API
   gemini/
     simple_agent.rs       — single-turn Gemini example
     tool_calling.rs       — Tool trait + ToolRegistry

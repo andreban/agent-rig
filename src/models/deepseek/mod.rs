@@ -17,7 +17,7 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use cetologia::prelude::{
-    CetologiaClient, ChatCompletionRequest, ChatMessage, FunctionCall, ResponseFormat,
+    CetologiaClient, ChatCompletionRequest, ChatMessage, ContentPart, FunctionCall, ResponseFormat,
     Role as CetologiaRole, Tool as CetologiaTool, ToolCall as CetologiaToolCall,
     ToolCallAccumulator, ToolType, Usage as CetologiaUsage,
 };
@@ -27,8 +27,8 @@ use serde_json::Value;
 use crate::{
     error::Error,
     model::{
-        LlmModel, Message, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role,
-        TokenUsage, ToolCall, tool_result_json,
+        LlmModel, Media, Message, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk,
+        Role, TokenUsage, ToolCall, ToolResultContent, tool_result_json,
     },
     tools::ToolDefinition,
 };
@@ -248,6 +248,68 @@ fn replayed_reasoning(msg: &Message) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Whether `model` accepts image inputs in tool results.
+///
+/// `deepseek-flash` (and its `deepseek-chat` and `deepseek-reasoner` aliases)
+/// accepts `["text", "image"]` input modalities, whereas text-only models such
+/// as `deepseek-v4-pro` silently ignore `image_url` blocks.
+fn supports_vision(model: &str) -> bool {
+    matches!(
+        model,
+        "deepseek-flash" | "deepseek-chat" | "deepseek-reasoner"
+    )
+}
+
+/// Formats a JSON value as text for a tool-result content block. Strings are kept
+/// unwrapped so plain-text tool outputs are not double-quoted.
+fn json_to_text(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Converts a [`Media`] item into a DeepSeek `image_url` content part.
+fn media_part(media: &Media) -> Result<ContentPart, Error> {
+    match media {
+        Media::Inline { mime_type, data } => match mime_type.as_str() {
+            "image/jpeg" | "image/png" | "image/gif" | "image/webp" => {
+                Ok(ContentPart::image_base64(mime_type, data))
+            }
+            other => Err(Error::Provider(format!(
+                "DeepSeek adapter does not support tool-result media type: {other}"
+            ))),
+        },
+    }
+}
+
+/// Converts tool-result content blocks into a DeepSeek `role: "tool"` message.
+/// When media blocks are present, `content` is sent as an array of `text` and
+/// `image_url` parts; otherwise it is sent as a JSON string.
+fn tool_result_message(
+    tool_call_id: String,
+    content: &[ToolResultContent],
+) -> Result<ChatMessage, Error> {
+    let has_media = content
+        .iter()
+        .any(|part| matches!(part, ToolResultContent::Media(_)));
+    if !has_media {
+        return Ok(ChatMessage::tool(
+            tool_call_id,
+            tool_result_json(content).to_string(),
+        ));
+    }
+
+    let parts = content
+        .iter()
+        .map(|part| match part {
+            ToolResultContent::Json(v) => Ok(ContentPart::text(json_to_text(v))),
+            ToolResultContent::Media(m) => media_part(m),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ChatMessage::tool_parts(tool_call_id, parts))
+}
+
 /// Helper to build a DeepSeek [`ChatCompletionRequest`] from a [`ModelRequest`].
 fn build_chat_request(
     model: &str,
@@ -256,7 +318,13 @@ fn build_chat_request(
     top_p: Option<f32>,
     reasoning_effort: Option<ReasoningEffort>,
     request: ModelRequest,
-) -> ChatCompletionRequest {
+) -> Result<ChatCompletionRequest, Error> {
+    if request.has_tool_result_media() && !supports_vision(model) {
+        return Err(Error::Provider(format!(
+            "DeepSeek model '{model}' does not support image input in tool results"
+        )));
+    }
+
     let mut messages: Vec<ChatMessage> = Vec::new();
 
     let mut system_prompt = request.system.unwrap_or_default();
@@ -306,10 +374,7 @@ fn build_chat_request(
                 });
             }
             MessageContent::ToolResult { tool_call, content } => {
-                messages.push(ChatMessage::tool(
-                    tool_call.id.clone(),
-                    tool_result_json(content).to_string(),
-                ));
+                messages.push(tool_result_message(tool_call.id.clone(), content)?);
             }
         }
     }
@@ -338,19 +403,12 @@ fn build_chat_request(
         builder = builder.response_format(ResponseFormat::JsonObject);
     }
 
-    builder.build()
+    Ok(builder.build())
 }
-
-/// Returned when a request contains tool-result media, which this adapter can't send yet.
-const TOOL_RESULT_MEDIA_UNSUPPORTED: &str =
-    "DeepSeek adapter does not support media in tool results yet";
 
 #[async_trait]
 impl LlmModel for DeepSeekModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
-        if request.has_tool_result_media() {
-            return Err(Error::Provider(TOOL_RESULT_MEDIA_UNSUPPORTED.into()));
-        }
         let chat_request = build_chat_request(
             &self.model,
             self.temperature,
@@ -358,7 +416,7 @@ impl LlmModel for DeepSeekModel {
             self.top_p,
             self.reasoning_effort,
             request,
-        );
+        )?;
 
         let response = self
             .client
@@ -417,18 +475,20 @@ impl LlmModel for DeepSeekModel {
         request: ModelRequest,
     ) -> Pin<Box<dyn Stream<Item = Result<ModelStreamChunk, Error>> + Send + '_>> {
         Box::pin(async_stream::stream! {
-            if request.has_tool_result_media() {
-                yield Err(Error::Provider(TOOL_RESULT_MEDIA_UNSUPPORTED.into()));
-                return;
-            }
-            let chat_request = build_chat_request(
+            let chat_request = match build_chat_request(
                 &self.model,
                 self.temperature,
                 self.max_tokens,
                 self.top_p,
                 self.reasoning_effort,
                 request,
-            );
+            ) {
+                Ok(req) => req,
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            };
 
             let mut stream = match self.client.chat_stream(&chat_request).await {
                 Ok(stream) => stream,

@@ -27,7 +27,7 @@ struct TestSchema {
 
 #[test]
 fn test_build_chat_request_empty() {
-    let req = build_chat_request("deepseek-chat", None, None, None, None, empty_request());
+    let req = build_chat_request("deepseek-chat", None, None, None, None, empty_request()).unwrap();
     assert_eq!(req.model, "deepseek-chat");
     assert!(req.messages.is_empty());
 }
@@ -78,7 +78,8 @@ fn test_build_chat_request_with_system_and_messages() {
         tools: vec![],
     };
 
-    let chat_req = build_chat_request("deepseek-chat", Some(0.7), Some(100), Some(0.9), None, req);
+    let chat_req =
+        build_chat_request("deepseek-chat", Some(0.7), Some(100), Some(0.9), None, req).unwrap();
 
     assert_eq!(chat_req.model, "deepseek-chat");
     assert_eq!(chat_req.temperature, Some(0.7));
@@ -86,10 +87,7 @@ fn test_build_chat_request_with_system_and_messages() {
     assert_eq!(chat_req.top_p, Some(0.9));
     assert_eq!(chat_req.messages.len(), 3);
     assert_eq!(chat_req.messages[0].role, CetologiaRole::System);
-    assert_eq!(
-        chat_req.messages[0].content.as_deref(),
-        Some("Act as a pirate")
-    );
+    assert_eq!(chat_req.messages[0].text(), Some("Act as a pirate"));
     assert_eq!(chat_req.messages[1].role, CetologiaRole::User);
     assert_eq!(chat_req.messages[2].role, CetologiaRole::Assistant);
 }
@@ -111,7 +109,7 @@ fn test_build_chat_request_with_tools_and_schema() {
         tools: vec![tool_def],
     };
 
-    let chat_req = build_chat_request("deepseek-chat", None, None, None, None, req);
+    let chat_req = build_chat_request("deepseek-chat", None, None, None, None, req).unwrap();
 
     assert_eq!(chat_req.response_format, Some(ResponseFormat::JsonObject));
     assert_eq!(chat_req.tools.as_ref().unwrap().len(), 1);
@@ -140,7 +138,7 @@ fn test_build_chat_request_with_tool_calls_and_results() {
         tools: vec![],
     };
 
-    let chat_req = build_chat_request("deepseek-chat", None, None, None, None, req);
+    let chat_req = build_chat_request("deepseek-chat", None, None, None, None, req).unwrap();
 
     assert_eq!(chat_req.messages.len(), 2);
     assert_eq!(chat_req.messages[0].role, CetologiaRole::Assistant);
@@ -155,6 +153,7 @@ fn test_build_chat_request_with_tool_calls_and_results() {
         chat_req.messages[1].tool_call_id.as_deref(),
         Some("call_123")
     );
+    assert_eq!(chat_req.messages[1].text(), Some(r#"{"success":true}"#));
 }
 
 #[test]
@@ -189,7 +188,7 @@ fn test_build_chat_request_replays_reasoning_on_assistant_turns() {
         tools: vec![],
     };
 
-    let chat_req = build_chat_request("deepseek-reasoner", None, None, None, None, req);
+    let chat_req = build_chat_request("deepseek-reasoner", None, None, None, None, req).unwrap();
 
     assert_eq!(chat_req.messages.len(), 6);
     assert_eq!(chat_req.messages[0].reasoning_content, None);
@@ -198,7 +197,7 @@ fn test_build_chat_request_replays_reasoning_on_assistant_turns() {
         Some("tool reasoning")
     );
     assert_eq!(chat_req.messages[2].reasoning_content, None);
-    assert_eq!(chat_req.messages[3].content.as_deref(), Some("done"));
+    assert_eq!(chat_req.messages[3].text(), Some("done"));
     assert_eq!(
         chat_req.messages[3].reasoning_content.as_deref(),
         Some("text reasoning")
@@ -225,12 +224,14 @@ fn test_build_chat_request_reasoning_effort() {
         None,
         Some(ReasoningEffort::None),
         empty_request(),
-    );
+    )
+    .unwrap();
     assert_eq!(req.reasoning_effort, Some(ReasoningEffort::None));
     let body = serde_json::to_value(&req).unwrap();
     assert_eq!(body["reasoning_effort"], "none");
 
-    let req = build_chat_request("deepseek-reasoner", None, None, None, None, empty_request());
+    let req =
+        build_chat_request("deepseek-reasoner", None, None, None, None, empty_request()).unwrap();
     let body = serde_json::to_value(&req).unwrap();
     assert!(body.get("reasoning_effort").is_none());
 }
@@ -251,21 +252,128 @@ fn request_with_tool_result_media() -> ModelRequest {
     }
 }
 
-#[tokio::test]
-async fn generate_rejects_tool_result_media() {
-    let model = DeepSeekModel::new("test-key", "deepseek-chat");
+#[test]
+fn test_build_chat_request_tool_result_with_media() {
+    for model in ["deepseek-flash", "deepseek-chat", "deepseek-reasoner"] {
+        let req = build_chat_request(
+            model,
+            None,
+            None,
+            None,
+            None,
+            request_with_tool_result_media(),
+        )
+        .unwrap();
+        let body = serde_json::to_value(&req).unwrap();
 
-    let result = model.generate(request_with_tool_result_media()).await;
+        assert_eq!(
+            body["messages"],
+            json!([
+                {
+                    "role": "tool",
+                    "tool_call_id": "call-1",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/png;base64,aGVsbG8="
+                            }
+                        }
+                    ]
+                }
+            ])
+        );
+    }
+}
+
+#[test]
+fn test_build_chat_request_tool_result_with_json_and_media() {
+    let call = Arc::new(ToolCall::new(
+        "call-1".into(),
+        "take_screenshot".into(),
+        json!({}),
+    ));
+    let req = ModelRequest {
+        messages: MessageList::from(vec![Message::tool_result(
+            call,
+            vec![
+                ToolResultContent::from(json!({"caption": "login page"})),
+                ToolResultContent::from(Media::inline("image/jpeg", "ff00")),
+            ],
+        )]),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    };
+
+    let chat_req = build_chat_request("deepseek-chat", None, None, None, None, req).unwrap();
+    let body = serde_json::to_value(&chat_req).unwrap();
+
+    assert_eq!(
+        body["messages"],
+        json!([
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": r#"{"caption":"login page"}"#
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/jpeg;base64,ff00"
+                        }
+                    }
+                ]
+            }
+        ])
+    );
+}
+
+#[test]
+fn test_build_chat_request_rejects_unsupported_media_type() {
+    let call = Arc::new(ToolCall::new("call-1".into(), "f".into(), json!({})));
+    let req = ModelRequest {
+        messages: MessageList::from(vec![Message::tool_result(
+            call,
+            Media::inline("image/bmp", "aGVsbG8="),
+        )]),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    };
+
+    let result = build_chat_request("deepseek-chat", None, None, None, None, req);
 
     assert!(
-        matches!(&result, Err(Error::Provider(msg)) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
+        matches!(
+            &result,
+            Err(Error::Provider(msg)) if msg.contains("image/bmp")
+        ),
         "{result:?}"
     );
 }
 
 #[tokio::test]
-async fn generate_stream_rejects_tool_result_media() {
-    let model = DeepSeekModel::new("test-key", "deepseek-chat");
+async fn generate_rejects_tool_result_media_for_text_only_model() {
+    let model = DeepSeekModel::new("test-key", "deepseek-v4-pro");
+
+    let result = model.generate(request_with_tool_result_media()).await;
+
+    assert!(
+        matches!(
+            &result,
+            Err(Error::Provider(msg)) if msg.contains("deepseek-v4-pro")
+        ),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn generate_stream_rejects_tool_result_media_for_text_only_model() {
+    let model = DeepSeekModel::new("test-key", "deepseek-v4-pro");
 
     let first = model
         .generate_stream(request_with_tool_result_media())
@@ -273,7 +381,10 @@ async fn generate_stream_rejects_tool_result_media() {
         .await;
 
     assert!(
-        matches!(&first, Some(Err(Error::Provider(msg))) if msg == TOOL_RESULT_MEDIA_UNSUPPORTED),
+        matches!(
+            &first,
+            Some(Err(Error::Provider(msg))) if msg.contains("deepseek-v4-pro")
+        ),
         "{first:?}"
     );
 }

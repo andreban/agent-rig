@@ -144,6 +144,11 @@ name = "deepseek_structured_output"
 path = "examples/deepseek/structured_output.rs"
 required-features = ["deepseek"]
 
+[[example]]
+name = "deepseek_tool_result_image"
+path = "examples/deepseek/tool_result_image.rs"
+required-features = ["deepseek"]
+
 # Anthropic Examples
 [[example]]
 name = "anthropic_chat"
