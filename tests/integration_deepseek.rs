@@ -219,6 +219,83 @@ async fn agent_output_schema_returns_valid_json() {
 }
 
 #[tokio::test]
+async fn agent_tool_returning_image_is_described_by_model() {
+    let Some(key) = api_key() else {
+        println!("SKIPPED: DEEPSEEK_API_KEY not set");
+        return;
+    };
+
+    struct BlueSnapshotTool {
+        definition: ToolDefinition,
+    }
+
+    #[async_trait]
+    impl Tool for BlueSnapshotTool {
+        fn definition(&self) -> &ToolDefinition {
+            &self.definition
+        }
+
+        async fn call(&self, _tool_call: Arc<ToolCall>, _cancel: CancellationToken) -> ToolResult {
+            use base64::Engine;
+            use image::{ImageFormat, Rgb, RgbImage};
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            RgbImage::from_pixel(64, 64, Rgb([20, 40, 220]))
+                .write_to(&mut bytes, ImageFormat::Png)
+                .expect("encode PNG");
+            let png_b64 = base64::engine::general_purpose::STANDARD.encode(bytes.into_inner());
+            ToolResult::ok(agent_rig::model::Media::inline("image/png", png_b64))
+        }
+    }
+
+    let model = Arc::new(DeepSeekModel::new(key, MODEL));
+    let registry = Arc::new(ToolRegistry::new().register(BlueSnapshotTool {
+        definition: ToolDefinition {
+            name: "take_snapshot".into(),
+            description: "Takes a snapshot with the camera and returns it as an image.".into(),
+            parameters: json_schema!({"type": "object", "properties": {}}),
+        },
+    }));
+    let runner = AgentRunner::with_tools(model, registry.definitions());
+
+    let agent = Agent::builder()
+        .name("snapshot-inspector")
+        .instructions("Use the take_snapshot tool and report the colour shown in the image.")
+        .tool("take_snapshot")
+        .build();
+
+    let mut text = String::new();
+    let mut stream = runner.run(
+        &agent,
+        vec![Message::user(
+            "Take a snapshot with the camera and tell me, in one word, the colour it shows.",
+        )]
+        .into(),
+    );
+    while let Some(event) = stream.next().await {
+        match event.agent_event {
+            AgentEvent::ToolCall(call) => {
+                let result = match registry.get(&call.details.name) {
+                    Some(tool) => {
+                        tool.call(call.details.clone(), call.cancellation_token.clone())
+                            .await
+                    }
+                    None => ToolResult::error("Unknown tool"),
+                };
+                call.resolve(result);
+            }
+            AgentEvent::TextDelta(chunk) => text.push_str(&chunk),
+            AgentEvent::Error(e) => panic!("unexpected error: {e}"),
+            _ => {}
+        }
+    }
+
+    assert!(
+        text.to_lowercase().contains("blue"),
+        "expected model to identify the blue image, got: {text}"
+    );
+}
+
+#[tokio::test]
 async fn generate_stream_surfaces_provider_error() {
     let bad_model = DeepSeekModel::new("invalid_key_for_testing", MODEL);
     let request = ModelRequest {

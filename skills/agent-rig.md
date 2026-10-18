@@ -599,7 +599,7 @@ when tools are present (provider requirement).
 
 ### DeepSeek (`feature = "deepseek"`)
 
-Requires `DEEPSEEK_API_KEY` environment variable. Supports `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
+Requires `DEEPSEEK_API_KEY` environment variable. Supports `deepseek-chat`, `deepseek-reasoner`, `deepseek-flash` (DeepSeek-V4.1-Flash, with vision support), and `deepseek-v4-pro` (DeepSeek-V4-Pro).
 
 ```rust
 use agent_rig::models::deepseek::DeepSeekModel;

@@ -222,7 +222,7 @@ dependencies = [
 [[package]]
 name = "cetologia"
 version = "0.1.0"
-source = "git+https://github.com/andreban/cetologia#674e49c4e16a58c3984563fbb11c3a0a81148158"
+source = "git+https://github.com/andreban/cetologia#499188c4b110c66be51ff907afd06953f6e00153"
 dependencies = [
  "futures-util",
  "reqwest",
