@@ -35,7 +35,10 @@ use crate::{
 
 /// LLM provider backed by DeepSeek.
 ///
-/// Supports both `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
+/// Supports `deepseek-chat`, `deepseek-reasoner`, `deepseek-flash`
+/// (DeepSeek-V4.1-Flash, which `deepseek-chat` and `deepseek-reasoner` alias on
+/// the DeepSeek API and which supports image input), and `deepseek-v4-pro`
+/// (DeepSeek-V4-Pro, text-only).
 ///
 /// In thinking mode the model's reasoning (`reasoning_content`) is surfaced as
 /// [`ModelResponse::thinking`] / [`ModelStreamChunk::Thinking`] for display, and
@@ -250,14 +253,15 @@ fn replayed_reasoning(msg: &Message) -> Option<String> {
 
 /// Whether `model` accepts image inputs in tool results.
 ///
-/// `deepseek-flash` (and its `deepseek-chat` and `deepseek-reasoner` aliases)
-/// accepts `["text", "image"]` input modalities, whereas text-only models such
-/// as `deepseek-v4-pro` silently ignore `image_url` blocks.
+/// On DeepSeek's API, `deepseek-flash` (and its `deepseek-chat` and
+/// `deepseek-reasoner` aliases) declares `input_modalities: ["text", "image"]`,
+/// whereas `deepseek-v4-pro` declares `input_modalities: ["text"]` and silently
+/// ignores `image_url` blocks instead of returning an HTTP error. We reject known
+/// text-only model IDs (`deepseek-v4-pro*`) rather than maintaining a closed
+/// exact-match allowlist so versioned IDs (e.g. `deepseek-flash-...`) and custom
+/// models behind [`DeepSeekModelBuilder::base_url`] still work.
 fn supports_vision(model: &str) -> bool {
-    matches!(
-        model,
-        "deepseek-flash" | "deepseek-chat" | "deepseek-reasoner"
-    )
+    !model.starts_with("deepseek-v4-pro")
 }
 
 /// Formats a JSON value as text for a tool-result content block. Strings are kept

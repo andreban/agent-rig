@@ -21,7 +21,7 @@ Define your agent once and run it against any supported LLM backend — swap pro
 |------------|------------------|------------------------------------------------------------------------------|
 | `gemini`   | Google Gemini    | Structured output, thinking tokens                                           |
 | `ollama`   | Ollama (local)   | Structured output, native streaming                                          |
-| `deepseek` | DeepSeek (Cloud) | `deepseek-chat` (V3), `deepseek-reasoner` (R1 / thinking), prompt cache hits |
+| `deepseek` | DeepSeek (Cloud) | `deepseek-chat`, `deepseek-reasoner` (thinking), `deepseek-flash` (vision), `deepseek-v4-pro`, prompt cache hits |
 | `anthropic` | Anthropic Claude | Structured output, adaptive thinking and effort, thinking-block replay, prompt cache reads |
 
 ## Installation
@@ -491,7 +491,7 @@ let model = OllamaModel::builder("http://localhost:11434", "llama3.2")
 
 ### DeepSeek
 
-Requires a `DEEPSEEK_API_KEY` environment variable. Supports both `deepseek-chat` (DeepSeek-V3) and `deepseek-reasoner` (DeepSeek-R1).
+Requires a `DEEPSEEK_API_KEY` environment variable. Supports `deepseek-chat`, `deepseek-reasoner`, `deepseek-flash` (DeepSeek-V4.1-Flash, with vision support), and `deepseek-v4-pro` (DeepSeek-V4-Pro).
 
 ```rust
 use agent_rig::models::deepseek::DeepSeekModel;

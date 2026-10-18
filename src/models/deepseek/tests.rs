@@ -254,7 +254,12 @@ fn request_with_tool_result_media() -> ModelRequest {
 
 #[test]
 fn test_build_chat_request_tool_result_with_media() {
-    for model in ["deepseek-flash", "deepseek-chat", "deepseek-reasoner"] {
+    for model in [
+        "deepseek-flash",
+        "deepseek-flash-2026-10",
+        "deepseek-chat",
+        "deepseek-reasoner",
+    ] {
         let req = build_chat_request(
             model,
             None,
