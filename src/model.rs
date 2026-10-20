@@ -482,8 +482,9 @@ impl ModelRequest {
 /// A tool call issued by the model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
-    /// Provider-assigned call identifier. Must be echoed in the tool response
-    /// for providers that require it (e.g. Gemini).
+    /// Call identifier: non-empty and unique within a run. Provider-assigned
+    /// when the provider returns one; otherwise synthesized by the adapter.
+    /// Adapters echo provider-assigned IDs back in the tool response.
     pub id: String,
     /// The name of the tool to invoke.
     pub name: String,

@@ -135,7 +135,7 @@ pub struct ModelRequest {
 // adapters that can't send it use this to return an error instead of dropping it.
 
 pub struct ToolCall {
-    pub id: String,                                    // provider-supplied call ID
+    pub id: String,                                    // non-empty, unique within a run (provider-supplied or synthesized)
     pub name: String,
     pub args: serde_json::Value,
     pub provider_metadata: Option<serde_json::Value>,  // opaque, round-tripped (e.g. Gemini thought_signature)
@@ -166,6 +166,8 @@ pub struct TokenUsage {
 `output_schema`, when set, instructs the provider adapter to constrain the response to the supplied JSON Schema. Providers that do not support structured output ignore the field silently.
 
 `text` and `tool_calls` on `ModelResponse` are mutually exclusive per turn.
+
+Every adapter must return a non-empty `ToolCall::id` that is unique within a run, including across parallel calls to the same tool in one turn; consumers correlate tool-call lifecycle events by it. When a provider omits the ID, the adapter synthesizes a random one (`call_<16 hex digits>`, via the crate-internal `models::synthesize_tool_call_id`). Random IDs don't depend on the message history, so trimming or rebuilding a thread can't cause collisions.
 
 `ToolCall::provider_metadata` is opaque metadata the runner round-trips back to the model on the next turn (used by Gemini to echo `thought_signature` on both the replayed `FunctionCall` and the matching `FunctionResponse` parts).
 
@@ -436,6 +438,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Structured output: when `ModelRequest::output_schema` is set, a `GenerationConfig` with `response_mime_type("application/json")` and the normalised schema is applied, overriding any model-level config (with `thinking_config` carried over). Schema normalisation (stripping `$schema`/`$defs`, inlining `$ref`) is performed internally.
 - Response parts are split by `thought` flag: parts where `thought == Some(true)` are concatenated into `ModelResponse::thinking`; remaining text parts form `ModelResponse::text`. This surfaces reasoning tokens as `AgentEvent::ThinkingDelta` via the runner.
 - `provider_metadata` carries Gemini's `thought_signature`, which the adapter echoes back on both the replayed `FunctionCall` parts and the matching `FunctionResponse` parts.
+- Tool-call IDs: Gemini usually omits `functionCall.id`. When it is missing or empty, the adapter synthesizes one and records `"synthetic_id": true` in `ToolCall::provider_metadata`. `build_gemini_request` sends `id: None` on the replayed `FunctionCall` and `FunctionResponse` for marked calls, so a synthetic ID never reaches Gemini; real IDs are sent back unchanged.
 - Tool-result media is sent as the function response's `parts` (`FunctionResponsePart::InlineData`), Gemini's multimodal function responses.
 - Token usage: `usage_metadata` is mapped via `From<&UsageMetadata> for TokenUsage` — `prompt_token_count` → `input_tokens`, `candidates_token_count` → `output_tokens`, `cached_content_token_count` → `cached_input_tokens`, `thoughts_token_count` → `thinking_tokens`, `tool_use_prompt_token_count` → `tool_use_prompt_tokens`. Per-modality breakdowns (`*_tokens_details`) and `service_tier` are not propagated.
 - Implements `generate_stream` natively on top of `GeminiClient::stream_generate_content`. Each streamed `Candidate` part is converted to a chunk in order: thought `Text` parts become `Thinking`, regular `Text` parts become `TextDelta`, and `FunctionCall` parts become `ToolCall` (with `thought_signature` preserved in `provider_metadata`). The final `UsageMetadata` reported by the provider is emitted as a trailing `Usage` chunk.
@@ -448,7 +451,7 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Optional `Options` (temperature, seed, top_k, top_p, num_ctx, num_predict, stop) and extended-thinking config (`think`, accepting a boolean toggle or a `ThinkLevel`) configurable via `OllamaModel::builder(…)`.
 - Structured output: when `ModelRequest::output_schema` is set, the schema is passed to the Ollama `format` field (requires Ollama ≥ 0.5 and a model that supports structured output).
 - Implements `generate_stream` natively: emits `TextDelta` chunks as they arrive (no-tools path); emits `ToolCall` chunks from the single-shot response when tools are present (Ollama requires `stream(false)` for tool calls).
-- Ollama has no call ID; the function name is currently reused as the `ToolCall::id` (sufficient because no part of the codebase keys on the id for Ollama).
+- Ollama has no call ID; the adapter synthesizes a random `ToolCall::id` for every call (streaming and non-streaming). The ID is never sent back to Ollama.
 - Tool-result media is not supported yet (#90): a request containing it fails with `Error::Provider`.
 - Token usage: `prompt_eval_count` → `input_tokens`, `eval_count` → `output_tokens` (saturating `u64` → `u32` cast). The Ollama API reports these on the final chunk (`done: true`) only — non-final chunks carry no usage. When neither field is populated the adapter emits `token_usage: None` rather than an all-`None` [`TokenUsage`]. Ollama does not report cache, thinking, or tool-use prompt tokens.
 
