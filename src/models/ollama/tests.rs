@@ -143,3 +143,73 @@ async fn generate_stream_rejects_tool_result_media() {
         "{first:?}"
     );
 }
+
+/// A model whose server is a mock answering every chat request with `status`.
+async fn model_answering_with(status: u16) -> (wiremock::MockServer, OllamaModel) {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(ResponseTemplate::new(status).set_body_string("error"))
+        .mount(&server)
+        .await;
+    let model = OllamaModel::new(server.uri(), "llama3");
+    (server, model)
+}
+
+#[tokio::test]
+async fn rate_limits_and_server_errors_are_transient() {
+    for status in [429, 500, 503] {
+        let (_server, model) = model_answering_with(status).await;
+
+        let generated = model.generate(empty_request()).await;
+        let streamed = model.generate_stream(empty_request()).next().await;
+
+        assert!(
+            matches!(&generated, Err(Error::ProviderTransient(_))),
+            "{status}: {generated:?}"
+        );
+        assert!(
+            matches!(&streamed, Some(Err(Error::ProviderTransient(_)))),
+            "{status}: {streamed:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn client_errors_are_not_transient() {
+    for status in [400, 404] {
+        let (_server, model) = model_answering_with(status).await;
+
+        let generated = model.generate(empty_request()).await;
+        let streamed = model.generate_stream(empty_request()).next().await;
+
+        assert!(
+            matches!(&generated, Err(Error::Provider(_))),
+            "{status}: {generated:?}"
+        );
+        assert!(
+            matches!(&streamed, Some(Err(Error::Provider(_)))),
+            "{status}: {streamed:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn connection_failures_are_transient() {
+    // Bind and drop a listener so nothing is listening on the port.
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let model = OllamaModel::new(format!("http://{address}"), "llama3");
+
+    let generated = model.generate(empty_request()).await;
+
+    assert!(
+        matches!(&generated, Err(Error::ProviderTransient(_))),
+        "{generated:?}"
+    );
+}

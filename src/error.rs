@@ -10,7 +10,10 @@
 //! tool errors) use [`Error::Agent`].
 
 /// Errors that can occur when using the agent kit.
+///
+/// New variants may be added, so `match`es on it need a wildcard arm.
 #[derive(Clone, Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// An error returned by the underlying LLM provider.
     #[error("LLM provider error: {0}")]

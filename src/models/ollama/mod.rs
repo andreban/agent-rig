@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use ollama_rs::{
     OllamaClient,
+    error::OllamaError,
     types::chat::{
         ChatRequest, ChatResponse, Function, Message as OllamaMessage, Role as OllamaRole,
         Tool as OllamaTool, ToolCall as OllamaToolCall, ToolCallFunction, ToolType,
@@ -320,6 +321,32 @@ fn build_chat_request(
 const TOOL_RESULT_MEDIA_UNSUPPORTED: &str =
     "Ollama adapter does not support media in tool results yet";
 
+/// Converts an [`ollama_rs`] error into an [`Error::ProviderTransient`] if
+/// sending the request again may succeed, or an [`Error::Provider`] if not.
+fn provider_error(error: OllamaError) -> Error {
+    if is_transient(&error) {
+        Error::ProviderTransient(error.to_string())
+    } else {
+        Error::Provider(error.to_string())
+    }
+}
+
+/// Whether sending the request again may succeed: failures to connect or
+/// timeouts, and rate limits (`429`) or server errors (`5xx`), which the
+/// client reports as network errors carrying the status.
+fn is_transient(error: &OllamaError) -> bool {
+    match error {
+        OllamaError::NetworkError(error) => {
+            error.is_connect()
+                || error.is_timeout()
+                || error
+                    .status()
+                    .is_some_and(|status| status.as_u16() == 429 || status.is_server_error())
+        }
+        OllamaError::ResponseParseError(_) | OllamaError::LinesCodecError(_) => false,
+    }
+}
+
 #[async_trait]
 impl LlmModel for OllamaModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
@@ -335,7 +362,7 @@ impl LlmModel for OllamaModel {
         let mut token_usage: Option<TokenUsage> = None;
 
         while let Some(chunk) = stream.next().await {
-            let response = chunk.map_err(|e| Error::Provider(e.to_string()))?;
+            let response = chunk.map_err(provider_error)?;
 
             if !response.message.tool_calls.is_empty() {
                 tool_calls = response.message.tool_calls.iter().map(From::from).collect();
@@ -394,7 +421,7 @@ impl LlmModel for OllamaModel {
                 let response = match chunk {
                     Ok(response) => response,
                     Err(e) => {
-                        yield Err(Error::Provider(e.to_string()));
+                        yield Err(provider_error(e));
                         return;
                     }
                 };

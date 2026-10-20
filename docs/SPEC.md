@@ -414,6 +414,7 @@ This design keeps the runner simple and stateless, giving the consumer absolute 
 
 ```rust
 #[derive(Clone, Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("LLM provider error: {0}")]
     Provider(String),
@@ -428,9 +429,9 @@ impl Error {
 }
 ```
 
-Provider adapters wrap transport- and API-level failures into `Error::Provider`; agent-side failures (serialization, lock poisoning, user-defined tool errors) use `Error::Agent`.
+Provider adapters wrap transport- and API-level failures into `Error::ProviderTransient` when sending the same request again may succeed, and into `Error::Provider` otherwise; agent-side failures (serialization, lock poisoning, user-defined tool errors) use `Error::Agent`. `Error` is `#[non_exhaustive]`, so downstream `match`es need a wildcard arm.
 
-Failures where sending the same request again may succeed are `Error::ProviderTransient` instead, so callers can retry them (`Error::is_transient`) without parsing messages: rate limits and exhausted quotas (`429`, Gemini's `RESOURCE_EXHAUSTED`), server errors and overload (`5xx`, Claude's `529`), and failures to connect or timeouts. The Gemini, DeepSeek and Anthropic adapters classify their clients' typed errors this way (Anthropic through `AntropologiaError::is_retryable`); Ollama reports every failure as `Error::Provider`. The adapters never retry themselves: a retry policy (how many attempts, how long to wait, whether to give up on a stream that already produced output) belongs to the caller.
+`Error::ProviderTransient` lets callers retry (`Error::is_transient`) without parsing messages. It covers rate limits and exhausted quotas (`429`, Gemini's `RESOURCE_EXHAUSTED`), server errors and overload (`5xx`, Claude's `529`), and failures to connect or timeouts. Every adapter classifies its client's typed errors this way (Anthropic through `AntropologiaError::is_retryable`). The adapters never retry themselves: a retry policy (how many attempts, how long to wait, whether to give up on a stream that already produced output) belongs to the caller.
 
 ## Provider Adapters
 
