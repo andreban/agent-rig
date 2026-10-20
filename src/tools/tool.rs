@@ -274,10 +274,15 @@ pub trait Tool: Send + Sync {
     /// because the consumer dropped the event stream or because an
     /// externally supplied token fired. Long-running tools should
     /// `select!` on `cancel.cancelled()` or pass the token down to the
-    /// libraries they call. Tools that ignore `cancel` still terminate
-    /// the run correctly (the runner races each call against `cancel` and
-    /// drops the future on cancellation), but any side effects already in
-    /// flight may continue in the background until they finish on their
-    /// own.
+    /// libraries they call.
+    ///
+    /// The runner stops waiting on tool results as soon as `cancel` fires,
+    /// but it does not own the future returned by `call`: whether a tool
+    /// that ignores `cancel` is stopped depends on how the consumer runs it.
+    /// A consumer that awaits `call` inline in its event loop won't observe
+    /// [`AgentEvent::Cancelled`](crate::runner::AgentEvent::Cancelled) until
+    /// the tool returns; running calls on spawned tasks or alongside the
+    /// stream (as [`AgentTool`](crate::tools::AgentTool) does) avoids that.
+    /// Side effects already in flight may continue until they finish.
     async fn call(&self, tool_call: Arc<ToolCall>, cancel: CancellationToken) -> ToolResult;
 }

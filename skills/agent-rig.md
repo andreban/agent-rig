@@ -251,10 +251,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `.tool("name")` on the agent must match `ToolDefinition::name` exactly. (Currently the agent's
   `tool_names` are not enforced against the registry, but the model will only see tools the registry
   declares — so a missing registration silently does nothing.)
-- Multiple tool calls in a single model turn are executed **concurrently** via `futures_util::future::join_all`.
-  `join_all` preserves input order, so the tool-result messages are appended to the thread in the
-  same order the model issued them — even though the `AgentEvent::ToolCall` events for parallel
-  calls may interleave.
+- For a turn with several tool calls, the runner emits every `AgentEvent::ToolCall` (in the order
+  the model issued them) before it waits on any of them, so the consumer can run them
+  **concurrently** and resolve them in any order. The tool-result messages are appended to the
+  thread in the model's order regardless.
 - For a hallucinated tool name (no matching registry entry) the `AgentEvent::ToolCall` is still
   emitted; the consumer resolves it with an error (e.g. via `ToolCallResult::Unknown`) so a
   synthetic result message keeps the assistant turn and tool-result messages paired.
@@ -397,13 +397,15 @@ let mut stream = runner.run_with_cancellation(&agent, thread, cancel.clone());
 ```
 
 `Tool::call` receives the cancel token; long-running tools
-should `select!` on it or pass it down to the libraries they call. Tools that ignore it
-still terminate the run correctly — the runner races each call against `cancel` — but their
-side effects may continue in the background until they finish on their own.
+should `select!` on it or pass it down to the libraries they call. The runner itself stops
+waiting on tool results as soon as `cancel` fires, but it does not own the tool futures —
+whether a tool that ignores `cancel` is stopped depends on how the consumer runs it. Run tools
+on spawned tasks or alongside the stream (as `AgentTool` does) rather than awaiting them inline
+in the event loop, or the consumer won't see `Cancelled` until the tool returns.
 
-A cancelled run emits a terminal `AgentEvent::Cancelled` before the stream ends.
-Under drop-the-stream cancellation the event is best-effort (the receiver may
-already be gone). See `examples/cancellation.rs`.
+A run cancelled through the token emits a terminal `AgentEvent::Cancelled` before
+the stream ends. Dropping the stream also cancels the run, but no `Cancelled` event
+is produced (the loop is dropped along with the stream). See `examples/cancellation.rs`.
 
 ---
 

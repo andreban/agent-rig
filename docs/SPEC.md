@@ -26,7 +26,7 @@ The library is a single crate (`agent-rig`). Provider adapters live in `src/mode
 
 The runner streams: `AgentRunner::run` returns a `Stream<Item = RunEvent>` that runs the agentic loop itself — no background task is spawned. The loop starts on the first poll and advances only while the consumer polls. A `RunEvent` wraps an `AgentEvent` together with the `run_id` of the run that produced it. Provider errors are surfaced as `AgentEvent::Error(Error)` and terminate the stream; the stream item type is bare `RunEvent`, not `Result`.
 
-Cancellation is cooperative. Dropping the returned stream cancels the run — the in-flight provider call and any running tool futures are dropped at their next await point. Callers that need to share a cancel signal with a sibling task use `AgentRunner::run_with_cancellation(agent, thread, cancel)`; the runner derives an internal child token from `cancel`, so dropping the stream cancels the run without cancelling the caller's token. A cancelled run emits a terminal `AgentEvent::Cancelled` (best-effort under stream-drop) before the stream ends.
+Cancellation is cooperative. Dropping the returned stream cancels the run — the in-flight provider call is dropped, and the cancel token carried by every pending `ToolCallRequest` fires so the consumer's tool work can stop. Callers that need to share a cancel signal with a sibling task use `AgentRunner::run_with_cancellation(agent, thread, cancel)`; the runner derives an internal child token from `cancel`, so dropping the stream cancels the run without cancelling the caller's token. A run cancelled through the token emits a terminal `AgentEvent::Cancelled` before the stream ends; dropping the stream drops the loop with it, so no `Cancelled` event is produced in that case.
 
 ## Core Types
 
@@ -73,8 +73,9 @@ pub enum AgentEvent {
     /// blocks on that resolution. Hallucinated tool calls (no matching registry
     /// entry) are still emitted — the consumer resolves them with an error so
     /// the assistant turn and tool-result messages stay paired. Within one turn
-    /// the runner emits one `ToolCall` per call and runs them concurrently, so
-    /// events from parallel calls may interleave; use `ToolCall::id` to correlate.
+    /// the runner emits one `ToolCall` per call, in the order the model issued
+    /// them, and only then waits for their resolutions — so the consumer may
+    /// run them concurrently and resolve them in any order.
     ToolCall(ToolCallRequest),
     /// Reasoning token forwarded from the model stream.
     ThinkingDelta(String),
@@ -90,9 +91,9 @@ pub enum AgentEvent {
     /// exited, for carrying multi-turn state forward. Not emitted on the
     /// `Cancelled` or `Error` paths.
     TurnFinish { thread: MessageList },
-    /// The run was cancelled via dropped stream or external token.
-    /// Terminal — the stream ends after this event. Delivery is
-    /// best-effort under stream-drop (the receiver may already be gone).
+    /// The run was cancelled via the external token. Terminal — the
+    /// stream ends after this event. Never emitted when the consumer
+    /// drops the stream (the loop is dropped with it).
     Cancelled,
     /// The provider returned an error. The stream ends after this event.
     Error(Error),
@@ -529,7 +530,7 @@ src/
                         Media, ToolResultContent, ModelRequest, ModelResponse, TokenUsage, ToolCall, Role
   agent.rs            — Agent, AgentBuilder
   runner/
-    mod.rs            — AgentRunner, RunEmitter, agentic loop
+    mod.rs            — AgentRunner, agentic loop (async_stream generator)
     events.rs         — AgentEvent, RunEvent, ToolCallResult
     tests.rs          — runner unit tests (with scripted LlmModel)
   tools/

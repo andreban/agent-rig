@@ -112,7 +112,8 @@ impl AgentRunner {
     /// When cancellation is triggered while the consumer is still draining
     /// the stream, the runner emits a terminal [`AgentEvent::Cancelled`]
     /// before the stream ends. When cancellation is triggered by dropping
-    /// the stream, there is no one left to receive that event.
+    /// the stream, the loop is dropped with it and no `Cancelled` event is
+    /// produced.
     pub fn run_with_cancellation(
         &self,
         agent: &Agent,

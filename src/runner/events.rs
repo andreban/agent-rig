@@ -133,17 +133,15 @@ pub enum AgentEvent {
         /// The conversation thread at the point the loop exited.
         thread: MessageList,
     },
-    /// The run was cancelled — either because the consumer dropped the
-    /// returned stream, or because an externally supplied
+    /// The run was cancelled because an externally supplied
     /// [`CancellationToken`](tokio_util::sync::CancellationToken) fired.
     /// The stream ends after this event.
     ///
-    /// Delivery is best-effort: when cancellation is triggered by the
-    /// consumer dropping the stream, the receiver is already gone and
-    /// the event is silently discarded. Consumers that supply their own
-    /// token via
+    /// Only consumers that supply their own token via
     /// [`AgentRunner::run_with_cancellation`](super::AgentRunner::run_with_cancellation)
-    /// and keep draining the stream will observe this event.
+    /// and keep draining the stream observe this event. Dropping the stream
+    /// also cancels the run, but the loop is dropped along with it, so no
+    /// `Cancelled` event is produced.
     Cancelled,
     /// The provider returned an error. The stream ends after this event.
     Error(crate::error::Error),
