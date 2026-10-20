@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let question = "What are the current temperatures in London, Tokyo, and Sydney?";
     println!("Question: {question}");
-    println!("(Each tool call has a simulated 500 ms delay — parallel = ~500 ms total)\n");
+    println!("(Each tool call has a simulated 500 ms delay and runs one at a time)\n");
 
     let start = Instant::now();
     let mut stream = runner.run(&agent, vec![Message::user(question)].into());
@@ -105,6 +105,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let run_id = event.run_id;
         match event.agent_event {
             AgentEvent::ToolCall(call) => {
+                // Awaiting the tool here keeps the example simple, but it
+                // runs a turn's calls one at a time: the next request isn't
+                // read until this one is resolved. See the
+                // `parallel_tool_calls` example for running them concurrently.
                 println!(
                     "[runner[{run_id}]] started:   {}({})",
                     call.details.name, call.details.args
@@ -147,7 +151,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!();
     println!("\nTotal elapsed: {:.0?}", start.elapsed());
-    println!("  3 × 500 ms in parallel ≈ 500 ms  (sequential would be ≈ 1 500 ms)");
+    println!(
+        "  3 × 500 ms one at a time ≈ 1 500 ms of tool time  (see `parallel_tool_calls` for ≈ 500 ms)"
+    );
 
     Ok(())
 }
