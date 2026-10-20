@@ -61,7 +61,7 @@ dotenvy        = "0.15"
 | `AgentEvent` | Stream event: `TurnStart`, `ThinkingDelta`, `TextDelta`, `ToolCall`, `Usage`, `TurnFinish`, `Cancelled`, `Error`. |
 | `RunEvent` | An `AgentEvent` tagged with a unique `run_id`. **This is what the runner stream actually yields.** |
 | `ToolCallResult` | Outcome of a tool call: `Ok(Value)`, `Err(Error)`, `Denied`, `Unknown`. |
-| `Error` | `Provider(String)` or `Agent(String)`. |
+| `Error` | `Provider(String)`, `ProviderTransient(String)` or `Agent(String)`. `ProviderTransient` marks provider errors where sending the same request again may succeed (rate limits, `5xx`, overload, failures to connect or timeouts); check with `is_transient()`. Adapters don't retry, callers do. `#[non_exhaustive]`, so `match`es need a wildcard arm. |
 
 **Key design rules:**
 

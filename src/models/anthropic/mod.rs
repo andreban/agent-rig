@@ -408,8 +408,15 @@ fn model_response(response: MessagesResponse) -> Result<ModelResponse, Error> {
     })
 }
 
+/// Converts an [`antropologia`] error into an [`Error::ProviderTransient`] if
+/// [retrying may succeed](antropologia::AntropologiaError::is_retryable), or
+/// an [`Error::Provider`] if not.
 fn provider_error(error: antropologia::AntropologiaError) -> Error {
-    Error::Provider(error.to_string())
+    if error.is_retryable() {
+        Error::ProviderTransient(error.to_string())
+    } else {
+        Error::Provider(error.to_string())
+    }
 }
 
 #[async_trait]

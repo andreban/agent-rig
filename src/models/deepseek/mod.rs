@@ -17,8 +17,8 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use cetologia::prelude::{
-    CetologiaClient, ChatCompletionRequest, ChatMessage, ContentPart, FunctionCall, ResponseFormat,
-    Role as CetologiaRole, Tool as CetologiaTool, ToolCall as CetologiaToolCall,
+    CetologiaClient, CetologiaError, ChatCompletionRequest, ChatMessage, ContentPart, FunctionCall,
+    ResponseFormat, Role as CetologiaRole, Tool as CetologiaTool, ToolCall as CetologiaToolCall,
     ToolCallAccumulator, ToolType, Usage as CetologiaUsage,
 };
 use futures_util::{Stream, StreamExt};
@@ -410,6 +410,28 @@ fn build_chat_request(
     Ok(builder.build())
 }
 
+/// Converts a [`cetologia`] error into an [`Error::ProviderTransient`] if
+/// sending the request again may succeed, or an [`Error::Provider`] if not.
+fn provider_error(error: CetologiaError) -> Error {
+    if is_transient(&error) {
+        Error::ProviderTransient(error.to_string())
+    } else {
+        Error::Provider(error.to_string())
+    }
+}
+
+/// Whether sending the request again may succeed: rate limits (`429`), server
+/// errors and overload (`5xx`), and failures to connect or timeouts.
+fn is_transient(error: &CetologiaError) -> bool {
+    match error {
+        CetologiaError::Http(error) => error.is_connect() || error.is_timeout(),
+        CetologiaError::Api { status, .. } => status.as_u16() == 429 || status.is_server_error(),
+        CetologiaError::Json(_) | CetologiaError::Stream(_) | CetologiaError::InvalidRequest(_) => {
+            false
+        }
+    }
+}
+
 #[async_trait]
 impl LlmModel for DeepSeekModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
@@ -426,7 +448,7 @@ impl LlmModel for DeepSeekModel {
             .client
             .chat(&chat_request)
             .await
-            .map_err(|e| Error::Provider(e.to_string()))?;
+            .map_err(provider_error)?;
 
         let choice = response
             .choices
@@ -497,7 +519,7 @@ impl LlmModel for DeepSeekModel {
             let mut stream = match self.client.chat_stream(&chat_request).await {
                 Ok(stream) => stream,
                 Err(e) => {
-                    yield Err(Error::Provider(e.to_string()));
+                    yield Err(provider_error(e));
                     return;
                 }
             };
@@ -511,7 +533,7 @@ impl LlmModel for DeepSeekModel {
                 let chunk = match chunk_res {
                     Ok(chunk) => chunk,
                     Err(e) => {
-                        yield Err(Error::Provider(e.to_string()));
+                        yield Err(provider_error(e));
                         return;
                     }
                 };

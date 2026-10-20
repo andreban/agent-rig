@@ -394,6 +394,40 @@ fn function_response_parts(content: &[ToolResultContent]) -> Option<Vec<Function
     (!parts.is_empty()).then_some(parts)
 }
 
+/// Converts a [`geologia`] error into an [`Error::ProviderTransient`] if
+/// sending the request again may succeed, or an [`Error::Provider`] if not.
+fn provider_error(error: geologia::error::Error) -> Error {
+    if is_transient(&error) {
+        Error::ProviderTransient(error.to_string())
+    } else {
+        Error::Provider(error.to_string())
+    }
+}
+
+/// Whether sending the request again may succeed: rate limits and exhausted
+/// quotas (`429` / `RESOURCE_EXHAUSTED`), server errors (`5xx`, `INTERNAL`,
+/// `UNAVAILABLE`, `DEADLINE_EXCEEDED`), and failures to connect or timeouts.
+fn is_transient(error: &geologia::error::Error) -> bool {
+    use geologia::error::Error as GeminiError;
+    match error {
+        GeminiError::VertexError(api_error) => {
+            api_error.code == 429
+                || (500..600).contains(&api_error.code)
+                || matches!(
+                    api_error.status.as_str(),
+                    "RESOURCE_EXHAUSTED" | "INTERNAL" | "UNAVAILABLE" | "DEADLINE_EXCEEDED"
+                )
+        }
+        GeminiError::ApiError { status, .. } => status.as_u16() == 429 || status.is_server_error(),
+        GeminiError::HttpClient(error) => error.is_connect() || error.is_timeout(),
+        GeminiError::Env(_)
+        | GeminiError::Serde(_)
+        | GeminiError::NoCandidatesError
+        | GeminiError::EventSourceError(_)
+        | GeminiError::EventSourceClosedError => false,
+    }
+}
+
 #[async_trait]
 impl LlmModel for GeminiModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, Error> {
@@ -403,7 +437,7 @@ impl LlmModel for GeminiModel {
             .client
             .generate_content(&gemini_request, &self.model)
             .await
-            .map_err(|e| Error::Provider(e.to_string()))?;
+            .map_err(provider_error)?;
 
         let candidate = response
             .candidates
@@ -463,7 +497,7 @@ impl LlmModel for GeminiModel {
                 .await {
                     Ok(stream) => stream,
                     Err(e) => {
-                        yield Err(Error::Provider(e.to_string()));
+                        yield Err(provider_error(e));
                         return;
                     }
                 };
@@ -478,7 +512,7 @@ impl LlmModel for GeminiModel {
                 let response = match chunk {
                     Ok(response) => response,
                     Err(e) => {
-                        yield Err(Error::Provider(e.to_string()));
+                        yield Err(provider_error(e));
                         return;
                     }
                 };

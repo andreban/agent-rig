@@ -55,7 +55,7 @@ dependencies = [
 [[package]]
 name = "antropologia"
 version = "0.1.0"
-source = "git+https://github.com/andreban/antropologia#e930da305af4c5687ebf316825cc7407fa9a3f3e"
+source = "git+https://github.com/andreban/antropologia#a85eabde6e304ae3c89f1eb957aad8e893ac3bd3"
 dependencies = [
  "reqwest",
  "serde",
@@ -603,7 +603,7 @@ dependencies = [
 [[package]]
 name = "geologia"
 version = "0.1.0"
-source = "git+https://github.com/andreban/geologia#56117b2959195a090747bd360da8e50942d83d2d"
+source = "git+https://github.com/andreban/geologia#deb99d70ea7899bca981ca78a9a48a944d2f54c9"
 dependencies = [
  "reqwest",
  "serde",
