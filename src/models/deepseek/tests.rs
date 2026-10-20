@@ -463,9 +463,14 @@ async fn connection_failures_are_transient() {
         .build();
 
     let generated = model.generate(empty_request()).await;
+    let streamed = model.generate_stream(empty_request()).next().await;
 
     assert!(
         matches!(&generated, Err(Error::ProviderTransient(_))),
         "{generated:?}"
+    );
+    assert!(
+        matches!(&streamed, Some(Err(Error::ProviderTransient(_)))),
+        "{streamed:?}"
     );
 }
