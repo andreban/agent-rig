@@ -276,11 +276,6 @@ impl GeminiModel {
                         ),
                     },
                     MessageContent::ToolResult { tool_call, content } => {
-                        let thought_signature = tool_call
-                            .provider_metadata
-                            .as_ref()
-                            .and_then(|m| m["thought_signature"].as_str())
-                            .map(|s| s.to_string());
                         Content {
                             role: Some(Role::User),
                             parts: Some(vec![Part {
@@ -293,7 +288,9 @@ impl GeminiModel {
                                     scheduling: None,
                                 }),
                                 thought: None,
-                                thought_signature,
+                                // Thought signatures belong on model-output
+                                // parts only; the `FunctionCall` carries it.
+                                thought_signature: None,
                                 part_metadata: None,
                                 media_resolution: None,
                             }]),
@@ -303,7 +300,8 @@ impl GeminiModel {
             })
             .collect();
 
-        let mut builder = GenerateContentRequest::builder().contents(contents);
+        let mut builder =
+            GenerateContentRequest::builder().contents(merge_consecutive_roles(contents));
 
         if let Some(system) = &request.system {
             let system_content = Content::builder().add_text_part(system.clone()).build();
@@ -352,6 +350,30 @@ impl GeminiModel {
 
         builder.build()
     }
+}
+
+/// Merges consecutive same-role contents into one, concatenating parts in order.
+///
+/// The runner appends one tool-result message per call, but Gemini expects all
+/// responses to a parallel function-call turn in a single content, with one
+/// `functionResponse` part per `functionCall` part.
+fn merge_consecutive_roles(contents: Vec<Content>) -> Vec<Content> {
+    let mut merged: Vec<Content> = Vec::with_capacity(contents.len());
+    for content in contents {
+        // `Role` doesn't implement `PartialEq`, so compare variants.
+        let same_role = merged.last().is_some_and(|last| {
+            last.role.map(|r| std::mem::discriminant(&r))
+                == content.role.map(|r| std::mem::discriminant(&r))
+        });
+        match merged.last_mut() {
+            Some(last) if same_role => last
+                .parts
+                .get_or_insert_with(Vec::new)
+                .extend(content.parts.unwrap_or_default()),
+            _ => merged.push(content),
+        }
+    }
+    merged
 }
 
 /// Maps tool-result media blocks to `functionResponse.parts` (inline data), or `None` when there are none.
