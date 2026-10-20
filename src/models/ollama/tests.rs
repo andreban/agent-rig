@@ -232,9 +232,14 @@ async fn connection_failures_are_transient() {
     let model = OllamaModel::new(format!("http://{address}"), "llama3");
 
     let generated = model.generate(empty_request()).await;
+    let streamed = model.generate_stream(empty_request()).next().await;
 
     assert!(
         matches!(&generated, Err(Error::ProviderTransient(_))),
         "{generated:?}"
+    );
+    assert!(
+        matches!(&streamed, Some(Err(Error::ProviderTransient(_)))),
+        "{streamed:?}"
     );
 }
