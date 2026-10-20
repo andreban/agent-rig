@@ -24,9 +24,9 @@ The library is a single crate (`agent-rig`). Provider adapters live in `src/mode
 
 `Agent` is a pure data blueprint (name, instructions, optional output schema, optional tool name list) with no model reference. `AgentRunner` owns an `Arc<dyn LlmModel>` (cheap to clone) and a list of tool definitions. The runner is cheap to `Clone` so a single runner can be shared across tasks; the same runner can execute multiple agents, and the same agent can be run by different runners backed by different models.
 
-The runner streams: `AgentRunner::run` spawns the agentic loop on a background tokio task and returns a `Stream<Item = RunEvent>`. A `RunEvent` wraps an `AgentEvent` together with the `run_id` of the run that produced it. Provider errors are surfaced as `AgentEvent::Error(Error)` and terminate the stream; the stream item type is bare `RunEvent`, not `Result`.
+The runner streams: `AgentRunner::run` returns a `Stream<Item = RunEvent>` that runs the agentic loop itself — no background task is spawned. The loop starts on the first poll and advances only while the consumer polls. A `RunEvent` wraps an `AgentEvent` together with the `run_id` of the run that produced it. Provider errors are surfaced as `AgentEvent::Error(Error)` and terminate the stream; the stream item type is bare `RunEvent`, not `Result`.
 
-Cancellation is cooperative. Dropping the returned stream cancels the run — the in-flight provider call and any running tool futures are dropped at their next await point. Callers that need to share a cancel signal with a sibling task use `AgentRunner::run_with_cancellation(agent, thread, cancel)`; the runner derives an internal child token from `cancel`, so dropping the stream cancels the run without cancelling the caller's token. A cancelled run emits a terminal `AgentEvent::Cancelled` (best-effort under stream-drop) before the stream ends.
+Cancellation is cooperative. Dropping the returned stream cancels the run — the in-flight provider call is dropped, and the cancel token carried by every pending `ToolCallRequest` fires so the consumer's tool work can stop. Callers that need to share a cancel signal with a sibling task use `AgentRunner::run_with_cancellation(agent, thread, cancel)`; the runner derives an internal child token from `cancel`, so dropping the stream cancels the run without cancelling the caller's token. A run cancelled through the token emits a terminal `AgentEvent::Cancelled` before the stream ends; dropping the stream drops the loop with it, so no `Cancelled` event is produced in that case.
 
 ## Core Types
 
@@ -73,8 +73,9 @@ pub enum AgentEvent {
     /// blocks on that resolution. Hallucinated tool calls (no matching registry
     /// entry) are still emitted — the consumer resolves them with an error so
     /// the assistant turn and tool-result messages stay paired. Within one turn
-    /// the runner emits one `ToolCall` per call and runs them concurrently, so
-    /// events from parallel calls may interleave; use `ToolCall::id` to correlate.
+    /// the runner emits one `ToolCall` per call, in the order the model issued
+    /// them, and only then waits for their resolutions — so the consumer may
+    /// run them concurrently and resolve them in any order.
     ToolCall(ToolCallRequest),
     /// Reasoning token forwarded from the model stream.
     ThinkingDelta(String),
@@ -90,9 +91,9 @@ pub enum AgentEvent {
     /// exited, for carrying multi-turn state forward. Not emitted on the
     /// `Cancelled` or `Error` paths.
     TurnFinish { thread: MessageList },
-    /// The run was cancelled via dropped stream or external token.
-    /// Terminal — the stream ends after this event. Delivery is
-    /// best-effort under stream-drop (the receiver may already be gone).
+    /// The run was cancelled via the external token. Terminal — the
+    /// stream ends after this event. Never emitted when the consumer
+    /// drops the stream (the loop is dropped with it).
     Cancelled,
     /// The provider returned an error. The stream ends after this event.
     Error(Error),
@@ -288,9 +289,9 @@ impl AgentRunner {
 
 Owns the LLM model and a list of tool definitions. The runner is `Clone` (internals are `Arc`) so it can be shared across tasks. The same runner can execute multiple agents; the same agent can be run by different runners backed by different models.
 
-`run` is the simple entry point. It takes the agent by reference and the message thread by value, and returns a `Stream<Item = RunEvent>`. Internally, `run` clones the agent and `self` before spawning the agentic loop on a background tokio task — the spawned generator must be `'static`, so it cannot capture the `&Agent` or `&self` references directly. Events are delivered through an internal mpsc channel as they happen. The stream ends after the model produces a turn with no tool calls, or after a terminal `AgentEvent::Error` / `AgentEvent::Cancelled`.
+`run` is the simple entry point. It takes the agent by reference and the message thread by value, and returns a `Stream<Item = RunEvent>`. Internally, `run` clones the agent and `self` into an `async_stream::stream!` generator that runs the agentic loop and yields each event directly — the returned stream must be `'static`, so it cannot capture the `&Agent` or `&self` references. The stream is lazy: no model request is sent until it is first polled, and it does not require a tokio runtime to be constructed. There is no internal buffer between the loop and the consumer, so a slow consumer applies backpressure straight to the provider stream. The stream ends after the model produces a turn with no tool calls, or after a terminal `AgentEvent::Error` / `AgentEvent::Cancelled`.
 
-`run_with_cancellation` is the same as `run` but also fires when the supplied `cancel` token fires. The runner derives a child token from `cancel` and binds the drop-on-stream-drop guard to that child, so dropping the stream cancels the run without cancelling the caller's token (which may be shared with siblings). `run` is sugar for `run_with_cancellation(agent, thread, CancellationToken::new())`.
+`run_with_cancellation` is the same as `run` but also fires when the supplied `cancel` token fires. The runner derives a child token from `cancel` and moves a `DropGuard` for that child into the stream's state, so dropping the stream cancels the run without cancelling the caller's token (which may be shared with siblings). `run` is sugar for `run_with_cancellation(agent, thread, CancellationToken::new())`.
 
 The caller is responsible for maintaining conversation history across turns: each `run` call starts a fresh loop with the supplied `thread`. For multi-turn dialogue, append the user input to the thread before calling `run`, drive the stream to completion, then continue from the thread returned in `TurnFinish { thread }`, which already holds the assistant reply and any provider metadata the adapter needs replayed. See `examples/multi_turn.rs` for a complete REPL.
 
@@ -300,11 +301,11 @@ The caller is responsible for maintaining conversation history across turns: eac
 2. Drive `model.generate_stream(request)` — forward `ThinkingDelta`/`TextDelta` events; collect any tool calls.
 3. If no tool calls were issued, the loop ends.
 4. Append the tool calls as a single assistant turn (`Message::tool_calls`), carrying any `ProviderMetadata` the adapter emitted for the turn in `Message::provider_metadata`. (A final text turn is likewise appended as `Message::assistant(reply)` with its metadata.)
-5. For each tool call, the runner packages the call and its cancel token into a `ToolCallRequest`, emits it via `AgentEvent::ToolCall(call)`, and waits on a oneshot channel for the consumer to resolve it. Decoupled from the runner, the consumer is responsible for looking up the tool, orchestrating an optional approval workflow, invoking `Tool::call`, and calling `call.resolve(result)`.
-6. All tool futures run **concurrently** via `futures_util::future::join_all`. `join_all` preserves input order in its return value, so tool-result messages are appended in the same order the model issued them.
+5. For each tool call, in the order the model issued them, the runner packages the call and its cancel token into a `ToolCallRequest` and emits it via `AgentEvent::ToolCall(call)`. Only after every request of the turn has been emitted does it wait on the oneshot channels for the consumer to resolve them. Decoupled from the runner, the consumer is responsible for looking up the tool, orchestrating an optional approval workflow, invoking `Tool::call`, and calling `call.resolve(result)`.
+6. The runner awaits all resolvers **concurrently** via `futures_util::future::join_all`, so the consumer may resolve them in any order. `join_all` preserves input order in its return value, so tool-result messages are appended in the same order the model issued them.
 7. Repeat from step 1.
 
-**Cancellation checkpoints.** The runner races against the cancel token at these points: (a) the top of the loop, before building the next `ModelRequest`; (b) `model_stream.next()` (a `tokio::select!` against `cancel.cancelled()` — winning the cancel arm drops the model stream, aborting the in-flight reqwest); and (c) during the wait for each tool call's oneshot resolver to fire. On cancellation the runner emits a single terminal `AgentEvent::Cancelled` and exits. The `CancellationToken` is packed inside `ToolCallRequest`, allowing the client's tool execution to cooperatively select on it and abort cleanly.
+**Cancellation checkpoints.** The runner races against the cancel token at these points: (a) the top of the loop, before building the next `ModelRequest`; (b) `model_stream.next()` (a `tokio::select!` against `cancel.cancelled()` — winning the cancel arm drops the model stream, aborting the in-flight reqwest); and (c) during the wait for the turn's oneshot resolvers to fire. Dropping the stream drops the generator at whatever await point it is suspended on and fires the internal token, cancelling every `ToolCallRequest` still held by the consumer. On cancellation the runner emits a single terminal `AgentEvent::Cancelled` and exits. The `CancellationToken` is packed inside `ToolCallRequest`, allowing the client's tool execution to cooperatively select on it and abort cleanly.
 
 ### `AgentTool` (`src/tools/agent_tool/mod.rs`)
 
@@ -529,7 +530,7 @@ src/
                         Media, ToolResultContent, ModelRequest, ModelResponse, TokenUsage, ToolCall, Role
   agent.rs            — Agent, AgentBuilder
   runner/
-    mod.rs            — AgentRunner, RunEmitter, agentic loop
+    mod.rs            — AgentRunner, agentic loop (async_stream generator)
     events.rs         — AgentEvent, RunEvent, ToolCallResult
     tests.rs          — runner unit tests (with scripted LlmModel)
   tools/

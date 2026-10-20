@@ -7,7 +7,7 @@ Define your agent once and run it against any supported LLM backend — swap pro
 ## Features
 
 - **Provider-agnostic API** — same `Agent` + `AgentRunner` code works with Google Gemini, Ollama, DeepSeek, Anthropic Claude, or any custom `LlmModel` implementation
-- **Streaming agentic loop** — the runner spawns a background task and yields `AgentEvent`s (text deltas, thinking tokens, tool-call lifecycle) until the model produces a final reply
+- **Streaming agentic loop** — the runner returns a lazy stream that drives the loop as you poll it, yielding `AgentEvent`s (text deltas, thinking tokens, tool-call lifecycle) until the model produces a final reply
 - **Concurrent tool execution** — multiple tool calls in a single model turn are executed in parallel; tool-result messages are paired back to the model in request order
 - **Client-side approval** — gate individual tool calls in your event loop before invoking `Tool::call` (e.g. user approval prompts for destructive actions)
 - **Structured output** — constrain model output to a JSON Schema
@@ -536,7 +536,7 @@ let name = model.model();    // &str
 
 ```mermaid
 graph TD
-    AR[AgentRunner] -->|spawns task, yields events| A[Agent<br/><i>pure blueprint</i>]
+    AR[AgentRunner] -->|yields events| A[Agent<br/><i>pure blueprint</i>]
     AR -->|holds| LM[LlmModel<br/><i>Arc&lt;dyn&gt;</i>]
     AR -->|holds| TD[ToolDefinitions<br/><i>Vec&lt;ToolDefinition&gt;</i>]
     LM -->|implements| GM[GeminiModel]

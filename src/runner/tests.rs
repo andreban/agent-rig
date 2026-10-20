@@ -544,3 +544,115 @@ async fn tool_in_registry_returning_json_and_media_passes_both_to_model() {
     };
     assert_eq!(*content, expected_content);
 }
+
+fn two_tool_calls() -> Result<ModelResponse, Error> {
+    Ok(ModelResponse {
+        text: None,
+        tool_calls: vec![
+            ToolCall::new("c1".to_string(), "a".to_string(), json!({})),
+            ToolCall::new("c2".to_string(), "b".to_string(), json!({})),
+        ],
+        thinking: None,
+        provider_metadata: None,
+        token_usage: None,
+    })
+}
+
+#[tokio::test]
+async fn tool_results_follow_model_order_when_resolved_in_reverse() {
+    let model = ScriptedModel::new(vec![two_tool_calls(), text("done")]);
+    let runner = AgentRunner::new(model.clone());
+
+    let mut held = vec![];
+    let mut stream = runner.run(&agent(), vec![Message::user("hi")].into());
+    while let Some(ev) = stream.next().await {
+        if let AgentEvent::ToolCall(request) = ev.agent_event {
+            held.push(request);
+            // Both requests arrive before the runner waits on either one.
+            if held.len() == 2 {
+                while let Some(request) = held.pop() {
+                    let id = request.details.id.clone();
+                    request.resolve(json!({ "id": id }));
+                }
+            }
+        }
+    }
+
+    let requests = model.requests();
+    let resolved_ids: Vec<_> = requests[1]
+        .messages
+        .iter()
+        .filter_map(|m| match &m.content {
+            MessageContent::ToolResult { tool_call, .. } => Some(tool_call.id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(resolved_ids, ["c1", "c2"]);
+}
+
+#[test]
+fn unpolled_stream_does_not_call_model_or_cancel_caller_token() {
+    // No tokio runtime and no queued responses: building and dropping the
+    // stream must neither spawn a task nor reach the model.
+    let model = ScriptedModel::new(vec![]);
+    let runner = AgentRunner::new(model.clone());
+    let caller = CancellationToken::new();
+
+    let stream =
+        runner.run_with_cancellation(&agent(), vec![Message::user("hi")].into(), caller.clone());
+    drop(stream);
+
+    assert_eq!(model.requests().len(), 0);
+    assert!(!caller.is_cancelled());
+}
+
+#[tokio::test]
+async fn dropping_stream_during_tool_call_cancels_its_token() {
+    let model = ScriptedModel::new(vec![tool_call("c1", "noop", json!({}))]);
+    let runner = AgentRunner::new(model);
+    let caller = CancellationToken::new();
+
+    let mut stream =
+        runner.run_with_cancellation(&agent(), vec![Message::user("hi")].into(), caller.clone());
+    let request = loop {
+        let ev = stream
+            .next()
+            .await
+            .expect("stream ended before the tool call");
+        if let AgentEvent::ToolCall(request) = ev.agent_event {
+            break request;
+        }
+    };
+    assert!(!request.cancellation_token.is_cancelled());
+
+    drop(stream);
+
+    assert!(request.cancellation_token.is_cancelled());
+    assert!(!caller.is_cancelled());
+}
+
+#[tokio::test]
+async fn cancel_while_waiting_on_tool_calls_emits_cancelled() {
+    let model = ScriptedModel::new(vec![two_tool_calls()]);
+    let runner = AgentRunner::new(model.clone());
+    let cancel = CancellationToken::new();
+
+    let mut held = vec![];
+    let mut events = vec![];
+    let mut stream =
+        runner.run_with_cancellation(&agent(), vec![Message::user("hi")].into(), cancel.clone());
+    while let Some(ev) = stream.next().await {
+        match ev.agent_event {
+            AgentEvent::ToolCall(request) => {
+                held.push(request);
+                if held.len() == 2 {
+                    cancel.cancel();
+                }
+            }
+            other => events.push(other),
+        }
+    }
+
+    assert!(matches!(events.last(), Some(AgentEvent::Cancelled)));
+    assert_eq!(model.requests().len(), 1);
+}
