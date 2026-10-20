@@ -138,7 +138,7 @@ pub struct ToolCall {
     pub id: String,                                    // non-empty, unique within a run (provider-supplied or synthesized)
     pub name: String,
     pub args: serde_json::Value,
-    pub provider_metadata: Option<serde_json::Value>,  // opaque, round-tripped (e.g. Gemini thought_signature)
+    pub provider_metadata: Option<serde_json::Value>,  // opaque, round-tripped (e.g. Gemini thought_signature, synthetic_id)
 }
 
 pub struct ModelResponse {
@@ -169,7 +169,7 @@ pub struct TokenUsage {
 
 Every adapter must return a non-empty `ToolCall::id` that is unique within a run, including across parallel calls to the same tool in one turn; consumers correlate tool-call lifecycle events by it. When a provider omits the ID, the adapter synthesizes a random one (`call_<16 hex digits>`, via the crate-internal `models::synthesize_tool_call_id`). Random IDs don't depend on the message history, so trimming or rebuilding a thread can't cause collisions.
 
-`ToolCall::provider_metadata` is opaque metadata the runner round-trips back to the model on the next turn (used by Gemini to echo `thought_signature` on both the replayed `FunctionCall` and the matching `FunctionResponse` parts).
+`ToolCall::provider_metadata` is opaque metadata the runner round-trips back to the model on the next turn (used by Gemini to echo `thought_signature` on both the replayed `FunctionCall` and the matching `FunctionResponse` parts, and to mark adapter-generated call IDs with `"synthetic_id": true` so they are never sent back).
 
 ### `Agent` (`src/agent.rs`)
 

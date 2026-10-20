@@ -491,7 +491,8 @@ pub struct ToolCall {
     /// The arguments the model wants to pass, as a JSON object.
     pub args: serde_json::Value,
     /// Opaque provider metadata that must be round-tripped back with the tool
-    /// response. Used by Gemini to carry the `thought_signature`; other
+    /// response. Used by Gemini to carry the `thought_signature` and, when the
+    /// adapter generated the call ID, a `"synthetic_id": true` marker; other
     /// providers leave this as `None`.
     ///
     /// External [`LlmModel`] implementations populate this when constructing a

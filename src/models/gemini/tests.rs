@@ -362,7 +362,7 @@ fn synthetic_id_marker_keeps_thought_signature() {
     let mut part = id_less_function_call_part(None, "lookup");
     part.thought_signature = Some("sig-abc".to_string());
 
-    let call = tool_call_from_part(&part, &None, "lookup", &None);
+    let call = tool_call_from_part(&part).unwrap();
 
     let meta = call.provider_metadata.expect("provider_metadata");
     assert_eq!(meta["thought_signature"], "sig-abc");
@@ -373,7 +373,7 @@ fn synthetic_id_marker_keeps_thought_signature() {
 fn real_ids_are_kept_without_marker() {
     let part = function_call_part("call-1", "lookup", json!({}));
 
-    let call = tool_call_from_part(&part, &Some("call-1".into()), "lookup", &None);
+    let call = tool_call_from_part(&part).unwrap();
 
     assert_eq!(call.id, "call-1");
     assert!(call.provider_metadata.is_none());
@@ -397,7 +397,7 @@ fn replay_request(call: ToolCall) -> ModelRequest {
 fn synthetic_ids_are_not_sent_to_gemini() {
     let model = GeminiModel::new("test-key", "gemini-2.5-pro");
     let part = id_less_function_call_part(None, "lookup");
-    let call = tool_call_from_part(&part, &None, "lookup", &None);
+    let call = tool_call_from_part(&part).unwrap();
 
     let json = serde_json::to_value(model.build_gemini_request(replay_request(call))).unwrap();
 

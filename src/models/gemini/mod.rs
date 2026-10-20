@@ -393,18 +393,7 @@ impl LlmModel for GeminiModel {
             .content
             .as_ref()
             .and_then(|c| c.parts.as_ref())
-            .map(|parts| {
-                parts
-                    .iter()
-                    .filter_map(|part| {
-                        if let PartData::FunctionCall { id, name, args } = &part.data {
-                            Some(tool_call_from_part(part, id, name, args))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
+            .map(|parts| parts.iter().filter_map(tool_call_from_part).collect())
             .unwrap_or_default();
 
         // Separate thought parts (thought == Some(true)) from regular text parts.
@@ -526,10 +515,8 @@ fn stream_chunks_from_candidate(
                     text_chunks.push(ModelStreamChunk::TextDelta(text.clone()));
                 }
             }
-            PartData::FunctionCall { id, name, args } => {
-                tool_calls.push(ModelStreamChunk::ToolCall(tool_call_from_part(
-                    part, id, name, args,
-                )));
+            PartData::FunctionCall { .. } => {
+                tool_calls.extend(tool_call_from_part(part).map(ModelStreamChunk::ToolCall));
             }
             _ => {}
         }
@@ -541,18 +528,17 @@ fn stream_chunks_from_candidate(
 /// because Gemini didn't return one.
 const SYNTHETIC_ID_KEY: &str = "synthetic_id";
 
-/// Builds a [`ToolCall`] from a Gemini `FunctionCall` part.
+/// Builds a [`ToolCall`] from a Gemini `FunctionCall` part, or `None` for any
+/// other part.
 ///
 /// Stashes the part's `thought_signature` in `provider_metadata` so it can be
 /// echoed back in subsequent turns. When Gemini omits the call `id` (or sends
 /// an empty one), a random ID is synthesized and marked with
 /// [`SYNTHETIC_ID_KEY`] so [`gemini_call_id`] never sends it back to Gemini.
-fn tool_call_from_part(
-    part: &Part,
-    id: &Option<String>,
-    name: &str,
-    args: &Option<Value>,
-) -> ToolCall {
+fn tool_call_from_part(part: &Part) -> Option<ToolCall> {
+    let PartData::FunctionCall { id, name, args } = &part.data else {
+        return None;
+    };
     let mut metadata = serde_json::Map::new();
     if let Some(ts) = &part.thought_signature {
         metadata.insert("thought_signature".into(), Value::String(ts.clone()));
@@ -564,12 +550,12 @@ fn tool_call_from_part(
             synthesize_tool_call_id()
         }
     };
-    ToolCall {
+    Some(ToolCall {
         id,
-        name: name.to_string(),
+        name: name.clone(),
         args: args.clone().unwrap_or(Value::Null),
         provider_metadata: (!metadata.is_empty()).then_some(Value::Object(metadata)),
-    }
+    })
 }
 
 /// Returns the call ID to send to Gemini: the real ID, or `None` when the
