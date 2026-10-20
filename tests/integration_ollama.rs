@@ -318,7 +318,8 @@ async fn agent_tool_calling_returns_correct_result() -> TestResult {
 /// `chat` request fail with a connection error. This needs no live Ollama
 /// server and is fully deterministic. Before the fix the `?` inside the
 /// `async_stream::stream!` block dropped the error and ended the generator
-/// with zero items; now the error is yielded.
+/// with zero items; now the error is yielded. A refused connection is worth
+/// retrying, so it surfaces as `ProviderTransient`.
 #[tokio::test]
 async fn generate_stream_surfaces_provider_error() {
     // Port 1 has nothing listening, so the connection is refused immediately.
@@ -341,8 +342,10 @@ async fn generate_stream_surfaces_provider_error() {
         "stream ended silently with no items; the provider error was swallowed (#43)"
     );
     assert!(
-        items.iter().any(|i| matches!(i, Err(Error::Provider(_)))),
-        "expected a Provider error to be yielded, got: {items:?}"
+        items
+            .iter()
+            .any(|i| matches!(i, Err(Error::ProviderTransient(_)))),
+        "expected a ProviderTransient error to be yielded, got: {items:?}"
     );
 }
 

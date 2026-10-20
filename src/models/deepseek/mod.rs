@@ -44,7 +44,7 @@ use crate::{
 /// [`ModelResponse::thinking`] / [`ModelStreamChunk::Thinking`] for display, and
 /// also emitted as opaque provider metadata (`{"deepseek": {"reasoning_content":
 /// ...}}`) that the runner stores on the assistant
-/// [`Message`](crate::model::Message). This adapter replays it as
+/// [`Message`]. This adapter replays it as
 /// `reasoning_content` on every later request, as DeepSeek requires for
 /// tool-using conversations.
 ///
