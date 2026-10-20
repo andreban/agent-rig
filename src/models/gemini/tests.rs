@@ -307,3 +307,105 @@ fn tool_result_without_media_sends_no_function_response_parts() {
     let parts = &json["contents"][0]["parts"][0]["functionResponse"]["parts"];
     assert!(parts.is_null(), "unexpected parts: {parts}");
 }
+
+fn request_json(messages: Vec<crate::model::Message>) -> serde_json::Value {
+    let model = GeminiModel::new("test-key", "gemini-2.5-pro");
+    let request = ModelRequest {
+        messages: crate::model::MessageList::from(messages),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    };
+    serde_json::to_value(model.build_gemini_request(request)).unwrap()
+}
+
+fn signed_call(id: &str, name: &str) -> std::sync::Arc<ToolCall> {
+    let mut call = ToolCall::new(id.into(), name.into(), json!({}));
+    call.provider_metadata = Some(json!({ "thought_signature": format!("sig-{id}") }));
+    std::sync::Arc::new(call)
+}
+
+#[test]
+fn parallel_tool_results_merge_into_one_content() {
+    use crate::model::Message;
+    let a = signed_call("a", "lookup");
+    let b = signed_call("b", "lookup");
+
+    let json = request_json(vec![
+        Message::user("hi"),
+        Message::tool_calls(vec![a.clone(), b.clone()]),
+        Message::tool_result(a, json!({"n": 1})),
+        Message::tool_result(b, json!({"n": 2})),
+    ]);
+
+    let contents = json["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 3);
+    assert_eq!(contents[2]["role"], "user");
+    let parts = contents[2]["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["functionResponse"]["id"], "a");
+    assert_eq!(parts[0]["functionResponse"]["response"], json!({"n": 1}));
+    assert_eq!(parts[1]["functionResponse"]["id"], "b");
+    assert_eq!(parts[1]["functionResponse"]["response"], json!({"n": 2}));
+}
+
+#[test]
+fn consecutive_same_role_messages_merge_in_order() {
+    use crate::model::Message;
+    let call = signed_call("a", "lookup");
+
+    let json = request_json(vec![
+        Message::tool_result(call, json!({"ok": true})),
+        Message::user("follow-up"),
+        Message::assistant("one"),
+        Message::assistant("two"),
+    ]);
+
+    let contents = json["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 2);
+    assert_eq!(contents[0]["role"], "user");
+    assert!(contents[0]["parts"][0]["functionResponse"].is_object());
+    assert_eq!(contents[0]["parts"][1]["text"], "follow-up");
+    assert_eq!(contents[1]["role"], "model");
+    assert_eq!(contents[1]["parts"][0]["text"], "one");
+    assert_eq!(contents[1]["parts"][1]["text"], "two");
+}
+
+#[test]
+fn alternating_roles_are_not_merged() {
+    use crate::model::Message;
+
+    let json = request_json(vec![
+        Message::user("q1"),
+        Message::assistant("a1"),
+        Message::user("q2"),
+    ]);
+
+    let contents = json["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 3);
+    for content in contents {
+        assert_eq!(content["parts"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn thought_signature_only_on_function_call_parts() {
+    use crate::model::Message;
+    let call = signed_call("a", "lookup");
+
+    let json = request_json(vec![
+        Message::tool_calls(vec![call.clone()]),
+        Message::tool_result(call, json!({"ok": true})),
+    ]);
+
+    let call_part = &json["contents"][0]["parts"][0];
+    assert!(call_part["functionCall"].is_object());
+    assert_eq!(call_part["thoughtSignature"], "sig-a");
+
+    let response_part = &json["contents"][1]["parts"][0];
+    assert!(response_part["functionResponse"].is_object());
+    assert!(
+        response_part.get("thoughtSignature").is_none(),
+        "unexpected signature: {response_part}"
+    );
+}

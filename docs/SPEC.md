@@ -167,7 +167,7 @@ pub struct TokenUsage {
 
 `text` and `tool_calls` on `ModelResponse` are mutually exclusive per turn.
 
-`ToolCall::provider_metadata` is opaque metadata the runner round-trips back to the model on the next turn (used by Gemini to echo `thought_signature` on both the replayed `FunctionCall` and the matching `FunctionResponse` parts).
+`ToolCall::provider_metadata` is opaque metadata the runner round-trips back to the model on the next turn (used by Gemini to echo `thought_signature` on the replayed `FunctionCall` parts).
 
 ### `Agent` (`src/agent.rs`)
 
@@ -435,7 +435,8 @@ Provider adapters wrap transport- and API-level failures into `Error::Provider`;
 - Optional `GenerationConfig` (temperature, max_output_tokens, top_p, top_k, stop_sequences, thinking_config) configurable via `GeminiModel::builder(…)`.
 - Structured output: when `ModelRequest::output_schema` is set, a `GenerationConfig` with `response_mime_type("application/json")` and the normalised schema is applied, overriding any model-level config (with `thinking_config` carried over). Schema normalisation (stripping `$schema`/`$defs`, inlining `$ref`) is performed internally.
 - Response parts are split by `thought` flag: parts where `thought == Some(true)` are concatenated into `ModelResponse::thinking`; remaining text parts form `ModelResponse::text`. This surfaces reasoning tokens as `AgentEvent::ThinkingDelta` via the runner.
-- `provider_metadata` carries Gemini's `thought_signature`, which the adapter echoes back on both the replayed `FunctionCall` parts and the matching `FunctionResponse` parts.
+- `provider_metadata` carries Gemini's `thought_signature`, which the adapter echoes back on the replayed `FunctionCall` parts only; `FunctionResponse` parts never carry a signature.
+- Consecutive messages with the same role are merged into a single `Content`, with parts concatenated in order. In particular, the per-call tool-result messages the runner appends after a parallel function-call turn become one `Role::User` content with one `FunctionResponse` part per call, as Gemini expects.
 - Tool-result media is sent as the function response's `parts` (`FunctionResponsePart::InlineData`), Gemini's multimodal function responses.
 - Token usage: `usage_metadata` is mapped via `From<&UsageMetadata> for TokenUsage` — `prompt_token_count` → `input_tokens`, `candidates_token_count` → `output_tokens`, `cached_content_token_count` → `cached_input_tokens`, `thoughts_token_count` → `thinking_tokens`, `tool_use_prompt_token_count` → `tool_use_prompt_tokens`. Per-modality breakdowns (`*_tokens_details`) and `service_tier` are not propagated.
 - Implements `generate_stream` natively on top of `GeminiClient::stream_generate_content`. Each streamed `Candidate` part is converted to a chunk in order: thought `Text` parts become `Thinking`, regular `Text` parts become `TextDelta`, and `FunctionCall` parts become `ToolCall` (with `thought_signature` preserved in `provider_metadata`). The final `UsageMetadata` reported by the provider is emitted as a trailing `Usage` chunk.
