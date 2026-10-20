@@ -483,10 +483,8 @@ fn synthetic_ids_are_not_sent_to_gemini() {
 
     let function_call = &json["contents"][0]["parts"][0]["functionCall"];
     let function_response = &json["contents"][1]["parts"][0]["functionResponse"];
-    // geologia serializes a `None` FunctionCall id as `null`, which proto3
-    // JSON treats as unset; either way no ID reaches Gemini.
-    assert!(function_call["id"].is_null(), "{function_call}");
-    assert!(function_response["id"].is_null(), "{function_response}");
+    assert!(function_call.get("id").is_none(), "{function_call}");
+    assert!(function_response.get("id").is_none(), "{function_response}");
 }
 
 #[test]

@@ -603,7 +603,7 @@ dependencies = [
 [[package]]
 name = "geologia"
 version = "0.1.0"
-source = "git+https://github.com/andreban/geologia#deb99d70ea7899bca981ca78a9a48a944d2f54c9"
+source = "git+https://github.com/andreban/geologia#6981a5ce98912bb7fafecd257c089bbdf0860454"
 dependencies = [
  "reqwest",
  "serde",
