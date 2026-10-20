@@ -308,6 +308,91 @@ fn tool_result_without_media_sends_no_function_response_parts() {
     assert!(parts.is_null(), "unexpected parts: {parts}");
 }
 
+fn id_less_function_call_part(id: Option<&str>, name: &str) -> Part {
+    let mut part = function_call_part("", name, json!({}));
+    part.data = PartData::FunctionCall {
+        id: id.map(str::to_string),
+        name: name.to_string(),
+        args: Some(json!({})),
+    };
+    part
+}
+
+fn stream_tool_calls(candidate: &Candidate) -> Vec<ToolCall> {
+    stream_chunks_from_candidate(candidate)
+        .1
+        .into_iter()
+        .map(|chunk| match chunk {
+            ModelStreamChunk::ToolCall(tc) => tc,
+            other => panic!("expected ToolCall, got {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn missing_ids_are_synthesized_unique_within_a_turn() {
+    let candidate = make_candidate(vec![
+        id_less_function_call_part(None, "lookup"),
+        id_less_function_call_part(Some(""), "lookup"),
+    ]);
+
+    let calls = stream_tool_calls(&candidate);
+
+    assert_eq!(calls.len(), 2);
+    for call in &calls {
+        assert!(call.id.starts_with("call_"), "unexpected id {}", call.id);
+        let meta = call.provider_metadata.as_ref().expect("provider_metadata");
+        assert_eq!(meta[SYNTHETIC_ID_KEY], true);
+    }
+    assert_ne!(calls[0].id, calls[1].id);
+}
+
+#[test]
+fn missing_ids_are_unique_across_turns() {
+    let candidate = make_candidate(vec![id_less_function_call_part(None, "lookup")]);
+
+    let first = stream_tool_calls(&candidate);
+    let second = stream_tool_calls(&candidate);
+
+    assert_ne!(first[0].id, second[0].id);
+}
+
+#[test]
+fn synthetic_id_marker_keeps_thought_signature() {
+    let mut part = id_less_function_call_part(None, "lookup");
+    part.thought_signature = Some("sig-abc".to_string());
+
+    let call = tool_call_from_part(&part).unwrap();
+
+    let meta = call.provider_metadata.expect("provider_metadata");
+    assert_eq!(meta["thought_signature"], "sig-abc");
+    assert_eq!(meta[SYNTHETIC_ID_KEY], true);
+}
+
+#[test]
+fn real_ids_are_kept_without_marker() {
+    let part = function_call_part("call-1", "lookup", json!({}));
+
+    let call = tool_call_from_part(&part).unwrap();
+
+    assert_eq!(call.id, "call-1");
+    assert!(call.provider_metadata.is_none());
+}
+
+/// Builds a request replaying one tool call and its result.
+fn replay_request(call: ToolCall) -> ModelRequest {
+    let call = std::sync::Arc::new(call);
+    ModelRequest {
+        messages: crate::model::MessageList::from(vec![
+            crate::model::Message::tool_calls(vec![call.clone()]),
+            crate::model::Message::tool_result(call, json!({"ok": true})),
+        ]),
+        system: None,
+        output_schema: None,
+        tools: vec![],
+    }
+}
+
 fn request_json(messages: Vec<crate::model::Message>) -> serde_json::Value {
     let model = GeminiModel::new("test-key", "gemini-2.5-pro");
     let request = ModelRequest {
@@ -386,6 +471,39 @@ fn alternating_roles_are_not_merged() {
     for content in contents {
         assert_eq!(content["parts"].as_array().unwrap().len(), 1);
     }
+}
+
+#[test]
+fn synthetic_ids_are_not_sent_to_gemini() {
+    let model = GeminiModel::new("test-key", "gemini-2.5-pro");
+    let part = id_less_function_call_part(None, "lookup");
+    let call = tool_call_from_part(&part).unwrap();
+
+    let json = serde_json::to_value(model.build_gemini_request(replay_request(call))).unwrap();
+
+    let function_call = &json["contents"][0]["parts"][0]["functionCall"];
+    let function_response = &json["contents"][1]["parts"][0]["functionResponse"];
+    // geologia serializes a `None` FunctionCall id as `null`, which proto3
+    // JSON treats as unset; either way no ID reaches Gemini.
+    assert!(function_call["id"].is_null(), "{function_call}");
+    assert!(function_response["id"].is_null(), "{function_response}");
+}
+
+#[test]
+fn real_ids_are_sent_to_gemini() {
+    let model = GeminiModel::new("test-key", "gemini-2.5-pro");
+    let call = ToolCall::new("call-1".into(), "lookup".into(), json!({}));
+
+    let json = serde_json::to_value(model.build_gemini_request(replay_request(call))).unwrap();
+
+    assert_eq!(
+        json["contents"][0]["parts"][0]["functionCall"]["id"],
+        "call-1"
+    );
+    assert_eq!(
+        json["contents"][1]["parts"][0]["functionResponse"]["id"],
+        "call-1"
+    );
 }
 
 #[test]

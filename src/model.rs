@@ -482,15 +482,17 @@ impl ModelRequest {
 /// A tool call issued by the model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
-    /// Provider-assigned call identifier. Must be echoed in the tool response
-    /// for providers that require it (e.g. Gemini).
+    /// Call identifier: non-empty and unique within a run. Provider-assigned
+    /// when the provider returns one; otherwise synthesized by the adapter.
+    /// Adapters echo provider-assigned IDs back in the tool response.
     pub id: String,
     /// The name of the tool to invoke.
     pub name: String,
     /// The arguments the model wants to pass, as a JSON object.
     pub args: serde_json::Value,
     /// Opaque provider metadata that must be round-tripped back with the tool
-    /// response. Used by Gemini to carry the `thought_signature`; other
+    /// response. Used by Gemini to carry the `thought_signature` and, when the
+    /// adapter generated the call ID, a `"synthetic_id": true` marker; other
     /// providers leave this as `None`.
     ///
     /// External [`LlmModel`] implementations populate this when constructing a

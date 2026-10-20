@@ -143,3 +143,28 @@ async fn generate_stream_rejects_tool_result_media() {
         "{first:?}"
     );
 }
+
+fn ollama_tool_call(name: &str, index: usize) -> OllamaToolCall {
+    OllamaToolCall {
+        function: ToolCallFunction {
+            name: name.to_string(),
+            arguments: serde_json::json!({}),
+            index,
+        },
+    }
+}
+
+#[test]
+fn tool_call_ids_are_unique_for_repeated_tool() {
+    let first = ToolCall::from(&ollama_tool_call("lookup", 0));
+    let second = ToolCall::from(&ollama_tool_call("lookup", 1));
+
+    assert!(first.id.starts_with("call_"), "unexpected id {}", first.id);
+    assert!(
+        second.id.starts_with("call_"),
+        "unexpected id {}",
+        second.id
+    );
+    assert_ne!(first.id, second.id);
+    assert_eq!(first.name, "lookup");
+}
