@@ -417,12 +417,20 @@ This design keeps the runner simple and stateless, giving the consumer absolute 
 pub enum Error {
     #[error("LLM provider error: {0}")]
     Provider(String),
+    #[error("LLM provider error: {0}")]
+    ProviderTransient(String),
     #[error("Agent error: {0}")]
     Agent(String),
+}
+
+impl Error {
+    pub fn is_transient(&self) -> bool;
 }
 ```
 
 Provider adapters wrap transport- and API-level failures into `Error::Provider`; agent-side failures (serialization, lock poisoning, user-defined tool errors) use `Error::Agent`.
+
+Failures where sending the same request again may succeed are `Error::ProviderTransient` instead, so callers can retry them (`Error::is_transient`) without parsing messages: rate limits and exhausted quotas (`429`, Gemini's `RESOURCE_EXHAUSTED`), server errors and overload (`5xx`, Claude's `529`), and failures to connect or timeouts. The Gemini, DeepSeek and Anthropic adapters classify their clients' typed errors this way (Anthropic through `AntropologiaError::is_retryable`); Ollama reports every failure as `Error::Provider`. The adapters never retry themselves: a retry policy (how many attempts, how long to wait, whether to give up on a stream that already produced output) belongs to the caller.
 
 ## Provider Adapters
 

@@ -9,6 +9,8 @@ use crate::model::{Message, MessageList};
 use cetologia::types::response::PromptTokensDetails;
 use schemars::JsonSchema;
 use serde_json::json;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn empty_request() -> ModelRequest {
     ModelRequest {
@@ -391,5 +393,79 @@ async fn generate_stream_rejects_tool_result_media_for_text_only_model() {
             Some(Err(Error::Provider(msg))) if msg.contains("deepseek-v4-pro")
         ),
         "{first:?}"
+    );
+}
+
+/// A model whose API is a mock server answering every chat request with
+/// `status` and a DeepSeek error body.
+async fn model_answering_with(status: u16) -> (MockServer, DeepSeekModel) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+            "error": { "message": "error", "type": "error", "code": null }
+        })))
+        .mount(&server)
+        .await;
+    let model = DeepSeekModel::builder("test-key", "deepseek-chat")
+        .base_url(server.uri())
+        .build();
+    (server, model)
+}
+
+#[tokio::test]
+async fn rate_limits_and_server_errors_are_transient() {
+    for status in [429, 500, 503] {
+        let (_server, model) = model_answering_with(status).await;
+
+        let generated = model.generate(empty_request()).await;
+        let streamed = model.generate_stream(empty_request()).next().await;
+
+        assert!(
+            matches!(&generated, Err(Error::ProviderTransient(_))),
+            "{status}: {generated:?}"
+        );
+        assert!(
+            matches!(&streamed, Some(Err(Error::ProviderTransient(_)))),
+            "{status}: {streamed:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn client_errors_are_not_transient() {
+    for status in [400, 401, 422] {
+        let (_server, model) = model_answering_with(status).await;
+
+        let generated = model.generate(empty_request()).await;
+        let streamed = model.generate_stream(empty_request()).next().await;
+
+        assert!(
+            matches!(&generated, Err(Error::Provider(_))),
+            "{status}: {generated:?}"
+        );
+        assert!(
+            matches!(&streamed, Some(Err(Error::Provider(_)))),
+            "{status}: {streamed:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn connection_failures_are_transient() {
+    // Bind and drop a listener so nothing is listening on the port.
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let model = DeepSeekModel::builder("test-key", "deepseek-chat")
+        .base_url(format!("http://{address}"))
+        .build();
+
+    let generated = model.generate(empty_request()).await;
+
+    assert!(
+        matches!(&generated, Err(Error::ProviderTransient(_))),
+        "{generated:?}"
     );
 }

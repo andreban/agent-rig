@@ -307,3 +307,54 @@ fn tool_result_without_media_sends_no_function_response_parts() {
     let parts = &json["contents"][0]["parts"][0]["functionResponse"]["parts"];
     assert!(parts.is_null(), "unexpected parts: {parts}");
 }
+
+fn vertex_error(code: i32, status: &str) -> geologia::error::Error {
+    geologia::error::Error::VertexError(geologia::prelude::VertexApiError {
+        code,
+        message: "error".to_string(),
+        status: status.to_string(),
+        details: None,
+    })
+}
+
+fn api_error(status: u16) -> geologia::error::Error {
+    geologia::error::Error::ApiError {
+        status: status.try_into().unwrap(),
+        body: "error".to_string(),
+    }
+}
+
+#[test]
+fn rate_limits_and_server_errors_are_transient() {
+    for error in [
+        vertex_error(429, "RESOURCE_EXHAUSTED"),
+        vertex_error(500, "INTERNAL"),
+        vertex_error(503, "UNAVAILABLE"),
+        vertex_error(504, "DEADLINE_EXCEEDED"),
+        api_error(429),
+        api_error(502),
+    ] {
+        let message = error.to_string();
+        assert!(
+            matches!(provider_error(error), Error::ProviderTransient(m) if m == message),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn other_errors_are_not_transient() {
+    for error in [
+        vertex_error(400, "INVALID_ARGUMENT"),
+        vertex_error(403, "PERMISSION_DENIED"),
+        api_error(404),
+        geologia::error::Error::NoCandidatesError,
+        geologia::error::Error::EventSourceClosedError,
+    ] {
+        let message = error.to_string();
+        assert!(
+            matches!(provider_error(error), Error::Provider(m) if m == message),
+            "{message}"
+        );
+    }
+}

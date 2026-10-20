@@ -440,3 +440,53 @@ async fn unsupported_tool_result_media_type_returns_provider_error() {
         "{stream_first:?}"
     );
 }
+
+/// A model whose API is a mock server answering every request with `status`
+/// and a Claude error body of type `error_type`.
+async fn model_answering_with(status: u16, error_type: &str) -> (MockServer, AnthropicModel) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+            "type": "error",
+            "error": { "type": error_type, "message": "error" }
+        })))
+        .mount(&server)
+        .await;
+    let model = AnthropicModel::builder("key", "claude-opus-5-5")
+        .base_url(server.uri())
+        .build();
+    (server, model)
+}
+
+#[tokio::test]
+async fn rate_limits_and_overload_are_transient() {
+    for (status, error_type) in [(429, "rate_limit_error"), (529, "overloaded_error")] {
+        let (_server, model) = model_answering_with(status, error_type).await;
+        let messages = vec![Message::user("Hi")];
+
+        let generated = model.generate(request(messages.clone())).await;
+        let streamed = model.generate_stream(request(messages)).next().await;
+
+        assert!(
+            matches!(&generated, Err(Error::ProviderTransient(_))),
+            "{status}: {generated:?}"
+        );
+        assert!(
+            matches!(&streamed, Some(Err(Error::ProviderTransient(_)))),
+            "{status}: {streamed:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn invalid_requests_are_not_transient() {
+    let (_server, model) = model_answering_with(400, "invalid_request_error").await;
+
+    let generated = model.generate(request(vec![Message::user("Hi")])).await;
+
+    assert!(
+        matches!(&generated, Err(Error::Provider(_))),
+        "{generated:?}"
+    );
+}
