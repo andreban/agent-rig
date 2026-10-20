@@ -15,6 +15,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
 struct AddTool {
     definition: ToolDefinition,
 }
@@ -93,6 +95,59 @@ async fn collect_text(runner: AgentRunner, agent: Agent, prompt: &str) -> String
         }
     }
     text
+}
+
+/// What a tool-calling run produced.
+struct ToolRun {
+    /// Concatenated streamed text.
+    text: String,
+    /// Every tool call the runner asked the consumer to resolve, in event order.
+    calls: Vec<Arc<ToolCall>>,
+}
+
+/// Drives the runner to completion, running each requested tool from
+/// `registry` and resolving the call with its result, like a real consumer
+/// would. Fails on an `AgentEvent::Error` or if the run ends without
+/// `TurnFinish`.
+async fn run_with_tools(
+    runner: AgentRunner,
+    agent: Agent,
+    registry: &ToolRegistry,
+    prompt: &str,
+) -> TestResult<ToolRun> {
+    let mut text = String::new();
+    let mut calls = Vec::new();
+    let mut finished = false;
+    let mut stream = runner.run(&agent, vec![Message::user(prompt)].into());
+    while let Some(event) = stream.next().await {
+        match event.agent_event {
+            AgentEvent::ToolCall(call) => {
+                calls.push(call.details.clone());
+                let result = match registry.get(&call.details.name) {
+                    Some(tool) => {
+                        tool.call(call.details.clone(), call.cancellation_token.clone())
+                            .await
+                    }
+                    None => ToolResult::error("Unknown tool"),
+                };
+                call.resolve(result);
+            }
+            AgentEvent::TextDelta(chunk) => text.push_str(&chunk),
+            AgentEvent::TurnFinish { .. } => finished = true,
+            AgentEvent::Error(error) => return Err(error.into()),
+            _ => {}
+        }
+    }
+    if !finished {
+        return Err("run ended without TurnFinish".into());
+    }
+    Ok(ToolRun { text, calls })
+}
+
+/// Returns `true` if `call` is an `add` call on `a` and `b`, in either order.
+fn is_add(call: &ToolCall, a: i64, b: i64) -> bool {
+    let (x, y) = (call.args["a"].as_i64(), call.args["b"].as_i64());
+    call.name == "add" && ((x, y) == (Some(a), Some(b)) || (x, y) == (Some(b), Some(a)))
 }
 
 #[tokio::test]
@@ -188,14 +243,14 @@ async fn agent_output_schema_returns_valid_json() {
 }
 
 #[tokio::test]
-async fn agent_tool_calling_returns_correct_result() {
+async fn agent_tool_calling_returns_correct_result() -> TestResult {
     let url = ollama_url();
     if !ollama_available(&url).await {
-        return;
+        return Ok(());
     }
 
     let model = OllamaModel::new(&url, ollama_model());
-    let registry = Arc::new(ToolRegistry::new().register(AddTool::default()));
+    let registry = ToolRegistry::new().register(AddTool::default());
     let agent = Agent::builder()
         .name("Calculator")
         .instructions("You are a calculator. Use the add tool to compute sums. When asked to add numbers, call the tool and report the result.")
@@ -203,12 +258,19 @@ async fn agent_tool_calling_returns_correct_result() {
         .build();
 
     let runner = AgentRunner::with_tools(Arc::new(model), registry.definitions());
-    let output = collect_text(runner, agent, "What is 17 + 25?").await;
+    let run = run_with_tools(runner, agent, &registry, "What is 17 + 25?").await?;
 
     assert!(
-        output.contains("42"),
-        "expected '42' in output, got: {output}"
+        run.calls.iter().any(|call| is_add(call, 17, 25)),
+        "expected an add(17, 25) tool call, got: {:?}",
+        run.calls
     );
+    assert!(
+        run.text.contains("42"),
+        "expected '42' in output, got: {}",
+        run.text
+    );
+    Ok(())
 }
 
 /// Regression test for #43: a provider failure in the streaming path must
