@@ -596,5 +596,5 @@ skills/
 
 The following capabilities are planned but not yet implemented:
 
-1. **Additional providers.** OpenAI-compatible endpoints and Anthropic Claude are natural next targets given the trait abstraction.
+1. **Additional providers.** OpenAI-compatible endpoints are a natural next target given the trait abstraction.
 2. **Automatic conversation history.** All multi-turn flows today require the caller to maintain `Vec<Message>` and pass it on each `run`. A higher-level `Conversation` wrapper that records the thread automatically (with explicit access for trimming/compression) is sketched in `docs/PLAN-conversation.md` but not yet implemented.
