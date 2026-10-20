@@ -31,6 +31,7 @@ use crate::{
         LlmModel, MessageContent, ModelRequest, ModelResponse, ModelStreamChunk, Role, TokenUsage,
         ToolCall, tool_result_json,
     },
+    models::synthesize_tool_call_id,
     tools::ToolDefinition,
 };
 
@@ -200,12 +201,13 @@ impl From<&ToolDefinition> for OllamaTool {
 
 /// Converts an Ollama tool call into the crate's [`ToolCall`] type.
 ///
-/// Ollama has no call ID; the function name is used as a stable identifier
-/// (sufficient since we don't need to echo an ID back to Ollama).
+/// Ollama has no call ID, so each conversion synthesizes a random one, unique
+/// even when the same tool is called repeatedly. The ID is never sent back to
+/// Ollama, which matches tool results to calls by position.
 impl From<&OllamaToolCall> for ToolCall {
     fn from(tc: &OllamaToolCall) -> ToolCall {
         ToolCall {
-            id: tc.function.name.clone(),
+            id: synthesize_tool_call_id(),
             name: tc.function.name.clone(),
             args: tc.function.arguments.clone(),
             provider_metadata: None,
