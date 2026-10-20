@@ -167,7 +167,7 @@ pub struct TokenUsage {
 
 `text` and `tool_calls` on `ModelResponse` are mutually exclusive per turn.
 
-`ToolCall::provider_metadata` is opaque metadata the runner round-trips back to the model on the next turn (used by Gemini to echo `thought_signature` on both the replayed `FunctionCall` and the matching `FunctionResponse` parts).
+`ToolCall::provider_metadata` is opaque metadata the runner round-trips back to the model on the next turn (used by Gemini to echo `thought_signature` on the replayed `FunctionCall` parts).
 
 ### `Agent` (`src/agent.rs`)
 

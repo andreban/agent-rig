@@ -420,8 +420,8 @@ impl LlmModel for GeminiModel {
                     .filter_map(|part| {
                         if let PartData::FunctionCall { id, name, args } = &part.data {
                             // Stash the thought_signature so it can be echoed
-                            // back on both the replayed FunctionCall and the
-                            // FunctionResponse parts in subsequent turns.
+                            // back on the replayed FunctionCall part in
+                            // subsequent turns.
                             let provider_metadata = part
                                 .thought_signature
                                 .as_ref()
