@@ -4,8 +4,8 @@
 //! Demonstrates the three ways to cancel an [`AgentRunner::run`] in flight.
 //!
 //! 1. **Drop the stream.** The default ergonomics: just drop the returned
-//!    stream and the runner (and any tool that was running) shuts down at
-//!    its next await point.
+//!    stream. The runner stops, and the cancellation token handed to any
+//!    tool that is still running fires, so the tool can abort cleanly.
 //! 2. **External [`CancellationToken`].** Use `run_with_cancellation` when
 //!    you need to share the cancel signal with a sibling task (deadline
 //!    timer, server shutdown coordinator, …).
@@ -95,10 +95,17 @@ fn build_runner(api_key: String) -> (AgentRunner, Agent, Arc<ToolRegistry>) {
     (runner, agent, registry)
 }
 
-async fn drain<S>(label: &str, registry: Arc<ToolRegistry>, mut stream: S)
+/// Consumes `stream`, running each tool call on its own task.
+///
+/// Spawning keeps tools independent of this consumer: when the consumer is
+/// aborted in (1), the tools aren't dropped along with it, so they observe
+/// the cancellation token and abort cleanly. It also lets the consumer keep
+/// polling the stream while a tool runs.
+async fn drain<S>(label: &'static str, registry: Arc<ToolRegistry>, mut stream: S)
 where
     S: StreamExt<Item = agent_rig::runner::RunEvent> + Unpin,
 {
+    let mut tools = Vec::new();
     while let Some(event) = stream.next().await {
         match event.agent_event {
             AgentEvent::ToolCall(call) => {
@@ -106,15 +113,18 @@ where
                     "[{label}] started:   {}({})",
                     call.details.name, call.details.args
                 );
-                let result = match registry.get(&call.details.name) {
-                    Some(tool) => {
-                        tool.call(call.details.clone(), call.cancellation_token.clone())
-                            .await
-                    }
-                    None => ToolResult::error("Unknown tool"),
-                };
-                println!("[{label}] finished:  {} → {result}", call.details.name);
-                call.resolve(result);
+                let registry = registry.clone();
+                tools.push(tokio::spawn(async move {
+                    let result = match registry.get(&call.details.name) {
+                        Some(tool) => {
+                            tool.call(call.details.clone(), call.cancellation_token.clone())
+                                .await
+                        }
+                        None => ToolResult::error("Unknown tool"),
+                    };
+                    println!("[{label}] finished:  {} → {result}", call.details.name);
+                    call.resolve(result);
+                }));
             }
             AgentEvent::TextDelta(chunk) => print!("{chunk}"),
             AgentEvent::ThinkingDelta(_) => {}
@@ -124,6 +134,10 @@ where
             AgentEvent::TurnStart => {}
             AgentEvent::TurnFinish { .. } => {}
         }
+    }
+    // Let cancelled tools finish printing before the next scenario starts.
+    for tool in tools {
+        let _ = tool.await;
     }
 }
 
