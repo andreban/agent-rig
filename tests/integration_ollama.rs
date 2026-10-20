@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use agent_rig::error::Error;
-use agent_rig::model::{LlmModel, Message, ModelRequest, ToolCall};
+use agent_rig::model::{
+    LlmModel, Message, MessageContent, MessageList, ModelRequest, ToolCall, ToolResultContent,
+};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::ollama::OllamaModel};
@@ -103,6 +105,8 @@ struct ToolRun {
     text: String,
     /// Every tool call the runner asked the consumer to resolve, in event order.
     calls: Vec<Arc<ToolCall>>,
+    /// The final conversation thread from `TurnFinish`.
+    thread: MessageList,
 }
 
 /// Drives the runner to completion, running each requested tool from
@@ -117,7 +121,7 @@ async fn run_with_tools(
 ) -> TestResult<ToolRun> {
     let mut text = String::new();
     let mut calls = Vec::new();
-    let mut finished = false;
+    let mut thread = None;
     let mut stream = runner.run(&agent, vec![Message::user(prompt)].into());
     while let Some(event) = stream.next().await {
         match event.agent_event {
@@ -133,21 +137,54 @@ async fn run_with_tools(
                 call.resolve(result);
             }
             AgentEvent::TextDelta(chunk) => text.push_str(&chunk),
-            AgentEvent::TurnFinish { .. } => finished = true,
+            AgentEvent::TurnFinish { thread: t } => thread = Some(t),
             AgentEvent::Error(error) => return Err(error.into()),
             _ => {}
         }
     }
-    if !finished {
-        return Err("run ended without TurnFinish".into());
-    }
-    Ok(ToolRun { text, calls })
+    let thread = thread.ok_or("run ended without TurnFinish")?;
+    Ok(ToolRun {
+        text,
+        calls,
+        thread,
+    })
 }
 
 /// Returns `true` if `call` is an `add` call on `a` and `b`, in either order.
 fn is_add(call: &ToolCall, a: i64, b: i64) -> bool {
     let (x, y) = (call.args["a"].as_i64(), call.args["b"].as_i64());
     call.name == "add" && ((x, y) == (Some(a), Some(b)) || (x, y) == (Some(b), Some(a)))
+}
+
+/// Checks, on the final thread, that every `add` call was answered with its
+/// real sum, so the tool's result (not an error, and not another call's
+/// result) is what went back to the model.
+fn check_add_results(run: &ToolRun) -> TestResult {
+    for call in run.calls.iter().filter(|call| call.name == "add") {
+        let sum = call.args["a"].as_i64().unwrap_or(0) + call.args["b"].as_i64().unwrap_or(0);
+        let expected = Vec::<ToolResultContent>::from(ToolResult::ok(json!({ "result": sum })));
+        let sent = run
+            .thread
+            .iter()
+            .find_map(|message| match &message.content {
+                MessageContent::ToolResult { tool_call, content } if tool_call.id == call.id => {
+                    Some(content)
+                }
+                _ => None,
+            });
+        if sent != Some(&expected) {
+            return Err(format!("expected {expected:?} for call {call:?}, got: {sent:?}").into());
+        }
+    }
+    Ok(())
+}
+
+/// Returns `true` if `text` contains `n` as a whole number, so `7` doesn't
+/// match inside `17`.
+fn contains_number(text: &str, n: i64) -> bool {
+    let n = n.to_string();
+    text.split(|c: char| !c.is_ascii_digit())
+        .any(|token| token == n)
 }
 
 #[tokio::test]
@@ -265,8 +302,9 @@ async fn agent_tool_calling_returns_correct_result() -> TestResult {
         "expected an add(17, 25) tool call, got: {:?}",
         run.calls
     );
+    check_add_results(&run)?;
     assert!(
-        run.text.contains("42"),
+        contains_number(&run.text, 42),
         "expected '42' in output, got: {}",
         run.text
     );

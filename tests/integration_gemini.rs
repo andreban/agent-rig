@@ -5,7 +5,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use agent_rig::error::Error;
-use agent_rig::model::{LlmModel, Message, MessageContent, MessageList, ModelRequest, ToolCall};
+use agent_rig::model::{
+    LlmModel, Message, MessageContent, MessageList, ModelRequest, ToolCall, ToolResultContent,
+};
 use agent_rig::runner::{AgentEvent, AgentRunner};
 use agent_rig::tools::{Tool, ToolDefinition, ToolRegistry, ToolResult};
 use agent_rig::{Agent, models::gemini::GeminiModel};
@@ -56,7 +58,7 @@ impl Tool for AddTool {
 
 const MODEL: &str = "gemini-3.1-flash-lite";
 
-/// A model that returns function calls without IDs, so the runner has to
+/// A model that returns function calls without IDs, so the adapter has to
 /// make them up.
 const NO_CALL_ID_MODEL: &str = "gemini-2.5-flash";
 
@@ -132,6 +134,37 @@ async fn run_with_tools(
 fn is_add(call: &ToolCall, a: i64, b: i64) -> bool {
     let (x, y) = (call.args["a"].as_i64(), call.args["b"].as_i64());
     call.name == "add" && ((x, y) == (Some(a), Some(b)) || (x, y) == (Some(b), Some(a)))
+}
+
+/// Checks, on the final thread, that every `add` call was answered with its
+/// real sum, so the tool's result (not an error, and not another call's
+/// result) is what went back to the model.
+fn check_add_results(run: &ToolRun) -> TestResult {
+    for call in run.calls.iter().filter(|call| call.name == "add") {
+        let sum = call.args["a"].as_i64().unwrap_or(0) + call.args["b"].as_i64().unwrap_or(0);
+        let expected = Vec::<ToolResultContent>::from(ToolResult::ok(json!({ "result": sum })));
+        let sent = run
+            .thread
+            .iter()
+            .find_map(|message| match &message.content {
+                MessageContent::ToolResult { tool_call, content } if tool_call.id == call.id => {
+                    Some(content)
+                }
+                _ => None,
+            });
+        if sent != Some(&expected) {
+            return Err(format!("expected {expected:?} for call {call:?}, got: {sent:?}").into());
+        }
+    }
+    Ok(())
+}
+
+/// Returns `true` if `text` contains `n` as a whole number, so `7` doesn't
+/// match inside `17`.
+fn contains_number(text: &str, n: i64) -> bool {
+    let n = n.to_string();
+    text.split(|c: char| !c.is_ascii_digit())
+        .any(|token| token == n)
 }
 
 #[tokio::test]
@@ -211,15 +244,16 @@ async fn agent_tool_calling_returns_correct_result() -> TestResult {
         "expected an add(17, 25) tool call, got: {:?}",
         run.calls
     );
+    check_add_results(&run)?;
     assert!(
-        run.text.contains("42"),
+        contains_number(&run.text, 42),
         "expected '42' in output, got: {}",
         run.text
     );
     Ok(())
 }
 
-/// Parallel tool calls on a model that returns no call IDs, so the runner's
+/// Parallel tool calls on a model that returns no call IDs, so the adapter's
 /// made-up IDs (#96) and the merged function-response turn (#97) are
 /// exercised together in a real round trip.
 #[tokio::test]
@@ -258,6 +292,13 @@ async fn agent_parallel_tool_calls_without_call_ids() -> TestResult {
                 run.calls
             )
         })?;
+    assert!(
+        parallel_turn.iter().all(|call| call
+            .provider_metadata
+            .as_ref()
+            .is_some_and(|m| m["synthetic_id"] == true)),
+        "expected {NO_CALL_ID_MODEL} to return no call IDs, got: {parallel_turn:?}"
+    );
     let ids: HashSet<&str> = parallel_turn.iter().map(|call| call.id.as_str()).collect();
     assert!(
         !ids.contains(""),
@@ -270,14 +311,14 @@ async fn agent_parallel_tool_calls_without_call_ids() -> TestResult {
     );
     for (a, b) in [(17, 25), (3, 4), (100, 1)] {
         assert!(
-            run.calls.iter().any(|call| is_add(call, a, b)),
-            "expected an add({a}, {b}) tool call, got: {:?}",
-            run.calls
+            parallel_turn.iter().any(|call| is_add(call, a, b)),
+            "expected an add({a}, {b}) call in the parallel turn, got: {parallel_turn:?}"
         );
     }
-    for sum in ["42", "7", "101"] {
+    check_add_results(&run)?;
+    for sum in [42, 7, 101] {
         assert!(
-            run.text.contains(sum),
+            contains_number(&run.text, sum),
             "expected '{sum}' in output, got: {}",
             run.text
         );
