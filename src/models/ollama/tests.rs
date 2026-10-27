@@ -189,17 +189,36 @@ async fn rate_limits_and_server_errors_are_transient() {
     for status in [429, 500, 503] {
         let (_server, model) = model_answering_with(status).await;
 
-        let generated = model.generate(empty_request()).await;
-        let streamed = model.generate_stream(empty_request()).next().await;
+        let generated = model.generate(empty_request()).await.unwrap_err();
+        let streamed = model
+            .generate_stream(empty_request())
+            .next()
+            .await
+            .unwrap()
+            .unwrap_err();
 
         assert!(
-            matches!(&generated, Err(Error::ProviderTransient(_))),
+            matches!(
+                &generated,
+                Error::ProviderTransient {
+                    retry_after: None,
+                    ..
+                }
+            ),
             "{status}: {generated:?}"
         );
+        assert_eq!(generated.retry_after(), None);
         assert!(
-            matches!(&streamed, Some(Err(Error::ProviderTransient(_)))),
+            matches!(
+                &streamed,
+                Error::ProviderTransient {
+                    retry_after: None,
+                    ..
+                }
+            ),
             "{status}: {streamed:?}"
         );
+        assert_eq!(streamed.retry_after(), None);
     }
 }
 
@@ -208,17 +227,24 @@ async fn client_errors_are_not_transient() {
     for status in [400, 404] {
         let (_server, model) = model_answering_with(status).await;
 
-        let generated = model.generate(empty_request()).await;
-        let streamed = model.generate_stream(empty_request()).next().await;
+        let generated = model.generate(empty_request()).await.unwrap_err();
+        let streamed = model
+            .generate_stream(empty_request())
+            .next()
+            .await
+            .unwrap()
+            .unwrap_err();
 
         assert!(
-            matches!(&generated, Err(Error::Provider(_))),
+            matches!(&generated, Error::Provider(_)),
             "{status}: {generated:?}"
         );
+        assert_eq!(generated.retry_after(), None);
         assert!(
-            matches!(&streamed, Some(Err(Error::Provider(_)))),
+            matches!(&streamed, Error::Provider(_)),
             "{status}: {streamed:?}"
         );
+        assert_eq!(streamed.retry_after(), None);
     }
 }
 
@@ -231,15 +257,34 @@ async fn connection_failures_are_transient() {
         .unwrap();
     let model = OllamaModel::new(format!("http://{address}"), "llama3");
 
-    let generated = model.generate(empty_request()).await;
-    let streamed = model.generate_stream(empty_request()).next().await;
+    let generated = model.generate(empty_request()).await.unwrap_err();
+    let streamed = model
+        .generate_stream(empty_request())
+        .next()
+        .await
+        .unwrap()
+        .unwrap_err();
 
     assert!(
-        matches!(&generated, Err(Error::ProviderTransient(_))),
+        matches!(
+            &generated,
+            Error::ProviderTransient {
+                retry_after: None,
+                ..
+            }
+        ),
         "{generated:?}"
     );
+    assert_eq!(generated.retry_after(), None);
     assert!(
-        matches!(&streamed, Some(Err(Error::ProviderTransient(_)))),
+        matches!(
+            &streamed,
+            Error::ProviderTransient {
+                retry_after: None,
+                ..
+            }
+        ),
         "{streamed:?}"
     );
+    assert_eq!(streamed.retry_after(), None);
 }

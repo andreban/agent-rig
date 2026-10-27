@@ -413,7 +413,14 @@ fn model_response(response: MessagesResponse) -> Result<ModelResponse, Error> {
 /// an [`Error::Provider`] if not.
 fn provider_error(error: antropologia::AntropologiaError) -> Error {
     if error.is_retryable() {
-        Error::ProviderTransient(error.to_string())
+        let retry_after = match &error {
+            antropologia::AntropologiaError::Api { retry_after, .. } => *retry_after,
+            _ => None,
+        };
+        Error::ProviderTransient {
+            message: error.to_string(),
+            retry_after,
+        }
     } else {
         Error::Provider(error.to_string())
     }

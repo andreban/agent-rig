@@ -553,11 +553,47 @@ fn rate_limits_and_server_errors_are_transient() {
         api_error(502),
     ] {
         let message = error.to_string();
+        let converted = provider_error(error);
         assert!(
-            matches!(provider_error(error), Error::ProviderTransient(m) if m == message),
+            matches!(
+                &converted,
+                Error::ProviderTransient {
+                    message: m,
+                    retry_after: None,
+                } if m == &message
+            ),
             "{message}"
         );
+        assert_eq!(converted.retry_after(), None);
     }
+}
+
+#[test]
+fn resource_exhausted_carries_retry_delay() {
+    use std::time::Duration;
+
+    let error = geologia::error::Error::VertexError(geologia::prelude::VertexApiError {
+        code: 429,
+        message: "quota exceeded".to_string(),
+        status: "RESOURCE_EXHAUSTED".to_string(),
+        details: Some(vec![json!({
+            "@type": "type.googleapis.com/google.rpc.RetryInfo",
+            "retryDelay": "37s"
+        })]),
+    });
+    let message = error.to_string();
+    let converted = provider_error(error);
+    assert_eq!(converted.retry_after(), Some(Duration::from_secs(37)));
+    assert!(
+        matches!(
+            &converted,
+            Error::ProviderTransient {
+                message: m,
+                retry_after: Some(d),
+            } if m == &message && *d == Duration::from_secs(37)
+        ),
+        "{converted:?}"
+    );
 }
 
 #[test]
@@ -570,9 +606,11 @@ fn other_errors_are_not_transient() {
         geologia::error::Error::EventSourceClosedError,
     ] {
         let message = error.to_string();
+        let converted = provider_error(error);
         assert!(
-            matches!(provider_error(error), Error::Provider(m) if m == message),
+            matches!(&converted, Error::Provider(m) if m == &message),
             "{message}"
         );
+        assert_eq!(converted.retry_after(), None);
     }
 }

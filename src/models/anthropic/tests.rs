@@ -442,15 +442,24 @@ async fn unsupported_tool_result_media_type_returns_provider_error() {
 }
 
 /// A model whose API is a mock server answering every request with `status`
-/// and a Claude error body of type `error_type`.
-async fn model_answering_with(status: u16, error_type: &str) -> (MockServer, AnthropicModel) {
+/// and a Claude error body of type `error_type`, optionally including a
+/// `retry-after` header.
+async fn model_answering_with(
+    status: u16,
+    error_type: &str,
+    retry_after: Option<&str>,
+) -> (MockServer, AnthropicModel) {
     let server = MockServer::start().await;
+    let mut template = ResponseTemplate::new(status).set_body_json(json!({
+        "type": "error",
+        "error": { "type": error_type, "message": "error" }
+    }));
+    if let Some(value) = retry_after {
+        template = template.insert_header("retry-after", value);
+    }
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(ResponseTemplate::new(status).set_body_json(json!({
-            "type": "error",
-            "error": { "type": error_type, "message": "error" }
-        })))
+        .respond_with(template)
         .mount(&server)
         .await;
     let model = AnthropicModel::builder("key", "claude-opus-5-5")
@@ -462,31 +471,75 @@ async fn model_answering_with(status: u16, error_type: &str) -> (MockServer, Ant
 #[tokio::test]
 async fn rate_limits_and_overload_are_transient() {
     for (status, error_type) in [(429, "rate_limit_error"), (529, "overloaded_error")] {
-        let (_server, model) = model_answering_with(status, error_type).await;
+        let (_server, model) = model_answering_with(status, error_type, None).await;
         let messages = vec![Message::user("Hi")];
 
-        let generated = model.generate(request(messages.clone())).await;
-        let streamed = model.generate_stream(request(messages)).next().await;
+        let generated = model.generate(request(messages.clone())).await.unwrap_err();
+        let streamed = model
+            .generate_stream(request(messages))
+            .next()
+            .await
+            .unwrap()
+            .unwrap_err();
 
         assert!(
-            matches!(&generated, Err(Error::ProviderTransient(_))),
+            matches!(
+                &generated,
+                Error::ProviderTransient {
+                    retry_after: None,
+                    ..
+                }
+            ),
             "{status}: {generated:?}"
         );
+        assert_eq!(generated.retry_after(), None);
         assert!(
-            matches!(&streamed, Some(Err(Error::ProviderTransient(_)))),
+            matches!(
+                &streamed,
+                Error::ProviderTransient {
+                    retry_after: None,
+                    ..
+                }
+            ),
             "{status}: {streamed:?}"
         );
+        assert_eq!(streamed.retry_after(), None);
+    }
+}
+
+#[tokio::test]
+async fn rate_limits_and_overload_carry_retry_after() {
+    use std::time::Duration;
+
+    for (status, error_type, secs) in [(429, "rate_limit_error", 30), (529, "overloaded_error", 5)]
+    {
+        let header = secs.to_string();
+        let (_server, model) = model_answering_with(status, error_type, Some(&header)).await;
+        let messages = vec![Message::user("Hi")];
+        let expected = Some(Duration::from_secs(secs));
+
+        let generated = model.generate(request(messages.clone())).await.unwrap_err();
+        let streamed = model
+            .generate_stream(request(messages))
+            .next()
+            .await
+            .unwrap()
+            .unwrap_err();
+
+        assert_eq!(generated.retry_after(), expected, "{status}: {generated:?}");
+        assert_eq!(streamed.retry_after(), expected, "{status}: {streamed:?}");
     }
 }
 
 #[tokio::test]
 async fn invalid_requests_are_not_transient() {
-    let (_server, model) = model_answering_with(400, "invalid_request_error").await;
+    let (_server, model) = model_answering_with(400, "invalid_request_error", None).await;
 
-    let generated = model.generate(request(vec![Message::user("Hi")])).await;
+    let generated = model
+        .generate(request(vec![Message::user("Hi")]))
+        .await
+        .unwrap_err();
 
-    assert!(
-        matches!(&generated, Err(Error::Provider(_))),
-        "{generated:?}"
-    );
+    assert!(matches!(&generated, Error::Provider(_)), "{generated:?}");
+    assert_eq!(generated.retry_after(), None);
 }
