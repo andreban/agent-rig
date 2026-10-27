@@ -61,7 +61,7 @@ dotenvy        = "0.15"
 | `AgentEvent` | Stream event: `TurnStart`, `ThinkingDelta`, `TextDelta`, `ToolCall`, `Usage`, `TurnFinish`, `Cancelled`, `Error`. |
 | `RunEvent` | An `AgentEvent` tagged with a unique `run_id`. **This is what the runner stream actually yields.** |
 | `ToolCallResult` | Outcome of a tool call: `Ok(Value)`, `Err(Error)`, `Denied`, `Unknown`. |
-| `Error` | `Provider(String)`, `ProviderTransient(String)` or `Agent(String)`. `ProviderTransient` marks provider errors where sending the same request again may succeed (rate limits, `5xx`, overload, failures to connect or timeouts); check with `is_transient()`. Adapters don't retry, callers do. `#[non_exhaustive]`, so `match`es need a wildcard arm. |
+| `Error` | `Provider(String)`, `ProviderTransient { message: String, retry_after: Option<Duration> }` or `Agent(String)`. `ProviderTransient` marks provider errors where sending the same request again may succeed (rate limits, `5xx`, overload, failures to connect or timeouts); check with `is_transient()`, and read the provider's retry delay hint (populated for Anthropic `retry-after` and Gemini `RetryInfo`) with `retry_after()`. Adapters don't retry, callers do. `#[non_exhaustive]`, so `match`es need a wildcard arm. |
 
 **Key design rules:**
 

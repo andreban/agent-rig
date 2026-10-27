@@ -563,7 +563,7 @@ graph TD
 | `AgentEvent` | Stream event: `TurnStart`, `ThinkingDelta`, `TextDelta`, `ToolCall`, `Usage`, `TurnFinish`, `Cancelled`, `Error` |
 | `RunEvent` | An `AgentEvent` tagged with the unique `run_id` of the run that produced it |
 | `ToolCallResult` | Auxiliary outcome status of a tool call: `Ok(Value)`, `Err(Error)`, `Denied`, `Unknown` |
-| `Error` | `Provider(String)`, `ProviderTransient(String)` (a provider error where sending the same request again may succeed: rate limits, `5xx`, overload, failures to connect or timeouts; check with `is_transient()`) or `Agent(String)`. `#[non_exhaustive]` |
+| `Error` | `Provider(String)`, `ProviderTransient { message: String, retry_after: Option<Duration> }` (a provider error where sending the same request again may succeed: rate limits, `5xx`, overload, failures to connect or timeouts; check with `is_transient()`, and read the provider's retry delay hint via `retry_after()`) or `Agent(String)`. `#[non_exhaustive]` |
 
 ### Custom providers
 

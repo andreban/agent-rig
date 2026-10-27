@@ -414,7 +414,10 @@ fn build_chat_request(
 /// sending the request again may succeed, or an [`Error::Provider`] if not.
 fn provider_error(error: CetologiaError) -> Error {
     if is_transient(&error) {
-        Error::ProviderTransient(error.to_string())
+        Error::ProviderTransient {
+            message: error.to_string(),
+            retry_after: None,
+        }
     } else {
         Error::Provider(error.to_string())
     }

@@ -398,7 +398,10 @@ fn function_response_parts(content: &[ToolResultContent]) -> Option<Vec<Function
 /// sending the request again may succeed, or an [`Error::Provider`] if not.
 fn provider_error(error: geologia::error::Error) -> Error {
     if is_transient(&error) {
-        Error::ProviderTransient(error.to_string())
+        Error::ProviderTransient {
+            message: error.to_string(),
+            retry_after: error.retry_delay(),
+        }
     } else {
         Error::Provider(error.to_string())
     }

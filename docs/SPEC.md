@@ -421,20 +421,24 @@ This design keeps the runner simple and stateless, giving the consumer absolute 
 pub enum Error {
     #[error("LLM provider error: {0}")]
     Provider(String),
-    #[error("LLM provider error: {0}")]
-    ProviderTransient(String),
+    #[error("LLM provider error: {message}")]
+    ProviderTransient {
+        message: String,
+        retry_after: Option<Duration>,
+    },
     #[error("Agent error: {0}")]
     Agent(String),
 }
 
 impl Error {
     pub fn is_transient(&self) -> bool;
+    pub fn retry_after(&self) -> Option<Duration>;
 }
 ```
 
 Provider adapters wrap transport- and API-level failures into `Error::ProviderTransient` when sending the same request again may succeed, and into `Error::Provider` otherwise; agent-side failures (serialization, lock poisoning, user-defined tool errors) use `Error::Agent`. `Error` is `#[non_exhaustive]`, so downstream `match`es need a wildcard arm.
 
-`Error::ProviderTransient` lets callers retry (`Error::is_transient`) without parsing messages. It covers rate limits and exhausted quotas (`429`, Gemini's `RESOURCE_EXHAUSTED`), server errors and overload (`5xx`, Claude's `529`), and failures to connect or timeouts. Every adapter classifies its client's typed errors this way (Anthropic through `AntropologiaError::is_retryable`). The adapters never retry themselves: a retry policy (how many attempts, how long to wait, whether to give up on a stream that already produced output) belongs to the caller.
+`Error::ProviderTransient` lets callers retry (`Error::is_transient`) without parsing messages. It covers rate limits and exhausted quotas (`429`, Gemini's `RESOURCE_EXHAUSTED`), server errors and overload (`5xx`, Claude's `529`), and failures to connect or timeouts. Every adapter classifies its client's typed errors this way (Anthropic through `AntropologiaError::is_retryable`). When the provider includes a retry delay — Anthropic's `retry-after` header (`AntropologiaError::Api { retry_after, .. }`) or Gemini's `google.rpc.RetryInfo` (`VertexApiError::retry_delay()`) — `retry_after` (and `Error::retry_after()`) carries it; DeepSeek and Ollama expose no hint and always set `None`. The adapters never retry or wait themselves: a retry policy (how many attempts, how long to wait, whether to give up on a stream that already produced output) belongs to the caller.
 
 ## Provider Adapters
 
